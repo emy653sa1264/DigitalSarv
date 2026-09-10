@@ -64,6 +64,9 @@ describe.skipIf(!servicesUp)('API (e2e)', () => {
     const res = await request(app.getHttpServer()).get('/api/catalog').expect(200);
     expect(res.body).toMatchObject({ colors: expect.any(Array), plans: expect.any(Array), prices: expect.any(Object) });
     expect(res.body.bindColors).toHaveLength(3);
+    expect(res.body.bindColors[0]).toMatchObject({ key: expect.any(String), name: expect.any(String), css: expect.any(String) });
+    // v3.3 «تنظیمات»: public ops settings
+    expect(res.body.ops).toMatchObject({ pickupSlots: expect.any(Array), bookingDays: expect.any(Number) });
     for (const c of res.body.colors) {
       expect(c.id).toEqual(expect.any(String));
       expect(c._id).toBeUndefined();

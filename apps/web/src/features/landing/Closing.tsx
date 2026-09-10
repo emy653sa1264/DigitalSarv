@@ -37,12 +37,15 @@ export function PricesSection() {
 }
 
 export function CtaBand() {
+  // «تنظیمات» turnaround promise (`catalog.ops`), the design copy until the catalog is loaded.
+  const { data: catalog } = useCatalog()
+  const turnaround = catalog?.ops?.turnaroundText || '۲۴ تا ۴۸ ساعت'
   return (
     <div className="relative mb-[34px] flex flex-wrap items-center justify-between gap-6 overflow-hidden rounded-[30px] bg-night p-6 sm:p-10">
       <div className="pointer-events-none absolute end-[-40px] -bottom-[70px] size-[220px] rounded-full bg-[rgba(47,109,246,0.35)]" />
       <div className="relative">
         <h2 className="mt-0 mb-2 text-[24px] text-white sm:text-[30px]">امشب سفارش دهید، پس‌فردا کتاب‌ها آماده.</h2>
-        <p className="m-0 text-[15px] text-[#9aa2b8] sm:text-base">۲۴ تا ۴۸ ساعت برای یک خانواده کامل — بدون یک قدم بیرون رفتن.</p>
+        <p className="m-0 text-[15px] text-[#9aa2b8] sm:text-base">{turnaround} برای یک خانواده کامل — بدون یک قدم بیرون رفتن.</p>
       </div>
       <Button
         asChild

@@ -1,16 +1,16 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Chip, DsSwitch } from '@/components/brand'
 import { Input } from '@/components/ui/input'
 import { notify, toast } from '@/components/ui/sonner'
 import { Textarea } from '@/components/ui/textarea'
 import { fa, jalali, toNum } from '@/lib/format'
 import type { Campaign, CampaignService } from '@/lib/types'
-import { useCampaignMutations, type CampaignBody } from '../api'
+import { useAdminPrices, useCampaignMutations, type CampaignBody } from '../api'
 import { Field, FormDialog } from '../components/FormDialog'
 import { CAMPAIGN_SERVICE_LABEL, CAMPAIGN_SERVICES } from '../lib'
 
-/** Design default: «فنری کتاب، چاپ اسناد». */
-const DEFAULT_SERVICES: CampaignService[] = ['school', 'docs']
+/** Contract `DEFAULT_CAMPAIGN_SERVICES` (v3): «فنری کتاب، چاپ اسناد، پایان‌نامه و صحافی». */
+const DEFAULT_SERVICES: CampaignService[] = ['school', 'print', 'docs']
 
 interface Form {
   title: string
@@ -28,15 +28,18 @@ interface Form {
 
 const day = (iso?: string) => (iso ? iso.slice(0, 10) : '')
 
-function fromCampaign(c?: Campaign): Form {
+/** Fallbacks when «قیمت‌ها» (`couponPct` / `couponCap`) is not loaded yet — the contract's seed defaults. */
+const COUPON_DEFAULTS = { couponPct: 5, couponCap: 100000 }
+
+function fromCampaign(c?: Campaign, defaults: { couponPct: number; couponCap: number } = COUPON_DEFAULTS): Form {
   const today = new Date().toISOString().slice(0, 10)
   return {
     title: c?.title ?? '',
     code: c?.code ?? '',
     startsAt: day(c?.startsAt) || today,
     endsAt: day(c?.endsAt) || today,
-    couponPct: c?.couponPct ?? 5,
-    couponCap: c?.couponCap ?? 100000,
+    couponPct: c?.couponPct ?? defaults.couponPct,
+    couponCap: c?.couponCap ?? defaults.couponCap,
     dailyCapacity: c?.dailyCapacity ?? 120,
     bannerNote: c?.bannerNote ?? '',
     pickupHours: c?.pickupHours ?? '',
@@ -55,9 +58,23 @@ export function CampaignDialog({ open, onOpenChange, campaign }: { open: boolean
 }
 
 function CampaignForm({ open, onOpenChange, campaign }: { open: boolean; onOpenChange: (o: boolean) => void; campaign?: Campaign }) {
-  const [form, setForm] = useState<Form>(() => fromCampaign(campaign))
+  const prices = useAdminPrices()
+  const [form, setForm] = useState<Form>(() => fromCampaign(campaign, prices.data))
   const { create, update } = useCampaignMutations()
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm((f) => ({ ...f, [k]: v }))
+
+  // A new campaign starts with the «قیمت‌ها» defaults; they may arrive after the dialog opened.
+  const couponTouched = useRef(false)
+  const defaultPct = prices.data?.couponPct
+  const defaultCap = prices.data?.couponCap
+  useEffect(() => {
+    if (campaign || couponTouched.current || defaultPct === undefined || defaultCap === undefined) return
+    setForm((f) => ({ ...f, couponPct: defaultPct, couponCap: defaultCap }))
+  }, [campaign, defaultPct, defaultCap])
+  const setCoupon = (k: 'couponPct' | 'couponCap', v: number) => {
+    couponTouched.current = true
+    set(k, v)
+  }
   const toggleService = (s: CampaignService) =>
     setForm((f) => ({
       ...f,
@@ -117,17 +134,20 @@ function CampaignForm({ open, onOpenChange, campaign }: { open: boolean; onOpenC
           <Input type="date" dir="ltr" value={form.endsAt} onChange={(e) => set('endsAt', e.target.value)} />
         </Field>
         <Field label="درصد تخفیف کوپن">
-          <Input inputMode="numeric" value={fa(form.couponPct)} onChange={(e) => set('couponPct', Math.min(100, toNum(e.target.value)))} />
+          <Input inputMode="numeric" value={fa(form.couponPct)} onChange={(e) => setCoupon('couponPct', Math.min(100, toNum(e.target.value)))} />
         </Field>
         <Field label="سقف تخفیف (تومان)">
-          <Input inputMode="numeric" value={fa(form.couponCap)} onChange={(e) => set('couponCap', toNum(e.target.value))} />
+          <Input inputMode="numeric" value={fa(form.couponCap)} onChange={(e) => setCoupon('couponCap', toNum(e.target.value))} />
         </Field>
-        <Field label="ظرفیت روزانه (سفارش)">
+        <Field label="ظرفیت روزانه (سفارش)" hint="۰ = بدون محدودیت">
           <Input inputMode="numeric" value={fa(form.dailyCapacity)} onChange={(e) => set('dailyCapacity', toNum(e.target.value))} />
         </Field>
         <Field label="ساعت‌های تحویل‌گیری">
           <Input value={form.pickupHours} onChange={(e) => set('pickupHours', e.target.value)} placeholder="۸ تا ۲۰" />
         </Field>
+      </div>
+      <div className="-mt-1 rounded-[16px] bg-amber-soft px-3.5 py-2.5 text-[12px] leading-6 font-semibold text-amber-ink">
+        کد تخفیف فقط وقتی کمپین فعال است، بین تاریخ شروع و پایان (به وقت تهران) و تا سقف ظرفیت روزانه پذیرفته می‌شود. «ساعت‌های تحویل‌گیری» فقط در کارت کمپین نمایش داده می‌شود؛ متن ساعت‌ها و بازه‌های تحویل‌گیری مشتری از «تنظیمات» می‌آید.
       </div>
       <Field label="سرویس‌های مشمول" hint="تخفیف کوپن فقط روی جمع همین سرویس‌ها اعمال می‌شود.">
         <div className="flex flex-wrap gap-2" role="group" aria-label="سرویس‌های مشمول">

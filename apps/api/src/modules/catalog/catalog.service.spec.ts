@@ -15,8 +15,10 @@ function setup() {
   const empty = { find: () => ({ sort: async () => [] }) };
   const svc = new CatalogService(
     colors as never,
-    empty as never,
-    empty as never,
+    empty as never, // extras
+    empty as never, // grades
+    empty as never, // papers
+    empty as never, // bind colours
     { find: async () => [] } as never,
     { findById: async () => null } as never,
     { findOne: async () => null } as never,

@@ -77,7 +77,7 @@ export function HeroSection({ showCampaign }: { showCampaign: boolean }) {
             </a>
           </Button>
           <Button asChild variant="outline" className="h-auto grow px-7 py-[17px] text-base sm:grow-0">
-            <a href="/app/docs">چاپ اسناد و مدارک</a>
+            <a href="/app/print">چاپ اسناد</a>
           </Button>
         </div>
         <div className="mt-9 grid grid-cols-3 gap-2.5 sm:flex sm:flex-wrap">

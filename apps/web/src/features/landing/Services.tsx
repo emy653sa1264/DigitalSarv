@@ -33,7 +33,7 @@ function SchoolCard() {
         <GradientBadge tone="blue" size={54}>
           <BookOpen className="size-[27px]" strokeWidth={2.3} />
         </GradientBadge>
-        <h3 className="mt-[18px] mb-2 text-[24px] text-white sm:text-[28px]">فنری کتاب‌های مدرسه</h3>
+        <h3 className="mt-[18px] mb-2 text-[24px] text-white sm:text-[28px]">فنری کتاب مدرسه</h3>
         <p className="m-0 max-w-[470px] text-[15px] leading-[1.7] text-[#a9b6d6] sm:text-base">
           پایه را بزنید، کتاب‌ها خودشان می‌آیند — از اول ابتدایی تا سوم دبیرستان، با رنگ فنری و خدمات دلخواه هر فرزند.
         </p>

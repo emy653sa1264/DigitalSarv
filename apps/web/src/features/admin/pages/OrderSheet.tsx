@@ -1,21 +1,29 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { ErrorState, LoadingBlock, TONES, TotalsPanel } from '@/components/brand'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { notify } from '@/components/ui/sonner'
 import { fa, jalali, jalaliDayTime, money } from '@/lib/format'
 import type { Order, OrderStatus } from '@/lib/types'
 import { ORDER_STATUS_LABEL } from '@/lib/types'
 import { cn } from '@/lib/utils'
-import { useAdminOrder, useCenters, useColors, useCouriers, useOrderMutations } from '../api'
+import { useAdminOrder, useCenters, useCouriers, useOrderMutations } from '../api'
 import { AdminSelect, NONE, StatusTag } from '../components/controls'
-import { UploadLink, UploadThumb } from '../components/files'
-import { ORDER_STATUSES, PAY_LABEL, SERVICE_LABEL, orderFiles } from '../lib'
+import { OrderFilesList, UploadThumb } from '../components/files'
+import { ServiceSpec, useCatalogNames } from '../components/ServiceSpec'
+import { PAY_LABEL, SERVICE_LABEL, adminStatusOptions, isTerminal, orderFiles, refundableAmount } from '../lib'
 
-/** Status targets offered in the sheet: an unpaid order can only be cancelled; nobody moves *to* `pending_payment`. */
-function statusOptions(current: OrderStatus): OrderStatus[] {
-  if (current === 'pending_payment') return ['pending_payment', 'cancelled']
-  return ORDER_STATUSES.filter((s) => s !== 'pending_payment')
-}
+/** Transitions that cannot be undone — confirmed in a dialog first. */
+const FINAL_TARGETS: OrderStatus[] = ['cancelled', 'delivered']
 
 /** Right-hand order detail drawer used by the orders table. */
 export function OrderSheet({ orderId, onClose }: { orderId?: string; onClose: () => void }) {
@@ -90,15 +98,36 @@ function Row({ label, value, strong, accent }: { label: ReactNode; value: ReactN
   )
 }
 
+/** What a final transition does to the money, shown before it is confirmed. */
+function finalEffect(order: Order, target: OrderStatus): string {
+  if (target === 'cancelled') {
+    const refund = refundableAmount(order)
+    if (refund > 0) return `مبلغ ${money(refund)} به کیف پول مشتری برگردانده می‌شود.`
+    if (order.refunded) return 'مبلغ این سفارش قبلاً به کیف پول مشتری برگردانده شده است.'
+    return 'مبلغی از مشتری دریافت نشده است؛ بازگشت وجهی انجام نمی‌شود.'
+  }
+  if (order.payMethod === 'cod' && !order.paid) return `پرداخت در محل ثبت می‌شود (${money(order.quote?.total ?? 0)}).`
+  return 'سفارش به‌عنوان تحویل‌شده بسته می‌شود.'
+}
+
 function ControlsCard({ order }: { order: Order }) {
   const { setStatus, assign } = useOrderMutations()
   const couriers = useCouriers()
   const centers = useCenters()
+  const [confirming, setConfirming] = useState<OrderStatus>()
 
   const unpaid = order.status === 'pending_payment'
+  const final = isTerminal(order.status)
+  const options = adminStatusOptions(order.status)
+
+  const applyStatus = (status: OrderStatus) =>
+    setStatus.mutate({ id: order.id, status }, { onSuccess: () => notify(`وضعیت سفارش: ${ORDER_STATUS_LABEL[status]}`) })
+
   const changeStatus = (v: string) => {
-    if (v === order.status) return
-    setStatus.mutate({ id: order.id, status: v as OrderStatus }, { onSuccess: () => notify(`وضعیت سفارش: ${ORDER_STATUS_LABEL[v as OrderStatus]}`) })
+    const status = v as OrderStatus
+    if (status === order.status) return
+    if (FINAL_TARGETS.includes(status)) setConfirming(status)
+    else applyStatus(status)
   }
 
   const changeCourier = (v: string) =>
@@ -116,10 +145,11 @@ function ControlsCard({ order }: { order: Order }) {
             ariaLabel="وضعیت سفارش"
             value={order.status}
             onValueChange={changeStatus}
-            disabled={setStatus.isPending}
-            options={statusOptions(order.status).map((s) => ({ value: s, label: ORDER_STATUS_LABEL[s] }))}
+            disabled={setStatus.isPending || options.length < 2}
+            options={options.map((s) => ({ value: s, label: ORDER_STATUS_LABEL[s] }))}
           />
           {unpaid && <span className="text-[11.5px] leading-6 text-muted-2">پرداخت درگاه هنوز تأیید نشده؛ تا آن زمان فقط لغو سفارش ممکن است.</span>}
+          {final && <span className="text-[11.5px] leading-6 text-muted-2">این سفارش بسته شده است؛ وضعیت، پیک و مرکز چاپ آن دیگر تغییر نمی‌کند.</span>}
         </label>
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="grid gap-1.5">
@@ -128,7 +158,7 @@ function ControlsCard({ order }: { order: Order }) {
               ariaLabel="پیک"
               value={order.courierId || NONE}
               onValueChange={changeCourier}
-              disabled={unpaid || assign.isPending || couriers.isPending}
+              disabled={unpaid || final || assign.isPending || couriers.isPending}
               placeholder="انتخاب پیک"
               options={[{ value: NONE, label: 'بدون پیک' }, ...(couriers.data ?? []).map((c) => ({ value: c.id, label: `${c.name} · ${fa(c.code)}` }))]}
             />
@@ -139,20 +169,38 @@ function ControlsCard({ order }: { order: Order }) {
               ariaLabel="مرکز چاپ"
               value={order.centerId || NONE}
               onValueChange={changeCenter}
-              disabled={unpaid || assign.isPending || centers.isPending}
+              disabled={unpaid || final || assign.isPending || centers.isPending}
               placeholder="انتخاب مرکز"
               options={[{ value: NONE, label: 'بدون مرکز' }, ...(centers.data ?? []).map((c) => ({ value: c.id, label: c.name }))]}
             />
           </label>
         </div>
       </div>
+
+      <AlertDialog open={!!confirming} onOpenChange={(open) => !open && setConfirming(undefined)}>
+        <AlertDialogContent className="rounded-[26px] border-line bg-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-lg font-black">
+              {confirming === 'cancelled' ? `لغو سفارش ${fa(order.code)}؟` : `ثبت تحویل سفارش ${fa(order.code)}؟`}
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-[13.5px] leading-7 text-muted-1">
+              {confirming && finalEffect(order, confirming)} این کار قابل بازگشت نیست.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>انصراف</AlertDialogCancel>
+            <AlertDialogAction variant={confirming === 'cancelled' ? 'destructive' : 'default'} onClick={() => confirming && applyStatus(confirming)}>
+              {confirming === 'cancelled' ? 'لغو سفارش' : 'ثبت تحویل'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Section>
   )
 }
 
 function ChildrenCard({ order }: { order: Order }) {
-  const colors = useColors()
-  const colorName = (key: string) => colors.data?.find((c) => c.key === key)?.name ?? key
+  const names = useCatalogNames()
   if (!order.children.length) return null
   return (
     <Section title="فرزندان و کتاب‌ها" meta={<span className="text-[12.5px] font-bold text-muted-2">{fa(order.quote?.totalBooks ?? 0)} کتاب</span>}>
@@ -168,11 +216,16 @@ function ChildrenCard({ order }: { order: Order }) {
                 <span className="text-[13px] font-extrabold">{money(c.total)}</span>
               </div>
               <div className="mt-1 text-[12.5px] leading-6 text-muted-2">
-                {fa(c.books)} کتاب · فنری {colorName(c.color)}
+                {fa(c.books)} کتاب · فنری {names.color(c.color)}
                 {c.lined && ` · ${fa(c.linedCount)} برگ خط‌دار${c.linedPos === 'range' && c.pageFrom ? ` (صفحه ${fa(c.pageFrom)}–${fa(c.pageTo ?? 0)})` : ''}`}
-                {c.extras.length > 0 && ` · ${fa(c.extras.length)} خدمت اضافی`}
               </div>
-              {c.note && <div className="mt-1 text-[12px] text-muted-1">یادداشت: {c.note}</div>}
+              {c.extras.length > 0 && <div className="text-[12.5px] leading-6 text-muted-1">خدمات اضافی: {names.extras(c.extras)}</div>}
+              {c.labelText && (
+                <div className="text-[12.5px] leading-6 text-muted-1">
+                  متن برچسب: <bdi className="font-bold text-ink">{c.labelText}</bdi>
+                </div>
+              )}
+              {c.note && <div className="mt-1 text-[12px] text-muted-1">یادداشت: <bdi>{c.note}</bdi></div>}
             </div>
           )
         })}
@@ -185,12 +238,15 @@ function ServicesCard({ order }: { order: Order }) {
   return (
     <Section title="سرویس‌های دیگر">
       {order.services.map((s, i) => (
-        <div key={i} className="flex items-start justify-between gap-3 border-t border-line-soft py-2 first:border-t-0">
-          <div className="min-w-0">
-            <div className="text-[13.5px] font-bold">{s.label || SERVICE_LABEL[s.kind]}</div>
-            <div className="text-[12px] text-muted-2">{s.detail}</div>
+        <div key={i} className="border-t border-line-soft py-2.5 first:border-t-0">
+          <div className="mb-2 flex items-start justify-between gap-3">
+            <div className="min-w-0 text-[13.5px] font-bold">
+              {s.label || SERVICE_LABEL[s.kind]}
+              {s.childName && <span className="font-medium text-muted-2"> — {s.childName}</span>}
+            </div>
+            <span className="shrink-0 text-[13px] font-extrabold">{s.price ? money(s.price) : 'پس از عیب‌یابی'}</span>
           </div>
-          <span className="shrink-0 text-[13px] font-extrabold">{s.price ? money(s.price) : 'پس از عیب‌یابی'}</span>
+          <ServiceSpec service={s} />
         </div>
       ))}
     </Section>
@@ -200,20 +256,9 @@ function ServicesCard({ order }: { order: Order }) {
 function FilesCard({ order }: { order: Order }) {
   const files = orderFiles(order)
   if (!files.length) return null
-  const docs = files.filter((f) => !f.photo)
-  const photos = files.filter((f) => f.photo)
   return (
     <Section title="فایل‌های پیوست" meta={<span className="text-[12.5px] font-bold text-muted-2">{fa(files.length)} فایل</span>}>
-      {docs.map((f) => (
-        <UploadLink key={f.id} id={f.id} label={f.label} />
-      ))}
-      {photos.length > 0 && (
-        <div className={cn('flex flex-wrap gap-2', docs.length && 'mt-2 border-t border-line-soft pt-3')}>
-          {photos.map((f) => (
-            <UploadThumb key={f.id} id={f.id} label={f.label} />
-          ))}
-        </div>
-      )}
+      <OrderFilesList files={files} />
     </Section>
   )
 }

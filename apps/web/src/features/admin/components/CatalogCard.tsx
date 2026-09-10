@@ -1,11 +1,11 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import type { UseQueryResult } from '@tanstack/react-query'
 import { DsSwitch, EmptyState, ErrorState, LoadingBlock } from '@/components/brand'
 import { notify, toast } from '@/components/ui/sonner'
 import { fa, toNum } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { masterLabel } from '../lib'
-import { AddButton, ConfirmDelete, IconAction, MasterToggle, RowInput } from './controls'
+import { AddButton, ConfirmDelete, IconAction, MasterToggle, MoveButtons, RowInput } from './controls'
 import { AdminCard, CardNote, CardTitle } from './kit'
 
 export interface CatalogItem {
@@ -41,6 +41,11 @@ interface Props {
   onToggleAll: (on: boolean, done: () => void) => void
   onRemove: (item: CatalogItem, done: () => void) => void
   busy?: boolean
+  /** v3.3: ▲/▼ per row → `POST /admin/<list>/reorder { ids }` (items must be passed in `sort` order). */
+  onReorder?: (ids: string[], done: () => void) => void
+  reorderBusy?: boolean
+  /** Extra controls on a second line of a row (e.g. the extras' scope chips). */
+  rowExtra?: (item: CatalogItem) => ReactNode
 }
 
 const HEX = /^#[0-9a-fA-F]{3,8}$/
@@ -50,6 +55,14 @@ export function CatalogCard(props: Props) {
   const { title, addLabel, addTone, withHex, cell, note, newItem, messages, query, items } = props
   const [edit, setEdit] = useState<CatalogDraft | null>(null)
   const anyOn = items.some((i) => i.on)
+
+  const move = (index: number, delta: -1 | 1) => {
+    const ids = items.map((i) => i.id)
+    const target = index + delta
+    if (!props.onReorder || target < 0 || target >= ids.length) return
+    ;[ids[index], ids[target]] = [ids[target], ids[index]]
+    props.onReorder(ids, () => notify('ترتیب ذخیره شد'))
+  }
 
   const save = () => {
     if (!edit) return
@@ -126,11 +139,19 @@ export function CatalogCard(props: Props) {
       {query.isError && <ErrorState error={query.error} onRetry={() => void query.refetch()} />}
       {query.isSuccess && items.length === 0 && !edit && <EmptyState title="موردی ثبت نشده است" hint={`برای شروع «${addLabel}» را بزنید.`} />}
 
-      {items.map((item) =>
+      {items.map((item, index) =>
         edit?.id === item.id ? (
           renderEditRow(item.id)
         ) : (
           <div key={item.id} className="flex flex-wrap items-center gap-x-2.5 gap-y-2 border-t border-line-soft py-2.5">
+            {props.onReorder && (
+              <MoveButtons
+                onUp={() => move(index, -1)}
+                onDown={() => move(index, 1)}
+                upDisabled={index === 0 || props.reorderBusy}
+                downDisabled={index === items.length - 1 || props.reorderBusy}
+              />
+            )}
             {withHex && (
               <span className="size-7 shrink-0 rounded-[10px] shadow-[inset_0_1.5px_0_rgba(255,255,255,0.5),0_4px_9px_rgba(7,9,15,0.22)]" style={{ background: item.hex }} />
             )}
@@ -148,6 +169,7 @@ export function CatalogCard(props: Props) {
               label={item.name}
               onCheckedChange={(on) => props.onToggle(item, on, () => notify(`${item.name} ${on ? 'روشن' : 'خاموش'} شد`))}
             />
+            {props.rowExtra && <div className="flex basis-full flex-wrap items-center gap-1.5 ps-9">{props.rowExtra(item)}</div>}
           </div>
         ),
       )}

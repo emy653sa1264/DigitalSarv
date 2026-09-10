@@ -92,28 +92,64 @@ export const clone = <T>(v: T): T =>
       ? Object.fromEntries(Object.entries(v as Doc).map(([k, x]) => [k, clone(x)]))
       : v) as T;
 
-const out = (d: Doc) => ({ ...clone(d), id: String(d._id) });
+const out = (d: Doc) => {
+  const o = { ...clone(d), id: String(d._id) };
+  // like a hydrated document's toJSON; non-enumerable, so equality assertions ignore it
+  Object.defineProperty(o, 'toJSON', { value: () => ({ ...o }), enumerable: false });
+  return o;
+};
+
+/** The plain equality fields of a filter (what an upsert inserts). */
+const equalityFields = (filter: Doc): Doc =>
+  Object.fromEntries(Object.entries(filter).filter(([k, v]) => !k.startsWith('$') && !isOperatorObject(v)));
 
 /** A thenable query supporting the chain calls the services make. */
-function query<T>(run: (limit?: number) => T) {
+function query<T>(run: (skip: number, limit?: number) => T) {
+  let skip = 0;
   let limit: number | undefined;
   const q = {
     sort: () => q,
     select: () => q,
     lean: () => q,
+    skip: (n: number) => ((skip = n), q),
     limit: (n: number) => ((limit = n), q),
     // intentionally thenable: mimics a Mongoose Query, which services `await` directly
     // oxlint-disable-next-line unicorn/no-thenable
-    then:<R1, R2>(res: (v: T) => R1, rej?: (e: unknown) => R2) => Promise.resolve().then(() => run(limit)).then(res, rej),
+    then:<R1, R2>(res: (v: T) => R1, rej?: (e: unknown) => R2) => Promise.resolve().then(() => run(skip, limit)).then(res, rej),
   };
   return q;
 }
 
 export function fakeModel(docs: Doc[] = []) {
   const first = (filter: Doc) => docs.find((d) => matches(d, filter));
+  const removeWhere = (filter: Doc, many: boolean) => {
+    let deletedCount = 0;
+    for (let i = docs.length - 1; i >= 0; i--) {
+      if (matches(docs[i], filter) && (many || deletedCount === 0)) {
+        docs.splice(i, 1);
+        deletedCount++;
+      }
+    }
+    return { deletedCount };
+  };
+  const updateOne = async (filter: Doc, update: Doc, options?: { upsert?: boolean }) => {
+    await Promise.resolve();
+    let d = first(filter);
+    if (!d && options?.upsert) {
+      d = { _id: new Types.ObjectId(), ...clone(equalityFields(filter)) };
+      docs.push(d);
+      applyUpdate(d, update);
+      return { matchedCount: 0, modifiedCount: 0, upsertedCount: 1 };
+    }
+    if (!d) return { matchedCount: 0, modifiedCount: 0, upsertedCount: 0 };
+    applyUpdate(d, update);
+    return { matchedCount: 1, modifiedCount: 1, upsertedCount: 0 };
+  };
   return {
     docs,
-    find: vi.fn((filter: Doc = {}) => query((limit) => docs.filter((d) => matches(d, filter)).slice(0, limit ?? Infinity).map(out))),
+    find: vi.fn((filter: Doc = {}) =>
+      query((skip, limit) => docs.filter((d) => matches(d, filter)).slice(skip, limit === undefined ? undefined : skip + limit).map(out)),
+    ),
     findOne: vi.fn((filter: Doc = {}) => query(() => {
       const d = first(filter);
       return d ? out(d) : null;
@@ -122,6 +158,17 @@ export function fakeModel(docs: Doc[] = []) {
       const d = docs.find((x) => eq(x._id, id));
       return d ? out(d) : null;
     })),
+    findByIdAndUpdate: vi.fn(async (id: unknown, update: Doc) => {
+      await Promise.resolve();
+      const d = docs.find((x) => eq(x._id, id));
+      if (!d) return null;
+      applyUpdate(d, update);
+      return out(d);
+    }),
+    findByIdAndDelete: vi.fn(async (id: unknown) => {
+      const i = docs.findIndex((x) => eq(x._id, id));
+      return i < 0 ? null : out(docs.splice(i, 1)[0]);
+    }),
     exists: vi.fn(async (filter: Doc) => (first(filter) ? { _id: first(filter)!._id } : null)),
     countDocuments: vi.fn(async (filter: Doc = {}) => docs.filter((d) => matches(d, filter)).length),
     distinct: vi.fn(async (field: string, filter: Doc = {}) => {
@@ -136,19 +183,21 @@ export function fakeModel(docs: Doc[] = []) {
       applyUpdate(d, update);
       return out(d);
     }),
-    updateOne: vi.fn(async (filter: Doc, update: Doc) => {
-      await Promise.resolve();
-      const d = first(filter);
-      if (!d) return { matchedCount: 0, modifiedCount: 0 };
-      applyUpdate(d, update);
-      return { matchedCount: 1, modifiedCount: 1 };
-    }),
+    updateOne: vi.fn(updateOne),
     updateMany: vi.fn(async (filter: Doc, update: Doc) => {
       await Promise.resolve();
       const hits = docs.filter((d) => matches(d, filter));
       hits.forEach((d) => applyUpdate(d, update));
       return { matchedCount: hits.length, modifiedCount: hits.length };
     }),
+    /** `updateOne` operations only. */
+    bulkWrite: vi.fn(async (ops: { updateOne?: { filter: Doc; update: Doc; upsert?: boolean } }[]) => {
+      let modifiedCount = 0;
+      for (const op of ops) if (op.updateOne) modifiedCount += (await updateOne(op.updateOne.filter, op.updateOne.update, op.updateOne)).modifiedCount;
+      return { modifiedCount };
+    }),
+    deleteOne: vi.fn(async (filter: Doc) => removeWhere(filter, false)),
+    deleteMany: vi.fn(async (filter: Doc = {}) => removeWhere(filter, true)),
     create: vi.fn(async (doc: Doc) => {
       const d = { _id: new Types.ObjectId(), createdAt: new Date(), ...clone(doc) };
       docs.push(d);

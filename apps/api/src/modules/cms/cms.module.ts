@@ -7,7 +7,6 @@ import {
   NotFoundException,
   Param,
   Patch,
-  Post,
   UseGuards,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
@@ -18,11 +17,6 @@ import { Roles } from '../../common/auth/decorators.js';
 import { JwtAuthGuard, RolesGuard } from '../../common/auth/guards.js';
 import { assertObjectId } from '../../common/utils/object-id.js';
 import { CmsSection } from './cms-section.schema.js';
-
-export class CreateCmsSectionDto {
-  @IsString() @IsNotEmpty({ message: 'عنوان بخش را وارد کنید' }) @MaxLength(80)
-  label: string;
-}
 
 export class UpdateCmsSectionDto {
   @IsOptional() @IsString() @IsNotEmpty({ message: 'عنوان بخش را وارد کنید' }) @MaxLength(80)
@@ -35,6 +29,10 @@ export class UpdateCmsSectionDto {
   order?: number;
 }
 
+/**
+ * Landing sections are fixed by the landing code (seeded by `seed:base`); admins switch, rename and
+ * reorder them. There is no create (v3.2): an added section could never control anything.
+ */
 @Injectable()
 export class CmsService {
   constructor(@InjectModel(CmsSection.name) private readonly sections: Model<CmsSection>) {}
@@ -46,12 +44,6 @@ export class CmsService {
 
   list() {
     return this.sections.find().sort({ order: 1 });
-  }
-
-  async create(dto: CreateCmsSectionDto) {
-    const last = await this.sections.findOne().sort({ order: -1 });
-    const order = (last?.order ?? 0) + 1;
-    return this.sections.create({ key: `section-${Date.now().toString(36)}`, label: dto.label, on: true, order });
   }
 
   async update(id: string, dto: UpdateCmsSectionDto) {
@@ -77,7 +69,6 @@ export class AdminCmsController {
   constructor(private readonly cms: CmsService) {}
 
   @Get() list() { return this.cms.list(); }
-  @Post() create(@Body() dto: CreateCmsSectionDto) { return this.cms.create(dto); }
   @Patch(':id') update(@Param('id') id: string, @Body() dto: UpdateCmsSectionDto) { return this.cms.update(id, dto); }
 }
 

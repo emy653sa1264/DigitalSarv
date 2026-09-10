@@ -112,6 +112,18 @@ export function usePayOrder() {
   return { pay: (id: string) => mutation.mutate(id), busyId }
 }
 
+/** `POST /orders/:id/cancel` — before pickup only; wallet/gateway-paid orders are refunded to the wallet (`refunded`). */
+export function useCancelOrder() {
+  return useMutation({
+    mutationFn: (id: string) => api.post<Order>(`/orders/${id}/cancel`),
+    onSuccess: (order) => {
+      queryClient.setQueryData(customerKeys.order(order.id), order)
+      void queryClient.invalidateQueries({ queryKey: customerKeys.orders })
+      void queryClient.invalidateQueries({ queryKey: qk.me })
+    },
+  })
+}
+
 export function useReorder() {
   return useMutation({ mutationFn: (id: string) => api.post<OrderDraft>(`/orders/${id}/reorder`) })
 }

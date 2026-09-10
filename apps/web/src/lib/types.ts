@@ -27,10 +27,24 @@ export interface Paged<T> {
 
 // ── Catalog ────────────────────────────────────────────────────────────────
 export interface Color { id: string; key: string; name: string; hex: string; extra: number; on: boolean; sort: number }
-export interface Extra { id: string; key: string; label: string; price: number; on: boolean; sort: number }
+export interface Extra {
+  id: string
+  key: string
+  label: string
+  price: number
+  on: boolean
+  sort: number
+  /** v3.3: where the extra is offered/priced (default both). */
+  services: ('school' | 'print')[]
+  /** v3.3: needs a text (e.g. «برچسب نام») — the child editor asks for `ChildDraft.labelText`. */
+  needsText: boolean
+}
 export interface Grade { id: string; name: string; books: number; on: boolean; sort: number }
-export type BindColorKey = 'maroon' | 'navy' | 'marbled'
-export interface BindColor { key: BindColorKey; name: string; css: string }
+/** «نوع کاغذ» of چاپ اسناد (v3); `price` = toman per A4 sheet. */
+export interface Paper { id: string; key: string; name: string; price: number; on: boolean; sort: number }
+/** v3.3: bind colours are an admin collection — any `BindColor.key`. */
+export type BindColorKey = string
+export interface BindColor { id: string; key: BindColorKey; name: string; hex: string; css: string; extra: number; on: boolean; sort: number }
 export interface Plan {
   id: PlanId
   name: string
@@ -70,7 +84,31 @@ export interface Prices {
   flyerBulk5000: number
   flyerDesign: number
   cartridge: number
+  // چاپ اسناد (v3)
+  printBw: number
+  printColor: number
+  printDoubleDiscount: number
+  printA5Pct: number
+  printA3Pct: number
+  printBindSpiral: number
+  printBindGlue: number
+  printBindHard: number
+  printStaple: number
+  printLamCover: number
+  printLamSheet: number
+  // v3.3
+  flyerDoublePct: number
+  flyerBulk1Qty: number
+  flyerBulk2Qty: number
+  cartridgeColor: number
+  cartridgeInkjet: number
+  /** 0 = no minimum. */
+  minOrderAmount: number
 }
+/** `GET/PUT /admin/prices` — the prices plus the catalog's urgent switch. */
+export type AdminPrices = Prices & { urgentEnabled: boolean }
+/** Editable fields of `PATCH /admin/plans/:id` (`disc` is a fraction 0–1). */
+export type PlanPatch = Partial<Pick<Plan, 'name' | 'title' | 'price' | 'cap' | 'disc' | 'freeDelivery' | 'freePickup' | 'perks'>>
 export interface Campaign {
   id: string
   title: string
@@ -87,16 +125,20 @@ export interface Campaign {
   services: CampaignService[]
   stats: { orders: number; books: number; avgOrder: number }
 }
-export type CampaignService = 'school' | 'docs' | 'flyer' | 'cart' | 'repair'
+export type CampaignService = 'school' | 'print' | 'docs' | 'flyer' | 'cart' | 'repair'
 export interface Catalog {
   colors: Color[]
   extras: Extra[]
   grades: Grade[]
   bindColors: BindColor[]
+  /** Only `on` papers, sorted (v3). */
+  papers: Paper[]
   plans: Plan[]
   prices: Prices
   urgentEnabled: boolean
   campaign: Campaign | null
+  /** v3.3 «تنظیمات» (public part). */
+  ops: OpsSettings
 }
 
 // ── Draft / quote ──────────────────────────────────────────────────────────
@@ -113,15 +155,51 @@ export interface ChildDraft {
   pageTo?: number
   extras: string[]
   note?: string
+  /** v3.3: text printed for extras with `needsText` (≤ 60). */
+  labelText?: string
 }
+/** «چاپ اسناد» (v3). */
+export interface PrintSpec {
+  /** Upload id (purpose `docs`); the server takes `pages` from the upload when present. */
+  fileId?: string
+  fileName?: string
+  pages: number
+  /** همه صفحات / بازه صفحات (1 ≤ from ≤ to ≤ pages). */
+  scope: 'all' | 'range'
+  from?: number
+  to?: number
+  /** Paper.key */
+  paper: string
+  size: 'A4' | 'A5' | 'A3'
+  ink: 'bw' | 'color' | 'mixed'
+  sides: 'single' | 'double'
+  copies: number
+  /** Only kept when ink === 'mixed'. */
+  colorRanges?: { from: number; to: number }[]
+  colorPages?: string
+  binding: 'none' | 'spiral' | 'glue' | 'hardcover'
+  /** Color.key («رنگ فنری») — only kept when binding === 'spiral'. */
+  spiralColor?: string
+  /** Only with binding `none` (the server forces false otherwise). */
+  staple: boolean
+  laminate: 'none' | 'cover' | 'all'
+  /** Extra.key[] («خدمات اضافی», same admin list as school books); charged per copy. */
+  extras?: string[]
+  desc?: string
+}
+/** «پایان‌نامه و صحافی». */
 export interface DocsSpec {
   fileName?: string
   /** Upload id (purpose `docs`); the server takes `pages` from the upload when present. */
   fileId?: string
   pages: number
   scope: 'all' | 'range'
+  /** Legacy single range (pre-v3); the web sends `pageRanges`/`pagePages` instead. */
   from?: number
   to?: number
+  /** v3: pages to print when scope === 'range' (only kept then). */
+  pageRanges?: { from: number; to: number }[]
+  pagePages?: string
   ink: 'bw' | 'color' | 'mixed'
   sides: 'single' | 'double'
   copies: number
@@ -140,16 +218,37 @@ export interface FlyerSpec {
   ink: 'color' | 'mono'
   size: 'A4' | 'A5' | 'A6'
   paper: 'glossy' | 'plain'
+  /** v3.3 (default single). */
+  sides?: 'single' | 'double'
   brief?: { business?: string; phone?: string; address?: string; social?: string; text?: string }
   /** Upload id (purpose `flyer`) — mode `have`. */
   designFileId?: string
   /** Upload ids (purpose `logo`) — mode `need`. */
   logoFileIds?: string[]
 }
-export interface CartSpec { brand: string; model: string; type?: string; count: number; photoIds?: string[] }
-export interface RepairSpec { brand: string; model: string; problem: string; desc?: string; photoIds?: string[] }
-export type ServiceKind = 'docs' | 'flyer' | 'cart' | 'repair'
+export interface CartSpec {
+  brand: string
+  model: string
+  /** Legacy free text (old orders). */
+  type?: string
+  /** v3.3 (default laserBw). */
+  cartType?: 'laserBw' | 'laserColor' | 'inkjet'
+  count: number
+  photoIds?: string[]
+}
+export interface RepairSpec {
+  brand: string
+  model: string
+  problem: string
+  desc?: string
+  photoIds?: string[]
+  /** v3.3: لیزری / جوهرافشان / چندکاره / فتوکپی. */
+  device?: 'laser' | 'inkjet' | 'mfp' | 'copier'
+  warranty?: boolean
+}
+export type ServiceKind = 'print' | 'docs' | 'flyer' | 'cart' | 'repair'
 export type ServiceDraft =
+  | { kind: 'print'; childIndex?: number; spec: PrintSpec }
   | { kind: 'docs'; childIndex?: number; spec: DocsSpec }
   | { kind: 'flyer'; childIndex?: number; spec: FlyerSpec }
   | { kind: 'cart'; childIndex?: number; spec: CartSpec }
@@ -185,6 +284,10 @@ export interface Quote {
   planId: PlanId
   lines: QuoteLine[]
   plansCompare: { planId: PlanId; total: number }[]
+  /** v3.3: > 0 when the subtotal is below `Prices.minOrderAmount`. */
+  minOrderShortfall?: number
+  /** v3.3: why a coupon did not apply. */
+  couponReason?: 'invalid' | 'not_started' | 'expired' | 'full' | 'not_eligible'
 }
 
 // ── Orders ─────────────────────────────────────────────────────────────────
@@ -264,6 +367,10 @@ export interface Order {
   /** Upload ids (purpose `pickup`) sent by the courier with the verify. */
   pickupPhotoIds?: string[]
   qc: boolean[]
+  /** v3.3: QC checklist snapshotted at creation (same length as `qc`); absent on pre-v3.3 orders. */
+  qcLabels?: string[]
+  /** v3.3: pickup checklist snapshotted at creation; absent on pre-v3.3 orders. */
+  pickupLabels?: string[]
   payment?: OrderPayment
   createdAt: string
   updatedAt: string
@@ -309,6 +416,8 @@ export interface Courier {
   rating: number
   status: 'on_route' | 'free' | 'off_shift'
   todayCount: number
+  /** v3.3: performance bonus (toman), editable by the admin. */
+  bonus?: number
 }
 export interface CourierTask {
   id: string
@@ -356,7 +465,8 @@ export interface ProductionColumn {
   label: string
   count: number
   tone: ProductionTone
-  items: { id: string; code: string; label: string }[]
+  /** v3.3: items carry their order's `qcLabels`. */
+  items: { id: string; code: string; label: string; qcLabels?: string[] }[]
 }
 export interface ProductionBoard {
   columns: ProductionColumn[]
@@ -389,3 +499,42 @@ export interface PricingRule {
 }
 export interface CmsSection { id: string; key: string; label: string; on: boolean; order: number }
 export interface NotificationTemplate { id: string; event: OrderStatus; channel: 'sms' | 'push'; text: string; on: boolean }
+
+/** v3.3 in-app notification (inbox); order events never send SMS. */
+export interface UserNotification { id: string; orderId: string; orderCode: string; event: OrderStatus; text: string; read: boolean; createdAt: string }
+
+/** v3.3 «تنظیمات» — public operations settings (`GET /catalog` → `ops`). */
+export interface OpsSettings {
+  pickupSlots: string[]
+  /** Days ahead a pickup can be booked (1..90). */
+  bookingDays: number
+  /** JS `getDay()` of the Tehran date (0 Sunday … 6 Saturday). */
+  closedWeekdays: number[]
+  /** 'yyyy-mm-dd' Gregorian (Tehran). */
+  holidays: string[]
+  /** 'HH:mm' Tehran — after it, today can't be booked; '' = none. */
+  sameDayCutoff: string
+  pickupHoursText: string
+  /** ASCII digits. */
+  supportPhone: string
+  turnaroundText: string
+}
+
+/** v3.3 courier pay (admin «تنظیمات»). */
+export interface CourierPaySettings {
+  perTaskFee: number
+  /** JS `getDay()` (default 4 = Thursday). */
+  settlementWeekday: number
+}
+/** v3.3 QC list keys: school binding + each service kind. */
+export type QcListKey = 'school' | 'print' | 'docs' | 'flyer' | 'cart' | 'repair'
+export interface ChecklistSettings {
+  qc: Record<QcListKey, string[]>
+  pickup: string[]
+}
+/** `GET /admin/settings`; `PUT` takes any part of it. */
+export interface AdminSettings {
+  ops: OpsSettings
+  courier: CourierPaySettings
+  checklists: ChecklistSettings
+}

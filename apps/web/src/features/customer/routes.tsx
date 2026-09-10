@@ -11,10 +11,12 @@ import { FlyerScreen } from './screens/FlyerScreen'
 import { HomeScreen } from './screens/HomeScreen'
 import { LoginScreen } from './screens/LoginScreen'
 import { MembershipScreen } from './screens/MembershipScreen'
+import { NotificationsScreen } from './screens/NotificationsScreen'
 import { OrdersScreen } from './screens/OrdersScreen'
 import { PayReturnScreen } from './screens/PayReturnScreen'
 import { PayScreen } from './screens/PayScreen'
 import { PickupScreen } from './screens/PickupScreen'
+import { PrintScreen } from './screens/PrintScreen'
 import { ProfileScreen } from './screens/ProfileScreen'
 import { RepairScreen } from './screens/RepairScreen'
 import { SummaryScreen } from './screens/SummaryScreen'
@@ -44,12 +46,14 @@ export const customerRoutes: RouteObject[] = [
               { path: 'done/:id', element: <DoneScreen /> },
               { path: 'track', element: <TrackLatestScreen /> },
               { path: 'track/:id', element: <TrackScreen /> },
+              { path: 'print', element: <PrintScreen /> },
               { path: 'docs', element: <DocsScreen /> },
               { path: 'flyer', element: <FlyerScreen /> },
               { path: 'cart', element: <CartScreen /> },
               { path: 'repair', element: <RepairScreen /> },
               { path: 'me', element: <ProfileScreen /> },
               { path: 'orders', element: <OrdersScreen /> },
+              { path: 'notifications', element: <NotificationsScreen /> },
               { path: '*', element: <Navigate to="/app" replace /> },
             ],
           },

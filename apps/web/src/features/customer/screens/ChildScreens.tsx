@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef } from 'react'
-import { Navigate, useNavigate, useParams } from 'react-router'
+import { Navigate, useNavigate, useParams, useSearchParams } from 'react-router'
 import { User, X } from 'lucide-react'
 import { Chip, DsSwitch, ErrorState, FieldLabel, GradientBadge, LoadingBlock, Panel, Stepper, TONES, TotalsPanel } from '@/components/brand'
 import { Input } from '@/components/ui/input'
@@ -9,14 +9,17 @@ import { Textarea } from '@/components/ui/textarea'
 import { fa, money } from '@/lib/format'
 import { useCatalog } from '@/lib/query'
 import type { ChildDraft } from '@/lib/types'
-import { cn } from '@/lib/utils'
 import { CHILD_TONES, useDraft } from '@/stores/draft'
+import { ColorSwatchPicker } from '../components/ColorSwatchPicker'
 import { Screen } from '../components/Screen'
 import { CtaButton, InlineStepper, NumInput, ToneTile } from '../components/parts'
 import { useReturnTo } from '../hooks/nav'
 import { useQuote } from '../hooks/queries'
 import { CHILD_SERVICE_TILES, SERVICE_META } from '../lib/constants'
 import { serviceView } from '../lib/services'
+
+/** `ChildDraftDto.books` max. */
+const MAX_BOOKS = 200
 
 /** `/app/child/new` — creates a blank child from catalog defaults, then opens its editor. */
 export function ChildNewScreen() {
@@ -56,6 +59,8 @@ export function ChildEditorScreen() {
   const i = Number(index)
   const navigate = useNavigate()
   const returnTo = useReturnTo()
+  const [params] = useSearchParams()
+  const fromSummary = params.get('from') === 'summary'
   const child = useDraft((s) => s.children[i])
   const isNew = useDraft((s) => s.newChildIndex === i)
   const services = useDraft((s) => s.services)
@@ -73,14 +78,34 @@ export function ChildEditorScreen() {
     setActiveChild(Number.isInteger(i) ? i : null)
   }, [i, setActiveChild])
 
+  // v3.3: only extras offered for school books (older APIs without `services` → everywhere); out-of-scope or
+  // switched-off keys are dropped from the draft so only those are sent.
+  const schoolExtras = (catalog.data?.extras ?? []).filter((x) => (x.services ?? ['school', 'print']).includes('school'))
+  const schoolKeys = catalog.data ? schoolExtras.map((x) => x.key).join(',') : null
+  useEffect(() => {
+    if (!child || schoolKeys === null) return
+    const allowed = schoolKeys.split(',')
+    const kept = child.extras.filter((k) => allowed.includes(k))
+    if (kept.length !== child.extras.length) updateChild(i, { extras: kept })
+  }, [child, schoolKeys, i, updateChild])
+
   if (!child) return <Navigate to="/app/family" replace />
 
   const patch = (p: Partial<ChildDraft>) => updateChild(i, p)
+  const linedFrom = child.pageFrom ?? 20
+  const linedTo = child.pageTo ?? 40
+  const linedRangeBad = child.lined && child.linedPos === 'range' && (linedFrom < 1 || linedTo < linedFrom)
+  /** A chosen extra prints text (e.g. «برچسب نام») → ask for `labelText`. */
+  const needsText = schoolExtras.some((x) => x.needsText && child.extras.includes(x.key))
   const save = () => {
-    if (!child.name.trim()) patch({ name: `فرزند ${fa(i + 1)}` })
+    if (linedRangeBad) return notify('بازه صفحات خط‌دار درست نیست؛ صفحه شروع باید قبل از صفحه پایان باشد')
+    const name = child.name.trim() || `فرزند ${fa(i + 1)}`
+    if (!child.name.trim()) patch({ name })
+    if (needsText && !child.labelText?.trim()) patch({ labelText: name.slice(0, 60) })
+    if (!needsText && child.labelText !== undefined) patch({ labelText: undefined })
     markChildSaved()
     notify('اطلاعات ذخیره شد')
-    returnTo('/app/family')
+    returnTo(fromSummary ? '/app/summary' : '/app/family')
   }
 
   const q = quote.data
@@ -107,42 +132,13 @@ export function ChildEditorScreen() {
             <Stepper
               value={fa(child.books)}
               onDecrement={() => patch({ books: Math.max(1, child.books - 1) })}
-              onIncrement={() => patch({ books: child.books + 1 })}
+              onIncrement={() => patch({ books: Math.min(MAX_BOOKS, child.books + 1) })}
             />
           </div>
 
           <div>
             <FieldLabel className="mb-[9px]">رنگ فنری</FieldLabel>
-            <div className="flex flex-wrap gap-2.5">
-              {catalog.data.colors.map((c) => {
-                const on = child.color === c.key
-                return (
-                  <button
-                    key={c.key}
-                    type="button"
-                    title={c.name}
-                    aria-pressed={on}
-                    onClick={() => patch({ color: c.key })}
-                    className={cn(
-                      'flex cursor-pointer items-center gap-2 rounded-full border py-2 ps-3.5 pe-2.5',
-                      on ? 'border-night bg-night text-white' : 'border-line-input bg-white text-[#3a4257]',
-                    )}
-                  >
-                    <span
-                      className="size-5 shrink-0 rounded-full"
-                      style={{ background: c.hex, boxShadow: 'inset 0 1.5px 0 rgba(255,255,255,0.45), 0 2px 5px rgba(7,9,15,0.22)' }}
-                    />
-                    <span className="text-[12.5px] font-bold">{c.name}</span>
-                  </button>
-                )
-              })}
-            </div>
-            <div className="mt-[7px] text-[11.5px] text-muted-2">
-              {(() => {
-                const c = catalog.data.colors.find((x) => x.key === child.color)
-                return c?.extra ? `رنگ ${c.name}: +${money(c.extra)} برای هر کتاب` : 'این رنگ هزینه اضافی ندارد.'
-              })()}
-            </div>
+            <ColorSwatchPicker colors={catalog.data.colors} value={child.color} onChange={(color) => patch({ color })} unit="برای هر کتاب" />
           </div>
 
           <Panel className="p-[15px]">
@@ -190,30 +186,52 @@ export function ChildEditorScreen() {
                     <div className="mt-[9px] text-[11.5px] opacity-85">
                       برگه‌های خط‌دار بین صفحه {fa(child.pageFrom || 20)} و صفحه {fa(child.pageTo || 40)} قرار می‌گیرند.
                     </div>
+                    {linedRangeBad && <div className="mt-1.5 text-[11.5px] font-bold text-pink-dark">صفحه شروع باید قبل از صفحه پایان باشد.</div>}
                   </div>
                 )}
               </div>
             )}
           </Panel>
 
-          {catalog.data.extras.length > 0 && (
+          {schoolExtras.length > 0 && (
             <div>
               <FieldLabel className="mb-[9px]">خدمات اضافی</FieldLabel>
               <div className="flex flex-wrap gap-2">
-                {catalog.data.extras.map((x) => {
+                {schoolExtras.map((x) => {
                   const on = child.extras.includes(x.key)
                   return (
                     <Chip
                       key={x.key}
                       selected={on}
                       className="px-3.5 py-2.5"
-                      onClick={() => patch({ extras: on ? child.extras.filter((k) => k !== x.key) : [...child.extras, x.key] })}
+                      onClick={() =>
+                        patch({
+                          extras: on ? child.extras.filter((k) => k !== x.key) : [...child.extras, x.key],
+                          // The label text defaults to the child's name the first time such an extra is chosen.
+                          ...(!on && x.needsText && child.labelText === undefined ? { labelText: child.name.slice(0, 60) } : {}),
+                        })
+                      }
                     >
                       {x.label} · {fa(x.price)}
                     </Chip>
                   )
                 })}
               </div>
+              {needsText && (
+                <div className="mt-3">
+                  <FieldLabel htmlFor="child-label" className="mb-[7px]">
+                    متن برچسب / چاپ روی جلد
+                  </FieldLabel>
+                  <Input
+                    id="child-label"
+                    maxLength={60}
+                    value={child.labelText ?? ''}
+                    onChange={(e) => patch({ labelText: e.target.value.slice(0, 60) })}
+                    placeholder={child.name || 'مثلاً سارا رضایی'}
+                  />
+                  <div className="mt-1.5 text-[11.5px] text-muted-2">همین متن روی برچسب یا جلد چاپ می‌شود · حداکثر {fa(60)} حرف</div>
+                </div>
+              )}
             </div>
           )}
 
@@ -241,7 +259,7 @@ export function ChildEditorScreen() {
                     key={t.kind}
                     tone={meta.tone}
                     onClick={() => navigate(`${meta.path}?for=${i}`)}
-                    className="flex min-h-[96px] flex-col items-start justify-between rounded-[18px] p-[13px]"
+                    className="flex min-h-[96px] flex-col items-start justify-between rounded-[18px] p-[13px] odd:last:col-span-2"
                   >
                     <GradientBadge tone={meta.tone} size={34}>
                       <meta.icon className="size-[18px]" strokeWidth={2.3} />

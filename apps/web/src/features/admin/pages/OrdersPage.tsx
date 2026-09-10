@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Chip } from '@/components/brand'
-import { fa } from '@/lib/format'
+import { fa, money } from '@/lib/format'
 import type { OrderStatus } from '@/lib/types'
 import { ORDER_STATUS_LABEL } from '@/lib/types'
 import { useAdminOrders } from '../api'
@@ -73,7 +73,7 @@ export function OrdersPage() {
                 <span className="truncate">{o.customerName}</span>
                 <span className="truncate text-muted-2">{serviceSummary(o)}</span>
                 <span className="text-muted-2">{itemsSummary(o)}</span>
-                <span className="font-bold">{fa(o.quote?.total ?? 0)}</span>
+                <span className="font-bold">{money(o.quote?.total ?? 0)}</span>
                 <span>
                   <StatusTag status={o.status} />
                 </span>

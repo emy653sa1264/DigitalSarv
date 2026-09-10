@@ -6,6 +6,50 @@ import { ORDER_FLOW } from '@/lib/types'
 /** All statuses: unpaid first, then timeline order, then the off-flow ones. */
 export const ORDER_STATUSES: OrderStatus[] = ['pending_payment', ...ORDER_FLOW, 'awaiting_approval', 'cancelled']
 
+// ── Admin status transitions (port of apps/api order-helpers `canAdminTransition`) ──
+export const TERMINAL_STATUSES: OrderStatus[] = ['delivered', 'cancelled']
+const PRODUCTION_STATUSES: OrderStatus[] = ['picked_up', 'preparing', 'binding', 'extras', 'qc', 'packing', 'out_for_delivery']
+
+export const isTerminal = (status: OrderStatus) => TERMINAL_STATUSES.includes(status)
+
+/**
+ * Status changes the admin may make (contract «Admin status transitions»): terminal states stay terminal,
+ * `cancelled` from anywhere else, forward along the happy path, backward only inside production,
+ * `awaiting_approval` only resolves to `confirmed` / `picked_up` / `cancelled`, and `pending_payment`
+ * is never entered or left by hand except by cancelling.
+ */
+export function canAdminTransition(from: OrderStatus, to: OrderStatus): boolean {
+  if (from === to || TERMINAL_STATUSES.includes(from)) return false
+  if (to === 'cancelled') return true
+  if (to === 'awaiting_approval' || to === 'pending_payment') return false
+  if (from === 'pending_payment') return false
+  if (from === 'awaiting_approval') return to === 'confirmed' || to === 'picked_up'
+  const i = ORDER_FLOW.indexOf(from)
+  const j = ORDER_FLOW.indexOf(to)
+  if (j > i) return true
+  return PRODUCTION_STATUSES.includes(from) && PRODUCTION_STATUSES.includes(to)
+}
+
+/** The current status first, then every target the server accepts. */
+export function adminStatusOptions(current: OrderStatus): OrderStatus[] {
+  return [current, ...ORDER_STATUSES.filter((s) => canAdminTransition(current, s))]
+}
+
+/** Next step of the happy path, if the admin may move there. */
+export function nextFlowStatus(current: OrderStatus): OrderStatus | undefined {
+  const i = ORDER_FLOW.indexOf(current)
+  const next = i >= 0 ? ORDER_FLOW[i + 1] : undefined
+  return next && canAdminTransition(current, next) ? next : undefined
+}
+
+/** Wallet refund on cancel (port of the API `refundableAmount`): what was charged by wallet/gateway, once. */
+export function refundableAmount(order: Order): number {
+  if (order.refunded || !order.paid) return 0
+  const via = order.paidVia ?? (order.payMethod === 'wallet' ? 'wallet' : undefined)
+  if (via !== 'wallet' && via !== 'gateway') return 0
+  return Math.max(0, order.chargedAmount ?? order.quote?.total ?? 0)
+}
+
 /** Status tag colours (prototype `orders[].tone`); `pending_payment` is muted. */
 export const STATUS_STYLE: Record<OrderStatus, { bg: string; fg: string }> = {
   pending_payment: { bg: '#eef2fb', fg: '#6b7488' },
@@ -37,17 +81,19 @@ export const PAY_LABEL: Record<PayMethod, string> = {
 }
 
 export const SERVICE_LABEL: Record<ServiceKind, string> = {
-  docs: 'چاپ اسناد',
+  print: 'چاپ اسناد',
+  docs: 'پایان‌نامه و صحافی',
   flyer: 'تراکت',
   cart: 'کارتریج',
   repair: 'تعمیر پرینتر',
 }
 
 /** «سرویس‌های مشمول» options of a campaign (design `campFields`). */
-export const CAMPAIGN_SERVICES: CampaignService[] = ['school', 'docs', 'flyer', 'cart', 'repair']
+export const CAMPAIGN_SERVICES: CampaignService[] = ['school', 'print', 'docs', 'flyer', 'cart', 'repair']
 export const CAMPAIGN_SERVICE_LABEL: Record<CampaignService, string> = {
   school: 'فنری کتاب',
-  docs: 'چاپ اسناد',
+  print: 'چاپ اسناد',
+  docs: 'پایان‌نامه و صحافی',
   flyer: 'تراکت',
   cart: 'شارژ کارتریج',
   repair: 'تعمیر پرینتر',
@@ -89,8 +135,11 @@ export function orderFiles(order: Order): { id: string; label: string; photo: bo
   order.services.forEach((s) => {
     const who = s.childName ? ` — ${s.childName}` : ''
     switch (s.kind) {
-      case 'docs':
+      case 'print':
         if (s.spec.fileId) files.push({ id: s.spec.fileId, label: `${s.spec.fileName || 'فایل چاپ اسناد'}${who}`, photo: false })
+        break
+      case 'docs':
+        if (s.spec.fileId) files.push({ id: s.spec.fileId, label: `${s.spec.fileName || 'فایل پایان‌نامه'}${who}`, photo: false })
         break
       case 'flyer':
         if (s.spec.designFileId) files.push({ id: s.spec.designFileId, label: `فایل طراحی تراکت${who}`, photo: false })
@@ -107,7 +156,7 @@ export function orderFiles(order: Order): { id: string; label: string; photo: bo
   return files
 }
 
-const SERVICE_SHORT: Record<ServiceKind, string> = { docs: 'چاپ', flyer: 'تراکت', cart: 'کارتریج', repair: 'تعمیر' }
+const SERVICE_SHORT: Record<ServiceKind, string> = { print: 'چاپ', docs: 'صحافی', flyer: 'تراکت', cart: 'کارتریج', repair: 'تعمیر' }
 
 /** "فنری + چاپ + کارتریج" style summary for the orders table. */
 export function serviceSummary(order: Order): string {
@@ -197,7 +246,7 @@ export const RULE_FIELD_LABEL: Record<RuleField, string> = {
 }
 export const RULE_OP_LABEL: Record<RuleOp, string> = { gt: '>', gte: '≥', eq: '=' }
 export const RULE_EFFECT_LABEL: Record<RuleEffectType, string> = {
-  percentOffServices: 'درصد تخفیف خدمات',
+  percentOffServices: 'درصد تخفیف فنری کتاب‌ها',
   freeDelivery: 'تحویل رایگان',
   freePickupDelivery: 'رفت و برگشت رایگان',
   fixedFee: 'هزینه ثابت اضافه',
@@ -219,7 +268,7 @@ export function ruleCondLabel(cond: PricingRule['condition'], planName?: (id: st
 export function ruleEffectLabel(effect: PricingRule['effect'], cond?: PricingRule['condition']): string {
   switch (effect.type) {
     case 'percentOffServices':
-      return `${fa(effect.value ?? 0)}٪ تخفیف خدمات`
+      return `${fa(effect.value ?? 0)}٪ تخفیف فنری کتاب‌ها`
     case 'freeDelivery':
       return 'تحویل رایگان'
     case 'freePickupDelivery':

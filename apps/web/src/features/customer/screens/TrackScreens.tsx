@@ -1,18 +1,23 @@
+import { useState } from 'react'
 import { Navigate, useNavigate, useParams } from 'react-router'
-import { Book, Route } from 'lucide-react'
+import { Phone, Route } from 'lucide-react'
 import { EmptyState, ErrorState, GradientBadge, InfoBanner, LoadingBlock } from '@/components/brand'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/components/ui/sonner'
-import { fa, jalaliDayTime } from '@/lib/format'
-import { ORDER_FLOW, ORDER_STATUS_LABEL, type Order } from '@/lib/types'
+import { fa, jalaliDayTime, money } from '@/lib/format'
+import { ORDER_FLOW, ORDER_STATUS_LABEL, type Order, type OrderStatus } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 import { Screen } from '../components/Screen'
-import { isActiveOrder, useMyOrders, useOrder, usePayOrder } from '../hooks/queries'
-import { SUPPORT_PHONE } from '../lib/constants'
+import { isActiveOrder, useCancelOrder, useMyOrders, useOrder, usePayOrder } from '../hooks/queries'
+import { useSupportPhone } from '../hooks/useOps'
 import { jalaliWeekdayLabel } from '../lib/jalali'
-import { orderBooks, orderKindLabel } from '../lib/orders'
+import { orderBooks, orderIcon, orderKindLabel, orderTone } from '../lib/orders'
 
-const TITLE = { title: 'رهگیری سفارش', subtitle: 'وضعیت لحظه‌ای هر فرزند', icon: Route, tone: 'violet' } as const
+const TITLE = { title: 'رهگیری سفارش', subtitle: 'وضعیت لحظه‌ای سفارش', icon: Route, tone: 'violet' } as const
+
+/** The customer may cancel before pickup (`POST /orders/:id/cancel`). */
+const CANCELLABLE: OrderStatus[] = ['pending_payment', 'registered', 'confirmed']
 
 /** `/app/track` — opens the latest active order (or the latest order). */
 export function TrackLatestScreen() {
@@ -58,17 +63,34 @@ export function TrackScreen() {
   )
 }
 
+function SupportLink({ className }: { className?: string }) {
+  const support = useSupportPhone()
+  return (
+    <a href={`tel:${support.tel}`} className={cn('inline-flex items-center gap-1.5 font-extrabold underline underline-offset-4', className)}>
+      <Phone className="size-3.5" strokeWidth={2.6} />
+      تماس با پشتیبانی · <span dir="ltr">{support.display}</span>
+    </a>
+  )
+}
+
 function Timeline({ order: o }: { order: Order }) {
   const payment = usePayOrder()
-  // «خدمات اضافی» only shows when a child has extras (or the order actually passed through it).
+  const cancel = useCancelOrder()
+  const support = useSupportPhone()
+  const [confirming, setConfirming] = useState(false)
+
+  // «خدمات اضافی» only shows when a child has extras (or the order actually passed through it);
+  // «فنری‌کردن» only when there are school books.
   const hasExtras = o.children.some((c) => c.extras?.length) || o.status === 'extras' || o.timeline.some((t) => t.status === 'extras')
-  const flow = hasExtras ? ORDER_FLOW : ORDER_FLOW.filter((s) => s !== 'extras')
-  const cur =
-    o.status === 'cancelled' || o.status === 'pending_payment' ? -1 : flow.indexOf(o.status === 'awaiting_approval' ? 'picked_up' : o.status)
+  const flow = ORDER_FLOW.filter((s) => (s !== 'extras' || hasExtras) && (s !== 'binding' || o.children.length > 0))
+  const effective: OrderStatus = o.status === 'awaiting_approval' ? 'picked_up' : o.status
+  const pos = ORDER_FLOW.indexOf(effective)
+  // A status hidden from this flow maps to the last visible step before it.
+  const cur = o.status === 'cancelled' || o.status === 'pending_payment' || pos < 0 ? -1 : flow.filter((s) => ORDER_FLOW.indexOf(s) <= pos).length - 1
+
   const books = orderBooks(o)
-  const meta = o.children.length
-    ? `${fa(books)} کتاب · ${fa(o.children.length)} فرزند`
-    : `${fa(o.services.length)} سرویس`
+  const meta = o.children.length ? `${fa(books)} کتاب · ${fa(o.children.length)} فرزند` : `${fa(o.services.length)} سرویس`
+  const Icon = orderIcon(o)
   const timeOf = (i: number) => {
     const status = flow[i]
     const entry = [...o.timeline].reverse().find((t) => t.status === status)
@@ -76,11 +98,24 @@ function Timeline({ order: o }: { order: Order }) {
     return i === cur ? 'در حال انجام' : '—'
   }
 
+  const refundable = o.paid && (o.paidVia === 'wallet' || o.paidVia === 'gateway')
+  const refundAmount = o.chargedAmount ?? o.quote?.total ?? 0
+  const cancelNote = refundable
+    ? `مبلغ ${money(refundAmount)} به کیف پول دیجیتال سرو شما برمی‌گردد.`
+    : o.status === 'pending_payment'
+      ? 'این سفارش هنوز پرداخت نشده و مبلغی کسر نمی‌شود.'
+      : ''
+  const doCancel = () =>
+    cancel.mutate(o.id, {
+      onSuccess: (r) =>
+        notify(r.refunded ? `سفارش ${fa(o.code)} لغو شد و ${money(refundAmount)} به کیف پول شما برگشت` : `سفارش ${fa(o.code)} لغو شد`),
+    })
+
   return (
     <>
       <div className="flex items-center gap-3 rounded-[22px] border border-line bg-white p-[15px]">
-        <GradientBadge tone="blue" size={46}>
-          <Book className="size-[23px]" strokeWidth={2.3} />
+        <GradientBadge tone={orderTone(o)} size={46}>
+          <Icon className="size-[23px]" strokeWidth={2.3} />
         </GradientBadge>
         <div className="min-w-0 flex-1">
           <div className="text-[15px] font-extrabold">
@@ -94,7 +129,7 @@ function Timeline({ order: o }: { order: Order }) {
 
       {o.status === 'cancelled' && (
         <InfoBanner tone="pink" className="mt-3">
-          این سفارش لغو شده است.
+          {o.refunded ? 'این سفارش لغو شده و مبلغ آن به کیف پول شما برگشت داده شد.' : 'این سفارش لغو شده است.'}
         </InfoBanner>
       )}
       {o.status === 'pending_payment' && (
@@ -112,7 +147,8 @@ function Timeline({ order: o }: { order: Order }) {
       )}
       {o.status === 'awaiting_approval' && (
         <InfoBanner tone="amber" className="mt-3">
-          تعداد شمارش‌شده با سفارش مغایرت دارد؛ مبلغ بازمحاسبه شد و منتظر تأیید شماست.
+          <div>تعداد شمارش‌شده با سفارش مغایرت دارد؛ سفارش در حال بررسی توسط پشتیبانی است؛ برای هماهنگی با شما تماس می‌گیریم.</div>
+          <SupportLink className="mt-2" />
         </InfoBanner>
       )}
 
@@ -141,9 +177,33 @@ function Timeline({ order: o }: { order: Order }) {
           )
         })}
       </ol>
-      <Button variant="outline" block className="h-[52px] text-[14.5px]" onClick={() => notify(`پشتیبانی: ${SUPPORT_PHONE}`)}>
-        تماس با پشتیبانی
+      <Button asChild variant="outline" block className="h-[52px] text-[14.5px]">
+        <a href={`tel:${support.tel}`}>
+          تماس با پشتیبانی · <span dir="ltr">{support.display}</span>
+        </a>
       </Button>
+      {CANCELLABLE.includes(o.status) && (
+        <>
+          <button
+            type="button"
+            disabled={cancel.isPending}
+            onClick={() => setConfirming(true)}
+            className="mt-[9px] h-[52px] w-full cursor-pointer rounded-full bg-pink-soft text-[14.5px] font-extrabold text-pink-dark hover:bg-[#ffd0e5] disabled:opacity-60"
+          >
+            {cancel.isPending ? 'در حال لغو…' : 'لغو سفارش'}
+          </button>
+          <ConfirmDialog
+            open={confirming}
+            onOpenChange={setConfirming}
+            title={`لغو سفارش ${fa(o.code)}؟`}
+            description={`سفارش لغو می‌شود و این کار قابل بازگشت نیست.${cancelNote ? ` ${cancelNote}` : ''}`}
+            confirmLabel="لغو سفارش"
+            cancelLabel="منصرف شدم"
+            destructive
+            onConfirm={doCancel}
+          />
+        </>
+      )}
     </>
   )
 }

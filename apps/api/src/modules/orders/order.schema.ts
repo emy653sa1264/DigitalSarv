@@ -169,6 +169,14 @@ export class Order {
   @Prop({ type: [Boolean], default: () => Array(9).fill(false) })
   qc: boolean[];
 
+  /** v3.3: QC checklist snapshotted at creation (`qc` has the same length); older orders: the 9 school labels. */
+  @Prop({ type: [String], default: undefined })
+  qcLabels?: string[];
+
+  /** v3.3: pickup checklist snapshotted at creation (`pickupChecks` has the same length); older orders: the 4 defaults. */
+  @Prop({ type: [String], default: undefined })
+  pickupLabels?: string[];
+
   /** Gateway payment state (gateway orders only). */
   @Prop({ type: OrderPaymentSchema })
   payment?: OrderPayment;

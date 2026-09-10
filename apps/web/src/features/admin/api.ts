@@ -3,6 +3,9 @@ import { api } from '@/lib/api'
 import { qk } from '@/lib/query'
 import type {
   AdminCustomer,
+  AdminPrices,
+  AdminSettings,
+  BindColor,
   Campaign,
   Center,
   CmsSection,
@@ -15,7 +18,9 @@ import type {
   Order,
   OrderStatus,
   Paged,
-  Prices,
+  Paper,
+  Plan,
+  PlanPatch,
   PricingRule,
   ProductionBoard,
   Zone,
@@ -43,7 +48,11 @@ export const ak = {
   colors: ['admin', 'colors'] as const,
   extras: ['admin', 'extras'] as const,
   grades: ['admin', 'grades'] as const,
+  papers: ['admin', 'papers'] as const,
+  bindColors: ['admin', 'bind-colors'] as const,
+  settings: ['admin', 'settings'] as const,
   prices: ['admin', 'prices'] as const,
+  plans: ['admin', 'plans'] as const,
   rules: ['admin', 'rules'] as const,
   campaigns: ['admin', 'campaigns'] as const,
   customers: ['admin', 'customers'] as const,
@@ -61,15 +70,23 @@ const PUBLIC_CMS_KEY: QueryKey = ['cms']
 
 // ── Request bodies ─────────────────────────────────────────────────────────
 export interface ColorBody { name: string; hex: string; extra: number; on?: boolean }
-export interface ExtraBody { label: string; price: number; on?: boolean }
+/** v3.3: «رنگ جلد پایان‌نامه» — same body as colours. */
+export type BindColorBody = ColorBody
+export interface ExtraBody { label: string; price: number; on?: boolean; services?: Extra['services']; needsText?: boolean }
 export interface GradeBody { name: string; books: number; on?: boolean }
+/** `price` = toman per A4 sheet (v3). */
+export interface PaperBody { name: string; price: number; on?: boolean }
 export type RuleBody = Omit<PricingRule, 'id' | 'usedCount' | 'order'> & { order?: number }
 export type CampaignBody = Omit<Campaign, 'id' | 'stats'>
-export interface CourierBody { name: string; phone: string; code: string; zoneId?: string; status: Courier['status']; rating?: number }
+/** `zoneId: null` clears the zone (PATCH only). */
+export interface CourierBody { name: string; phone: string; code: string; zoneId?: string | null; status: Courier['status']; rating?: number; bonus?: number }
 export type ZoneBody = Omit<Zone, 'id' | 'agentsCount'>
 export type CenterBody = Omit<Center, 'id'>
 export interface CmsBody { label?: string; on?: boolean; order?: number }
 export interface NotificationBody { text?: string; on?: boolean }
+/** v3.3 `POST /admin/notifications` (409 when the event already has a template). */
+export interface NotificationCreateBody { event: OrderStatus; text: string; on?: boolean }
+export interface SettingsPatch { ops?: Partial<AdminSettings['ops']>; courier?: Partial<AdminSettings['courier']>; checklists?: Partial<AdminSettings['checklists']> }
 
 // ── Generic list + CRUD ────────────────────────────────────────────────────
 function useList<T>(key: QueryKey, path: string) {
@@ -158,7 +175,9 @@ export function useOrderMutations() {
       await qc.cancelQueries({ queryKey: key })
       const prev = qc.getQueryData<Order>(key)
       if (prev) {
-        const next = Array.from({ length: 9 }, (_, i) => (i === index ? done : !!prev.qc?.[i]))
+        // v3.3: the checklist length is per order (`qcLabels`); pre-v3.3 orders have 9.
+        const length = Math.max(prev.qc?.length ?? 0, prev.qcLabels?.length ?? 0, index + 1)
+        const next = Array.from({ length }, (_, i) => (i === index ? done : !!prev.qc?.[i]))
         qc.setQueryData<Order>(key, { ...prev, qc: next })
       }
       return { prev }
@@ -172,37 +191,83 @@ export function useOrderMutations() {
   return { setStatus, assign, setQc }
 }
 
-// ── Catalog: colors / extras / grades ──────────────────────────────────────
+// ── Catalog: colors / extras / grades / papers / bind colours ──────────────
 function useToggleAll(path: string, key: QueryKey) {
   const refresh = useRefresh([key, qk.catalog])
   return useMutation({ mutationFn: (on: boolean) => api.post<unknown>(`${path}/toggle-all`, { on }), onSuccess: refresh })
 }
 
-export const useColors = () => useList<Color>(ak.colors, '/admin/colors')
-export function useColorMutations() {
-  return { ...useCrud<Color, ColorBody>(ak.colors, '/admin/colors', [qk.catalog]), toggleAll: useToggleAll('/admin/colors', ak.colors) }
+/** v3.3 `POST /admin/<list>/reorder { ids }` — optimistic: `sort` becomes the 1-based position. */
+function useReorder<T extends { id: string; sort: number }>(path: string, key: QueryKey) {
+  const qc = useQueryClient()
+  const refresh = useRefresh([key, qk.catalog])
+  return useMutation({
+    mutationFn: (ids: string[]) => api.post<unknown>(`${path}/reorder`, { ids }),
+    onMutate: async (ids) => {
+      await qc.cancelQueries({ queryKey: key })
+      const prev = qc.getQueryData<T[]>(key)
+      qc.setQueryData<T[]>(key, (old) => old?.map((item) => ({ ...item, sort: ids.indexOf(item.id) + 1 || item.sort })))
+      return { prev }
+    },
+    onError: (_e, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(key, ctx.prev)
+    },
+    onSettled: refresh,
+  })
 }
+
+function useCatalogList<T extends { id: string; sort: number }, Body extends object>(key: QueryKey, path: string) {
+  return { ...useCrud<T, Body>(key, path, [qk.catalog]), toggleAll: useToggleAll(path, key), reorder: useReorder<T>(path, key) }
+}
+
+export const useColors = () => useList<Color>(ak.colors, '/admin/colors')
+export const useColorMutations = () => useCatalogList<Color, ColorBody>(ak.colors, '/admin/colors')
 
 export const useExtras = () => useList<Extra>(ak.extras, '/admin/extras')
-export function useExtraMutations() {
-  return { ...useCrud<Extra, ExtraBody>(ak.extras, '/admin/extras', [qk.catalog]), toggleAll: useToggleAll('/admin/extras', ak.extras) }
-}
+export const useExtraMutations = () => useCatalogList<Extra, ExtraBody>(ak.extras, '/admin/extras')
+
+export const usePapers = () => useList<Paper>(ak.papers, '/admin/papers')
+export const usePaperMutations = () => useCatalogList<Paper, PaperBody>(ak.papers, '/admin/papers')
 
 export const useGrades = () => useList<Grade>(ak.grades, '/admin/grades')
-export function useGradeMutations() {
-  return { ...useCrud<Grade, GradeBody>(ak.grades, '/admin/grades', [qk.catalog]), toggleAll: useToggleAll('/admin/grades', ak.grades) }
+export const useGradeMutations = () => useCatalogList<Grade, GradeBody>(ak.grades, '/admin/grades')
+
+export const useBindColors = () => useList<BindColor>(ak.bindColors, '/admin/bind-colors')
+export const useBindColorMutations = () => useCatalogList<BindColor, BindColorBody>(ak.bindColors, '/admin/bind-colors')
+
+// ── «تنظیمات» (v3.3) ───────────────────────────────────────────────────────
+export function useAdminSettings() {
+  return useQuery({ queryKey: ak.settings, queryFn: () => api.get<AdminSettings>('/admin/settings') })
+}
+export function useSettingsMutation() {
+  const qc = useQueryClient()
+  const refresh = useRefresh([ak.settings, qk.catalog])
+  return useMutation({
+    mutationFn: (patch: SettingsPatch) => api.put<AdminSettings>('/admin/settings', patch),
+    onSuccess: (data) => {
+      qc.setQueryData(ak.settings, data)
+      return refresh()
+    },
+  })
 }
 
 // ── Prices ─────────────────────────────────────────────────────────────────
 export function useAdminPrices() {
-  return useQuery({ queryKey: ak.prices, queryFn: () => api.get<Prices>('/admin/prices') })
+  return useQuery({ queryKey: ak.prices, queryFn: () => api.get<AdminPrices>('/admin/prices') })
 }
 
 export function usePriceMutations() {
   const refresh = useRefresh([ak.prices, qk.catalog])
-  const save = useMutation({ mutationFn: (patch: Partial<Prices>) => api.put<Prices>('/admin/prices', patch), onSuccess: refresh })
-  const reset = useMutation({ mutationFn: () => api.post<Prices>('/admin/prices/reset'), onSuccess: refresh })
+  const save = useMutation({ mutationFn: (patch: Partial<AdminPrices>) => api.put<AdminPrices>('/admin/prices', patch), onSuccess: refresh })
+  const reset = useMutation({ mutationFn: () => api.post<AdminPrices>('/admin/prices/reset'), onSuccess: refresh })
   return { save, reset }
+}
+
+// ── Membership plans ───────────────────────────────────────────────────────
+export const usePlans = () => useList<Plan>(ak.plans, '/admin/plans')
+export function usePlanMutations() {
+  const { update } = useCrud<Plan, PlanPatch>(ak.plans, '/admin/plans', [qk.catalog])
+  return { update }
 }
 
 // ── Pricing rules ──────────────────────────────────────────────────────────
@@ -268,13 +333,19 @@ export const useCenterMutations = () => useCrud<Center, CenterBody>(ak.centers, 
 
 // ── CMS & notifications ────────────────────────────────────────────────────
 export const useCmsSections = () => useList<CmsSection>(ak.cms, '/admin/cms')
+/** Sections are fixed by the landing code (v3.2 — `POST /admin/cms` removed): only edit / toggle. */
 export function useCmsMutations() {
-  const { create, update } = useCrud<CmsSection, CmsBody>(ak.cms, '/admin/cms', [PUBLIC_CMS_KEY])
-  return { create, update }
+  const { update } = useCrud<CmsSection, CmsBody>(ak.cms, '/admin/cms', [PUBLIC_CMS_KEY])
+  return { update }
 }
 
 export const useNotificationTemplates = () => useList<NotificationTemplate>(ak.notifications, '/admin/notifications')
 export function useNotificationMutations() {
-  const { update } = useCrud<NotificationTemplate, NotificationBody>(ak.notifications, '/admin/notifications')
-  return { update }
+  const { update, remove } = useCrud<NotificationTemplate, NotificationBody>(ak.notifications, '/admin/notifications')
+  const refresh = useRefresh([ak.notifications])
+  const create = useMutation({
+    mutationFn: (body: NotificationCreateBody) => api.post<NotificationTemplate>('/admin/notifications', body),
+    onSuccess: refresh,
+  })
+  return { create, update, remove }
 }

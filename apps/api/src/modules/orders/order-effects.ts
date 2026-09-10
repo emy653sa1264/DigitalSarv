@@ -1,5 +1,6 @@
 import type { Model, Types } from 'mongoose';
 import type { OrderStatus } from '../../common/constants.js';
+import type { DispatchOrder } from '../notifications/notifications.service.js';
 import type { User } from '../users/user.schema.js';
 import type { DeferredEffects, Order } from './order.schema.js';
 
@@ -7,10 +8,10 @@ export interface PlacementDeps {
   users: Pick<Model<User>, 'updateOne'>;
   rules: { recordUsage(ids: string[]): Promise<unknown> };
   campaigns: { recordUsage(code: string, books: number, total: number): Promise<unknown> };
-  notifications: { dispatch(event: OrderStatus, order: { code: string; customerPhone: string }): Promise<void> };
+  notifications: { dispatch(event: OrderStatus, order: DispatchOrder): Promise<void> };
 }
 
-type PlacedOrder = Pick<Order, 'code' | 'customerPhone' | 'coupon' | 'quote'> & { customerId: Types.ObjectId };
+type PlacedOrder = Pick<Order, 'code' | 'coupon' | 'quote'> & { _id: Types.ObjectId; customerId: Types.ObjectId };
 
 /**
  * Side effects of a placed (= paid or pay-later) order: activate the plan chosen at checkout, bump

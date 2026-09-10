@@ -1,5 +1,14 @@
-import { PRODUCTION_STATUSES, STATUS_FLOW, STATUS_LABELS, type OrderStatus } from '../../common/constants.js';
+import {
+  EXTRA_SERVICES,
+  PICKUP_CHECK_LABELS,
+  PRODUCTION_STATUSES,
+  QC_LABELS,
+  STATUS_FLOW,
+  STATUS_LABELS,
+  type OrderStatus,
+} from '../../common/constants.js';
 import { fa } from '../../common/utils/fa.js';
+import type { Checklists, QcListKey } from '../catalog/catalog.defaults.js';
 import { bookCount, distributeBooks } from '../pricing/pricing.js';
 import type { ChildDraft, OrderDraft, PricingContext, ServiceDraft } from '../pricing/pricing.types.js';
 import type { Order, OrderChild, OrderService } from './order.schema.js';
@@ -14,29 +23,80 @@ export function pushStatus(order: Pick<Order, 'status' | 'timeline'>, status: Or
   order.timeline.push(timelineEntry(status, at));
 }
 
-/** Children as persisted on an order: defaults resolved, only known fields, plus `total`. */
-export function orderChildren(children: ChildDraft[], totals: number[], ctx: Pick<PricingContext, 'grades'>): OrderChild[] {
-  return children.map((c, i) => ({
-    name: c.name?.trim() || `فرزند ${fa(i + 1)}`,
-    grade: c.grade,
-    books: bookCount(c, ctx),
-    tone: c.tone ?? 'blue',
-    color: c.color || 'blue',
-    lined: !!c.lined,
-    linedCount: c.linedCount ?? 10,
-    linedPos: c.linedPos ?? 'all',
-    ...(c.pageFrom ? { pageFrom: c.pageFrom } : {}),
-    ...(c.pageTo ? { pageTo: c.pageTo } : {}),
-    extras: c.extras ?? [],
-    ...(c.note ? { note: c.note } : {}),
-    total: totals[i] ?? 0,
-  }));
+/**
+ * Children as persisted on an order: defaults resolved, only known fields, plus `total`. With the
+ * context's extras (v3.3) only extras that are on and offered for school binding are kept.
+ */
+export function orderChildren(
+  children: ChildDraft[],
+  totals: number[],
+  ctx: Pick<PricingContext, 'grades'> & Partial<Pick<PricingContext, 'extras'>>,
+): OrderChild[] {
+  const school = ctx.extras
+    ? new Set(ctx.extras.filter((x) => x.on && (x.services ?? EXTRA_SERVICES).includes('school')).map((x) => x.key))
+    : null;
+  return children.map((c, i) => {
+    const labelText = typeof c.labelText === 'string' ? c.labelText.trim().slice(0, 60) : '';
+    return {
+      name: c.name?.trim() || `فرزند ${fa(i + 1)}`,
+      grade: c.grade,
+      books: bookCount(c, ctx),
+      tone: c.tone ?? 'blue',
+      color: c.color || 'blue',
+      lined: !!c.lined,
+      linedCount: c.linedCount ?? 10,
+      linedPos: c.linedPos ?? 'all',
+      ...(c.pageFrom ? { pageFrom: c.pageFrom } : {}),
+      ...(c.pageTo ? { pageTo: c.pageTo } : {}),
+      extras: school ? (c.extras ?? []).filter((k) => school.has(k)) : (c.extras ?? []),
+      ...(labelText ? { labelText } : {}),
+      ...(c.note ? { note: c.note } : {}),
+      total: totals[i] ?? 0,
+    };
+  });
 }
 
 export const TERMINAL_STATUSES: OrderStatus[] = ['delivered', 'cancelled'];
 
 /** The customer may cancel until the courier has the order (an unpaid gateway order too). */
 export const CUSTOMER_CANCELLABLE: OrderStatus[] = ['pending_payment', 'registered', 'confirmed'];
+
+// ---------------------------------------------------------------- checklists (v3.3)
+
+/**
+ * The QC checklist an order is created with: `qc.school` when it has children, then the list of each
+ * distinct service kind in order of first appearance; identical labels appear once.
+ */
+export function orderQcLabels(hasChildren: boolean, kinds: string[], checklists: Checklists): string[] {
+  const lists = [
+    ...(hasChildren ? [checklists.qc.school] : []),
+    ...[...new Set(kinds)].map((k) => checklists.qc[k as QcListKey] ?? []),
+  ];
+  return [...new Set(lists.flat())];
+}
+
+/** The order's QC labels (orders created before v3.3: the 9 school labels). */
+export function qcLabelsOf(order: Pick<Order, 'qcLabels'>): string[] {
+  return order.qcLabels?.length ? order.qcLabels : QC_LABELS;
+}
+
+/** The order's pickup checklist (orders created before v3.3: the 4 defaults). */
+export function pickupLabelsOf(order: Pick<Order, 'pickupLabels'>): string[] {
+  return order.pickupLabels?.length ? order.pickupLabels : PICKUP_CHECK_LABELS;
+}
+
+export function qcComplete(order: Pick<Order, 'qcLabels' | 'qc'>): boolean {
+  return qcLabelsOf(order).every((_, i) => order.qc?.[i] === true);
+}
+
+/** QC guard (v3.3): leaving production for these targets requires a complete QC checklist. */
+export const QC_GUARDED_TARGETS: OrderStatus[] = ['packing', 'out_for_delivery', 'delivered'];
+/** Production statuses before QC is signed off (`picked_up … qc`). */
+export const BEFORE_QC_DONE: OrderStatus[] = ['picked_up', 'preparing', 'binding', 'extras', 'qc'];
+
+export function needsQcGuard(from: OrderStatus, to: OrderStatus): boolean {
+  return QC_GUARDED_TARGETS.includes(to) && BEFORE_QC_DONE.includes(from);
+}
 
 /**
  * Amount credited to the customer's wallet when the order is cancelled: exactly what was charged,

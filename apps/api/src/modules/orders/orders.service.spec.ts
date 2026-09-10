@@ -5,20 +5,27 @@ import { validate } from 'class-validator';
 import { Types } from 'mongoose';
 import { FakeRedis, fakeRedisService } from '../../../test/fake-redis.js';
 import type { AuthUser } from '../../common/auth/auth-user.js';
+import { DEFAULT_CHECKLISTS } from '../catalog/catalog.defaults.js';
 import { AssignDto, type OrderDraftDto } from './dto/orders.dto.js';
 import { OrdersService } from './orders.service.js';
 
 type Doc = Record<string, unknown>;
 
-/** Mongo-ish filter matching for the handful of operators the service uses. */
+const get = (doc: Doc, path: string): unknown =>
+  path.split('.').reduce<unknown>((v, k) => (v == null ? undefined : (v as Doc)[k]), doc);
+
+/** Mongo-ish filter matching for the handful of operators the service uses (dotted paths included). */
 function matches(doc: Doc, filter: Doc): boolean {
   return Object.entries(filter).every(([k, cond]) => {
-    const v = doc[k];
+    const v = get(doc, k);
     if (cond && typeof cond === 'object' && !(cond instanceof Types.ObjectId)) {
-      const c = cond as { $in?: unknown[]; $ne?: unknown; $gte?: number };
+      const c = cond as { $in?: unknown[]; $ne?: unknown; $gte?: number; $not?: { $elemMatch?: { $ne?: unknown } } };
       if (c.$in) return c.$in.includes(v);
       if ('$ne' in c) return v !== c.$ne;
       if (c.$gte !== undefined) return (v as number) >= c.$gte;
+      // `{ $not: { $elemMatch: { $ne: x } } }` — no element differs from x (the QC guard)
+      const inner = c.$not?.$elemMatch;
+      if (inner && '$ne' in inner) return !(Array.isArray(v) && v.some((x) => x !== inner.$ne));
     }
     return String(v) === String(cond);
   });
@@ -263,15 +270,86 @@ describe('OrdersService.assign', () => {
   });
 });
 
+describe('OrdersService.setStatus QC guard (v3.3)', () => {
+  const nine = (done: number) => Array.from({ length: 9 }, (_, i) => i < done);
+
+  it('leaving production for packing / out_for_delivery / delivered needs every QC item done', async () => {
+    const open = setup({ status: 'qc', qc: nine(8) });
+    await expect(open.svc.setStatus(String(orderId), 'packing')).rejects.toThrow('کنترل کیفیت کامل نشده است');
+    await expect(open.svc.setStatus(String(orderId), 'delivered')).rejects.toThrow('کنترل کیفیت کامل نشده است');
+    expect(open.order.status).toBe('qc');
+    await expect(open.svc.setStatus(String(orderId), 'binding')).resolves.toMatchObject({ status: 'binding' }); // backwards is fine
+
+    const done = setup({ status: 'qc', qc: nine(9) });
+    await expect(done.svc.setStatus(String(orderId), 'packing')).resolves.toMatchObject({ status: 'packing' });
+    // outside production (e.g. out_for_delivery → delivered) there is nothing to guard
+    await expect(setup({ status: 'out_for_delivery', qc: nine(0) }).svc.setStatus(String(orderId), 'delivered')).resolves.toMatchObject({ status: 'delivered' });
+  });
+
+  it("uses the order's own checklist; an item unticked while the move is in flight makes it a 409", async () => {
+    const own = setup({ status: 'extras', qcLabels: ['a', 'b'], qc: [true, true] });
+    await expect(own.svc.setStatus(String(orderId), 'packing')).resolves.toMatchObject({ status: 'packing' });
+
+    const raced = setup({ status: 'extras', qcLabels: ['a', 'b'], qc: [true, true] });
+    const read = raced.orders.findById.getMockImplementation()!;
+    raced.orders.findById.mockImplementationOnce(async (id: unknown) => {
+      const res = await read(id);
+      raced.order.qc = [true, false]; // another admin unticks an item meanwhile (a new array, like a real write)
+      return res;
+    });
+    const err = (await raced.svc.setStatus(String(orderId), 'packing').catch((e: unknown) => e)) as HttpException;
+    expect(err.getStatus()).toBe(409);
+    expect(raced.order.status).toBe('extras');
+  });
+});
+
 describe('OrdersService.create', () => {
+  // a bookable pickup under the default «تنظیمات»: tomorrow (Tehran), a configured slot
+  const tomorrow = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tehran' }).format(new Date(Date.now() + 86_400_000));
   const draft = (payMethod: 'wallet' | 'gateway') =>
     ({
       children: [{ name: 'a', grade: 'g', color: 'blue', books: 1 }],
       services: [],
       planId: 'gold',
       payMethod,
-      pickup: { address: 'addr', phone: '09123456789', date: '2999-01-01', slot: '10-12' },
+      pickup: { address: 'addr', phone: '09123456789', date: tomorrow, slot: '۱۰ تا ۱۲' },
     }) as unknown as OrderDraftDto;
+  type PricingFake = { quote: ReturnType<typeof vi.fn>; pricedServices: ReturnType<typeof vi.fn> };
+  const pricingOf = (svc: OrdersService) => (svc as unknown as { pricing: PricingFake }).pricing;
+
+  it('v3.3: an unbookable pickup is rejected before anything is charged', async () => {
+    const { svc, orders, users } = setup();
+    const bad = { ...draft('wallet'), pickup: { address: 'addr', phone: '09123456789', date: tomorrow, slot: '۹ تا ۱۱' } } as unknown as OrderDraftDto;
+    await expect(svc.create(customer, bad)).rejects.toThrow(/بازه زمانی تحویل‌گیری معتبر نیست/);
+    const past = { ...draft('wallet'), pickup: { address: 'addr', phone: '09123456789', date: '2020-01-01', slot: '۱۰ تا ۱۲' } } as unknown as OrderDraftDto;
+    await expect(svc.create(customer, past)).rejects.toThrow(/گذشته است/);
+    expect(orders.docs).toHaveLength(1);
+    expect(users.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('v3.3: below the minimum order → 400 naming the minimum; nothing is charged', async () => {
+    const { svc, orders, users } = setup();
+    pricingOf(svc).quote.mockResolvedValueOnce({
+      quote: { total: 121200, subtotal: 51200, minOrderShortfall: 48800, planId: 'gold', children: [] },
+      appliedRuleIds: [],
+    });
+    await expect(svc.create(customer, draft('wallet'))).rejects.toThrow('حداقل مبلغ سفارش ۱۰۰٬۰۰۰ تومان است');
+    expect(orders.docs).toHaveLength(1);
+    expect(users.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('v3.3: snapshots the QC checklist (school + each service kind, labels once) and the pickup checklist', async () => {
+    const { svc, orders, user } = setup();
+    user.walletBalance = 1_000_000;
+    pricingOf(svc).pricedServices.mockReturnValueOnce([{ kind: 'print' }, { kind: 'cart' }, { kind: 'print' }]);
+    await svc.create(customer, draft('wallet'));
+    const created = orders.docs.at(-1)!;
+    const { qc, pickup } = DEFAULT_CHECKLISTS;
+    expect(created.qcLabels).toEqual([...new Set([...qc.school, ...qc.print, ...qc.cart])]);
+    expect(created.qc).toEqual((created.qcLabels as string[]).map(() => false));
+    expect(created.pickupLabels).toEqual(pickup);
+    expect(created.pickupChecks).toEqual(pickup.map(() => false));
+  });
 
   it('does not activate the chosen plan when the wallet check fails', async () => {
     const { svc, users, user } = setup();

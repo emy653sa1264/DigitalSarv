@@ -1,11 +1,12 @@
 import { useState } from 'react'
 import { Camera, Printer } from 'lucide-react'
-import { FieldLabel, TotalsPanel } from '@/components/brand'
+import { Chip, FieldLabel, TotalsPanel } from '@/components/brand'
 import { Input } from '@/components/ui/input'
 import { notify } from '@/components/ui/sonner'
 import { uploadAccept } from '@/lib/api'
 import { fa, money, toNum } from '@/lib/format'
-import type { CartSpec } from '@/lib/types'
+import { useCatalog } from '@/lib/query'
+import type { CartSpec, Prices } from '@/lib/types'
 import { AttachmentList } from '../components/Attachments'
 import { Screen } from '../components/Screen'
 import { CtaButton, FilePick } from '../components/parts'
@@ -13,23 +14,41 @@ import { useServiceQuote } from '../hooks/queries'
 import { useServiceEditor } from '../hooks/useServiceEditor'
 import { useUploader } from '../hooks/useUploader'
 
-const FIELDS: { key: 'brand' | 'model' | 'type'; label: string; ph: string }[] = [
+const FIELDS: { key: 'brand' | 'model'; label: string; ph: string }[] = [
   { key: 'brand', label: 'برند', ph: 'HP' },
   { key: 'model', label: 'مدل کارتریج', ph: '85A' },
-  { key: 'type', label: 'نوع', ph: 'لیزری سیاه‌وسفید' },
+]
+
+type CartType = NonNullable<CartSpec['cartType']>
+/** v3.3 «نوع کارتریج» → its price key. */
+const CART_TYPES: { v: CartType; label: string; price: keyof Prices }[] = [
+  { v: 'laserBw', label: 'لیزری سیاه', price: 'cartridge' },
+  { v: 'laserColor', label: 'لیزری رنگی', price: 'cartridgeColor' },
+  { v: 'inkjet', label: 'جوهرافشان', price: 'cartridgeInkjet' },
 ]
 
 const FLOW = ['تحویل‌گیری از محل شما', 'شارژ و تست', 'کنترل کیفیت', 'تحویل درب منزل']
 
 export function CartScreen() {
   const { initialSpec, isEditing, childName, save } = useServiceEditor('cart')
-  const [spec, setSpec] = useState<CartSpec>(() => initialSpec ?? { brand: '', model: '', type: '', count: 1 })
+  const [spec, setSpec] = useState<CartSpec>(() => (initialSpec ? { cartType: 'laserBw', ...initialSpec } : { brand: '', model: '', cartType: 'laserBw', count: 1 }))
+  const catalog = useCatalog()
+  const prices = catalog.data?.prices
   const uploader = useUploader('cartridge')
   const photoIds = spec.photoIds ?? []
   const count = Math.max(1, spec.count || 1)
-  // Photos don't affect the price — keep them out of the quote key.
-  const { photoIds: _photos, ...priced } = spec
-  const full: CartSpec = { ...priced, brand: spec.brand.trim(), model: spec.model.trim(), count }
+  const cartType = spec.cartType ?? 'laserBw'
+  const typeLabel = CART_TYPES.find((t) => t.v === cartType)?.label ?? ''
+  // Photos don't affect the price — keep them out of the quote key. An old free-text `type` is kept only when non-empty.
+  const { photoIds: _photos, type: legacyType, ...priced } = spec
+  const full: CartSpec = {
+    ...priced,
+    brand: spec.brand.trim(),
+    model: spec.model.trim(),
+    cartType,
+    count,
+    ...(legacyType?.trim() ? { type: legacyType.trim() } : {}),
+  }
   const quote = useServiceQuote({ kind: 'cart', spec: full })
   const price = quote.data?.services[0]?.price
 
@@ -65,6 +84,17 @@ export function CartScreen() {
             />
           </div>
         ))}
+        <div>
+          <FieldLabel className="mb-[9px]">نوع کارتریج</FieldLabel>
+          <div className="flex flex-wrap gap-2" role="group" aria-label="نوع کارتریج">
+            {CART_TYPES.map((t) => (
+              <Chip key={t.v} selected={cartType === t.v} className="px-[15px] py-2.5" onClick={() => setSpec((s) => ({ ...s, cartType: t.v }))}>
+                {t.label}
+                {prices?.[t.price] !== undefined ? ` · ${money(prices[t.price])}` : ''}
+              </Chip>
+            ))}
+          </div>
+        </div>
         <div>
           <FieldLabel htmlFor="cart-count" className="mb-[7px]">
             تعداد
@@ -115,7 +145,7 @@ export function CartScreen() {
 
       <TotalsPanel
         className="mt-3.5"
-        meta={`${fa(count)} عدد${full.brand || full.model ? ` · ${[full.brand, full.model].filter(Boolean).join(' ')}` : ''}`}
+        meta={`${fa(count)} عدد · ${typeLabel}${full.brand || full.model ? ` · ${[full.brand, full.model].filter(Boolean).join(' ')}` : ''}`}
         label="هزینه شارژ"
         amount={price !== undefined ? money(price) : quote.isError ? '—' : '…'}
       />

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ChangeEvent, type Dispatch, type ReactNode, type SetStateAction } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router'
 import { Camera, Check, Image as ImageIcon, Minus, Plus, X } from 'lucide-react'
 import { EmptyState, ErrorState, InfoBanner, LoadingBlock, MobileHeader, Panel, ScreenBody } from '@/components/brand'
@@ -18,7 +18,13 @@ const PICKUP_CHECKS = [
   'عکس تحویل‌گیری ثبت شد',
   'تأیید امضای مشتری گرفته شد',
 ]
-const PHOTO_CHECK = 2
+/** Same 4 checks (same indices for the API) worded for pickups without books — cartridge, repair, flyer. */
+const ITEM_CHECKS = [
+  'اقلام تحویلی با سفارش تطبیق داده شد',
+  'وضعیت ظاهری اقلام سالم است',
+  'عکس تحویل‌گیری ثبت شد',
+  'تأیید امضای مشتری گرفته شد',
+]
 
 /** A «عکس کتاب‌ها» photo: uploading (progress), uploaded (`id`) or failed (`error`). */
 interface Photo {
@@ -84,15 +90,14 @@ function usePickupPhotos(onUploaded: () => void) {
   return { photos, ids, busy, add, remove }
 }
 
-/** `/courier/verify` — the "شمارش" tab: last opened pickup, else the next open pickup of today. */
+/** `/courier/verify` — the "شمارش" tab: the last opened pickup while it is still open, else the next open pickup of today. */
 export function VerifyIndex() {
   const lastId = useLastTask((s) => s.orderId)
-  const lastKind = useLastTask((s) => s.kind)
   const tasks = useCourierTasks()
 
-  if (lastId && lastKind === 'pickup') return <Navigate to={`/courier/verify/${lastId}`} replace />
-  const next = tasks.data?.find((t) => t.kind === 'pickup' && !isTaskDone(t.kind, t.status))
-  if (next) return <Navigate to={`/courier/verify/${next.orderId}`} replace />
+  const open = tasks.data?.filter((t) => t.kind === 'pickup' && !isTaskDone(t.kind, t.status)) ?? []
+  const target = open.find((t) => t.orderId === lastId) ?? open[0]
+  if (target) return <Navigate to={`/courier/verify/${target.orderId}`} replace />
 
   return (
     <>
@@ -127,7 +132,7 @@ export function VerifyScreen() {
   return (
     <>
       <MobileHeader
-        title="شمارش و تطبیق"
+        title={order.data && !(order.data.quote?.totalBooks ?? 0) ? 'تحویل‌گیری اقلام' : 'شمارش و تطبیق'}
         subtitle={order.data?.customerName}
         icon={Check}
         tone="green"
@@ -160,20 +165,22 @@ function VerifyForm({ order }: { order: Order }) {
   const verify = useVerifyPickup(order.id)
   const fileRef = useRef<HTMLInputElement>(null)
   const registered = order.quote?.totalBooks ?? 0
-  const [counted, setCounted] = useState(order.collectedCount ?? registered)
+  const hasBooks = registered > 0
+  // v3.3: the order's own snapshot; older orders keep the fixed 4 (worded for books or items).
+  const checkLabels = order.pickupLabels?.length ? order.pickupLabels : hasBooks ? PICKUP_CHECKS : ITEM_CHECKS
+  const [counted, setCounted] = useState(hasBooks ? (order.collectedCount ?? registered) : 0)
   const [checks, setChecks] = useState<boolean[]>(() =>
-    order.pickupChecks?.length === PICKUP_CHECKS.length ? [...order.pickupChecks] : PICKUP_CHECKS.map(() => false),
+    order.pickupChecks?.length === checkLabels.length ? [...order.pickupChecks] : checkLabels.map(() => false),
   )
   const match = counted === registered
   const locked = !isAwaitingPickup(order.status)
 
   const toggle = (index: number) => setChecks((cs) => cs.map((c, j) => (j === index ? !c : c)))
 
-  const photos = usePickupPhotos(() => {
-    setChecks((cs) => cs.map((c, j) => (j === PHOTO_CHECK ? true : c)))
-    notify('عکس کتاب‌ها ثبت شد')
-  })
+  // Photos are their own step: uploading one never ticks a checklist item (the list is admin-defined).
+  const photos = usePickupPhotos(() => notify(hasBooks ? 'عکس کتاب‌ها ثبت شد' : 'عکس اقلام ثبت شد'))
   const savedPhotos = order.pickupPhotoIds?.length ?? 0
+  const photoLabel = hasBooks ? 'عکس کتاب‌ها' : 'عکس اقلام'
 
   const onPhoto = (e: ChangeEvent<HTMLInputElement>) => {
     for (const file of Array.from(e.target.files ?? [])) photos.add(file)
@@ -189,7 +196,13 @@ function VerifyForm({ order }: { order: Order }) {
       { collectedCount: counted, checks, ...(photos.ids.length ? { photoIds: photos.ids } : {}) },
       {
         onSuccess: () => {
-          notify(match ? 'تأیید شد و به مرکز چاپ منتقل شد' : 'مغایرت ثبت شد و برای تأیید مشتری ارسال شد')
+          notify(
+            !hasBooks
+              ? 'تحویل‌گیری ثبت شد و به مرکز چاپ منتقل شد'
+              : match
+                ? 'تأیید شد و به مرکز چاپ منتقل شد'
+                : 'مغایرت ثبت شد و برای بررسی پشتیبانی ارسال شد',
+          )
           navigate('/courier')
         },
       },
@@ -200,49 +213,30 @@ function VerifyForm({ order }: { order: Order }) {
     <>
       {locked && (
         <InfoBanner tone="green" className="mb-3">
-          شمارش این سفارش ثبت شده است — وضعیت فعلی: {ORDER_STATUS_LABEL[order.status]}
+          {hasBooks ? 'شمارش این سفارش ثبت شده است' : 'تحویل‌گیری این سفارش ثبت شده است'} — وضعیت فعلی: {ORDER_STATUS_LABEL[order.status]}
         </InfoBanner>
       )}
 
-      <div className="grid grid-cols-2 gap-2.5">
-        <div className="rounded-[22px] border border-line bg-white p-4 text-center">
-          <div className="text-[12.5px] text-muted-2">ثبت‌شده</div>
-          <div className="mt-0.5 text-[34px] font-black">{fa(registered)}</div>
-        </div>
-        <div
-          className={cn(
-            'rounded-[22px] p-4 text-center text-white transition-colors',
-            match ? 'bg-green shadow-[0_10px_22px_rgba(31,169,104,0.32)]' : 'bg-pink shadow-[0_10px_22px_rgba(234,83,153,0.32)]',
-          )}
-          aria-live="polite"
-        >
-          <div className="text-[12.5px] opacity-80">شمارش‌شده</div>
-          <div className="mt-0.5 text-[34px] font-black">{fa(counted)}</div>
-        </div>
-      </div>
-
-      <div className="mt-3 flex items-center gap-3 rounded-full border border-line bg-white px-3 py-[9px]">
-        <StepButton label="کاهش" onClick={() => setCounted((c) => Math.max(0, c - 1))} disabled={locked}>
-          <Minus className="size-6" strokeWidth={3} />
-        </StepButton>
-        <div className="flex-1 text-center text-[13px] font-semibold text-muted-2">شمارش کتاب‌های تحویلی</div>
-        <StepButton label="افزایش" onClick={() => setCounted((c) => c + 1)} disabled={locked}>
-          <Plus className="size-6" strokeWidth={3} />
-        </StepButton>
-      </div>
-
-      {!match && (
-        <div className="mt-3 rounded-[22px] border border-[#f7b2d4] bg-pink-soft p-[15px]">
-          <div className="text-[14.5px] font-extrabold text-pink-dark">مغایرت در تعداد</div>
-          <div className="mt-[5px] text-[12.5px] leading-[1.7] text-pink-ink">
-            ثبت‌شده {fa(registered)} کتاب، شمارش‌شده {fa(counted)} کتاب. پس از ثبت مغایرت، مبلغ بازمحاسبه و برای تأیید مشتری ارسال می‌شود.
-          </div>
-        </div>
+      {hasBooks ? (
+        <BookCount registered={registered} counted={counted} setCounted={setCounted} locked={locked} match={match} />
+      ) : (
+        <Panel>
+          <div className="mb-1.5 text-sm font-extrabold">اقلام این تحویل‌گیری</div>
+          {order.services.map((s, i) => (
+            <div key={i} className="flex justify-between gap-2.5 border-t border-line-soft py-2 text-[13px] first:border-t-0">
+              <span className="font-bold">{s.label}</span>
+              <span className="min-w-0 text-end text-muted-2">
+                <bdi>{s.detail}</bdi>
+              </span>
+            </div>
+          ))}
+          {order.services.length === 0 && <div className="text-[13px] text-muted-2">موردی ثبت نشده است.</div>}
+        </Panel>
       )}
 
       <Panel className="mt-3">
         <div className="mb-1.5 text-sm font-extrabold">چک‌لیست تحویل‌گیری</div>
-        {PICKUP_CHECKS.map((label, i) => (
+        {checkLabels.map((label, i) => (
           <button
             key={label}
             type="button"
@@ -273,7 +267,11 @@ function VerifyForm({ order }: { order: Order }) {
         className="mt-3 flex w-full cursor-pointer items-center justify-center gap-2 rounded-[20px] bg-accent-soft py-[15px] text-sm font-extrabold text-accent-soft-ink hover:brightness-95 disabled:cursor-default disabled:opacity-60"
       >
         <Camera className="size-[18px]" strokeWidth={2.4} />
-        {photos.ids.length ? `عکس کتاب‌ها (${fa(photos.ids.length)})` : locked && savedPhotos ? `${fa(savedPhotos)} عکس ثبت شده` : 'عکس کتاب‌ها'}
+        {photos.ids.length
+          ? `${photoLabel} (${fa(photos.ids.length)})`
+          : locked && savedPhotos
+            ? `${fa(savedPhotos)} عکس ثبت شده`
+            : photoLabel}
       </button>
       {photos.photos.length > 0 && (
         <div className="mt-2 flex flex-col gap-2" aria-live="polite">
@@ -284,7 +282,7 @@ function VerifyForm({ order }: { order: Order }) {
       )}
 
       <PrimaryAction onClick={submit} disabled={locked || verify.isPending || photos.busy}>
-        {verify.isPending ? 'در حال ثبت…' : match ? 'تأیید و انتقال به مرکز چاپ' : 'ثبت مغایرت و ادامه'}
+        {verify.isPending ? 'در حال ثبت…' : !hasBooks ? 'ثبت تحویل‌گیری و انتقال به مرکز چاپ' : match ? 'تأیید و انتقال به مرکز چاپ' : 'ثبت مغایرت و ادامه'}
       </PrimaryAction>
     </>
   )
@@ -320,6 +318,61 @@ function PhotoRow({ photo: p, onRemove }: { photo: Photo; onRemove: () => void }
         <X className="size-3.5 text-pink-dark" strokeWidth={2.8} />
       </button>
     </div>
+  )
+}
+
+/** «ثبت‌شده / شمارش‌شده» tiles, the ± stepper and the mismatch note — pickups with books only. */
+function BookCount({
+  registered,
+  counted,
+  setCounted,
+  locked,
+  match,
+}: {
+  registered: number
+  counted: number
+  setCounted: Dispatch<SetStateAction<number>>
+  locked: boolean
+  match: boolean
+}) {
+  return (
+    <>
+      <div className="grid grid-cols-2 gap-2.5">
+        <div className="rounded-[22px] border border-line bg-white p-4 text-center">
+          <div className="text-[12.5px] text-muted-2">ثبت‌شده</div>
+          <div className="mt-0.5 text-[34px] font-black">{fa(registered)}</div>
+        </div>
+        <div
+          className={cn(
+            'rounded-[22px] p-4 text-center text-white transition-colors',
+            match ? 'bg-green shadow-[0_10px_22px_rgba(31,169,104,0.32)]' : 'bg-pink shadow-[0_10px_22px_rgba(234,83,153,0.32)]',
+          )}
+          aria-live="polite"
+        >
+          <div className="text-[12.5px] opacity-80">شمارش‌شده</div>
+          <div className="mt-0.5 text-[34px] font-black">{fa(counted)}</div>
+        </div>
+      </div>
+
+      <div className="mt-3 flex items-center gap-3 rounded-full border border-line bg-white px-3 py-[9px]">
+        <StepButton label="کاهش" onClick={() => setCounted((c) => Math.max(0, c - 1))} disabled={locked}>
+          <Minus className="size-6" strokeWidth={3} />
+        </StepButton>
+        <div className="flex-1 text-center text-[13px] font-semibold text-muted-2">شمارش کتاب‌های تحویلی</div>
+        <StepButton label="افزایش" onClick={() => setCounted((c) => c + 1)} disabled={locked}>
+          <Plus className="size-6" strokeWidth={3} />
+        </StepButton>
+      </div>
+
+      {!match && (
+        <div className="mt-3 rounded-[22px] border border-[#f7b2d4] bg-pink-soft p-[15px]">
+          <div className="text-[14.5px] font-extrabold text-pink-dark">مغایرت در تعداد</div>
+          <div className="mt-[5px] text-[12.5px] leading-[1.7] text-pink-ink">
+            ثبت‌شده {fa(registered)} کتاب، شمارش‌شده {fa(counted)} کتاب. پس از ثبت مغایرت، مبلغ بازمحاسبه و برای بررسی پشتیبانی ارسال می‌شود.
+          </div>
+        </div>
+      )}
+    </>
   )
 }
 

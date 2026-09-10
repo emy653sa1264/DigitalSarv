@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { useNavigate } from 'react-router'
 import { Book, Plus } from 'lucide-react'
 import { ErrorState, GradientBadge, InfoBanner, TotalsPanel } from '@/components/brand'
@@ -5,6 +6,7 @@ import { notify } from '@/components/ui/sonner'
 import { fa, money } from '@/lib/format'
 import { useCatalog } from '@/lib/query'
 import { isDraftEmpty, useDraft } from '@/stores/draft'
+import { CampaignBanner } from '../components/CampaignBanner'
 import { Screen } from '../components/Screen'
 import { ChildAvatar, CtaButton, RailCard, SquareRemoveButton, ToneTile } from '../components/parts'
 import { useDraftQuote } from '../hooks/queries'
@@ -20,11 +22,19 @@ export function FamilyScreen() {
   const catalog = useCatalog()
   const quote = useDraftQuote()
 
+  // A child created by «افزودن فرزند» but never saved (the user backed out of its editor) is dropped here,
+  // together with its services. Not on editor unmount: its service tiles leave and come back to the editor.
+  useEffect(() => {
+    const { newChildIndex, removeChild: drop } = useDraft.getState()
+    if (newChildIndex !== null) drop(newChildIndex)
+  }, [])
+
   const books = children.reduce((sum, c) => sum + c.books, 0)
   const colorName = (key: string) => catalog.data?.colors.find((c) => c.key === key)?.name ?? ''
 
   return (
     <Screen title="سفارش خانوادگی" subtitle={`${fa(children.length)} فرزند · ${fa(books)} کتاب`} icon={Book} back="/app" addMore>
+      <CampaignBanner className="mb-3.5" />
       <InfoBanner>برای هر فرزند فقط پایه تحصیلی را انتخاب کنید — کتاب‌های همان پایه خودکار محاسبه می‌شود.</InfoBanner>
 
       <div className="mt-3.5 flex flex-col gap-2.5">
@@ -118,7 +128,7 @@ export function FamilyScreen() {
               key={b.kind}
               tone={meta.tone}
               onClick={() => navigate(meta.path)}
-              className="flex items-center gap-[9px] rounded-[18px] px-3.5 py-3 text-[13px] font-extrabold"
+              className="flex items-center gap-[9px] rounded-[18px] px-3.5 py-3 text-[13px] font-extrabold odd:last:col-span-2"
             >
               <GradientBadge tone={meta.tone} size={30}>
                 <meta.icon className="size-4" strokeWidth={2.4} />

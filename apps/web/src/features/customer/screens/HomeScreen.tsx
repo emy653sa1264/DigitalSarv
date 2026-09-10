@@ -1,13 +1,13 @@
+import { useState } from 'react'
 import { useNavigate } from 'react-router'
-import { ChevronLeft, ClipboardList, Crown, House, Plus } from 'lucide-react'
+import { ClipboardList, House, Minus, Plus } from 'lucide-react'
 import { EmptyState, ErrorState, GradientBadge, LoadingBlock, TONES, ToneTag, type BrandTone } from '@/components/brand'
 import { Button } from '@/components/ui/button'
-import { notify } from '@/components/ui/sonner'
 import { fa, jalali, money } from '@/lib/format'
 import { useCatalog } from '@/lib/query'
 import { ORDER_STATUS_LABEL, type Order } from '@/lib/types'
 import { useAuth } from '@/stores/auth'
-import { useDraft } from '@/stores/draft'
+import { CampaignBanner } from '../components/CampaignBanner'
 import { Screen } from '../components/Screen'
 import { ChildAvatar, SectionTitle, ToneTile } from '../components/parts'
 import { flowIndex, isActiveOrder, isAwaitingPayment, progressPct, useMyOrders, usePayOrder } from '../hooks/queries'
@@ -63,7 +63,7 @@ function groupActive(orders: Order[]): ActiveGroup[] {
   }
   const list: ActiveGroup[] = [...groups.values()].map((g) => ({ ...g, sub: `${g.grade} · ${fa(g.books)} کتاب`, chip: `${fa(g.books)} کتاب` }))
   if (other.length) {
-    list.push({ key: 'other', name: 'سرویس‌های دیگر', sub: 'چاپ، تراکت، کارتریج و تعمیر', chip: `${fa(other.length)} مورد`, tone: 'ink', isChild: false, rows: other })
+    list.push({ key: 'other', name: 'سرویس‌های دیگر', sub: 'چاپ، پایان‌نامه، تراکت، کارتریج و تعمیر', chip: `${fa(other.length)} مورد`, tone: 'ink', isChild: false, rows: other })
   }
   return list
 }
@@ -73,52 +73,41 @@ export function HomeScreen() {
   const user = useAuth((s) => s.user)
   const catalog = useCatalog()
   const orders = useMyOrders()
-  const coupon = useDraft((s) => s.coupon)
-  const setCoupon = useDraft((s) => s.setCoupon)
 
   const plan = catalog.data?.plans.find((p) => p.id === user?.planId)
   const [first = '', ...rest] = (user?.name ?? '').trim().split(/\s+/).filter(Boolean)
   const subtitle = [rest.length ? `خانواده ${rest.join(' ')}` : '', plan?.title ?? ''].filter(Boolean).join(' · ') || 'دیجیتال سرو'
 
-  const campaign = catalog.data?.campaign
-  const campaignOn = !!campaign && coupon?.toLowerCase() === campaign.code.toLowerCase()
-  const applyCampaign = () => {
-    if (!campaign) return
-    setCoupon(campaign.code)
-    notify(`کد ${campaign.title} فعال شد — ${fa(campaign.couponPct)}٪ تخفیف`)
-    navigate('/app/family')
-  }
-
   const groups = orders.data ? groupActive(orders.data.filter(isActiveOrder)) : []
   const unpaid = orders.data?.filter(isAwaitingPayment) ?? []
   const payment = usePayOrder()
+  /** Active-order groups start collapsed; «+» opens one, «−» closes it. */
+  const [open, setOpen] = useState<Set<string>>(() => new Set())
+  const toggle = (key: string) =>
+    setOpen((s) => {
+      const next = new Set(s)
+      if (!next.delete(key)) next.add(key)
+      return next
+    })
 
   return (
     <Screen title={first ? `سلام، ${first}` : 'سلام'} subtitle={subtitle} icon={House} back={false}>
-      {campaign && (
-        <button
-          type="button"
-          onClick={applyCampaign}
-          className="relative flex w-full cursor-pointer items-center gap-3 overflow-hidden rounded-[24px] bg-violet-dark p-4 text-start text-white hover:bg-[#3d2699]"
-        >
-          <span className="pointer-events-none absolute -end-5 -top-[30px] size-[120px] rounded-full bg-[rgba(124,92,245,0.6)]" />
-          <GradientBadge tone="amber" size={44} className="relative" style={{ boxShadow: '0 8px 18px rgba(7,9,15,0.3), inset 0 1.5px 0 rgba(255,255,255,0.55)' }}>
-            <Crown className="size-[22px]" strokeWidth={2.4} />
-          </GradientBadge>
-          <span className="relative min-w-0 flex-1">
-            <span className="block text-[15px] font-extrabold">{campaign.title}</span>
-            <span className="mt-0.5 block text-[12.5px] text-[#d5cbff]">
-              {campaignOn
-                ? `کد ${campaign.code} فعال است · ${fa(campaign.couponPct)}٪ تخفیف روی این سفارش`
-                : campaign.bannerNote || `${fa(campaign.couponPct)}٪ تخفیف با کد ${campaign.code} — برای فعال‌سازی بزنید`}
-            </span>
-          </span>
-          <ChevronLeft className="relative size-[18px] shrink-0 text-[#d5cbff]" strokeWidth={2.6} />
-        </button>
-      )}
+      <CampaignBanner className="mb-5" />
+      <SectionTitle className="mt-1 mb-2.5">سرویس‌ها</SectionTitle>
+      <div className="grid grid-cols-2 gap-2.5">
+        {HOME_SERVICES.map((s) => (
+          <ToneTile key={s.title} tone={s.tone} onClick={() => navigate(s.path)} className="flex min-h-[126px] flex-col items-start rounded-[22px] p-3.5">
+            <GradientBadge tone={s.tone} size={46}>
+              <s.icon className="size-[21px]" strokeWidth={2.3} />
+            </GradientBadge>
+            <span className="mt-2.5 block text-sm font-extrabold">{s.title}</span>
+            <span className="mt-[3px] block text-[11.5px] leading-[1.7] opacity-85">{s.cta}</span>
+          </ToneTile>
+        ))}
+      </div>
 
       {unpaid.length > 0 && (
-        <div className={`flex flex-col gap-2 ${campaign ? 'mt-3' : ''}`}>
+        <div className="mt-5 flex flex-col gap-2">
           {unpaid.map((o) => (
             <div key={o.id} className="flex items-center gap-3 rounded-[22px] bg-amber-soft px-4 py-3.5 text-amber-ink">
               <button type="button" onClick={() => navigate(`/app/track/${o.id}`)} className="min-w-0 flex-1 cursor-pointer text-start">
@@ -138,7 +127,7 @@ export function HomeScreen() {
         </div>
       )}
 
-      <div className={`mb-2.5 flex items-center justify-between ${campaign || unpaid.length ? 'mt-[22px]' : 'mt-1'}`}>
+      <div className="mt-[22px] mb-2.5 flex items-center justify-between">
         <SectionTitle>سفارش‌های فعال</SectionTitle>
         <button type="button" onClick={() => navigate('/app/orders')} className="cursor-pointer text-[13px] font-extrabold text-blue-dark">
           سفارش‌های من
@@ -152,12 +141,20 @@ export function HomeScreen() {
       ) : groups.length === 0 ? (
         <EmptyState title="سفارش فعالی ندارید" hint="برای شروع، «سفارش جدید» را بزنید." />
       ) : (
-        <div className="flex flex-col gap-4">
+        <div className="flex flex-col gap-3">
           {groups.map((g) => {
             const rail = TONES[g.tone].base
+            const isOpen = open.has(g.key)
+            const panelId = `active-${g.key}`
             return (
               <div key={g.key}>
-                <div className="mb-2 flex items-center gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => toggle(g.key)}
+                  aria-expanded={isOpen}
+                  aria-controls={panelId}
+                  className="flex w-full cursor-pointer items-center gap-2.5 text-start"
+                >
                   {g.isChild ? (
                     <ChildAvatar name={g.name} tone={g.tone} size={40} />
                   ) : (
@@ -165,15 +162,20 @@ export function HomeScreen() {
                       <ClipboardList className="size-5" strokeWidth={2.3} />
                     </GradientBadge>
                   )}
-                  <div className="min-w-0 flex-1">
-                    <div className="text-[14.5px] font-extrabold">{g.name}</div>
-                    <div className="text-[11.5px] text-muted-2">{g.sub}</div>
-                  </div>
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[14.5px] font-extrabold">{g.name}</span>
+                    <span className="block text-[11.5px] text-muted-2">
+                      {g.sub} · {fa(g.rows.length)} مورد
+                    </span>
+                  </span>
                   <ToneTag tone={g.tone} className="text-[11px]">
                     {g.chip}
                   </ToneTag>
-                </div>
-                <div className="flex gap-[9px]">
+                  <span className="flex size-8 shrink-0 items-center justify-center rounded-full border border-line bg-white text-ink" aria-hidden>
+                    {isOpen ? <Minus className="size-4" strokeWidth={3} /> : <Plus className="size-4" strokeWidth={3} />}
+                  </span>
+                </button>
+                <div id={panelId} hidden={!isOpen} className="mt-2 flex gap-[9px]">
                   <div className="w-[5px] shrink-0 rounded-full" style={{ background: rail }} />
                   <div className="flex min-w-0 flex-1 flex-col gap-2">
                     {g.rows.map((r) => (
@@ -209,19 +211,6 @@ export function HomeScreen() {
         <Plus className="size-5" strokeWidth={3} />
         سفارش جدید
       </Button>
-
-      <SectionTitle className="mt-6 mb-2.5">سرویس‌ها</SectionTitle>
-      <div className="grid grid-cols-2 gap-2.5">
-        {HOME_SERVICES.map((s) => (
-          <ToneTile key={s.title} tone={s.tone} onClick={() => navigate(s.path)} className="flex min-h-[126px] flex-col items-start rounded-[22px] p-3.5">
-            <GradientBadge tone={s.tone} size={46}>
-              <s.icon className="size-[21px]" strokeWidth={2.3} />
-            </GradientBadge>
-            <span className="mt-2.5 block text-sm font-extrabold">{s.title}</span>
-            <span className="mt-[3px] block text-[11.5px] leading-[1.7] opacity-85">{s.cta}</span>
-          </ToneTile>
-        ))}
-      </div>
     </Screen>
   )
 }

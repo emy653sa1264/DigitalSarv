@@ -48,7 +48,11 @@ export function CentersPage() {
                 </button>
                 <span className="flex justify-end gap-1.5">
                   <IconAction kind="edit" label="ویرایش" onClick={() => setDialog({ open: true, item: c })} />
-                  <ConfirmDelete title={`حذف ${c.name}؟`} onConfirm={() => remove.mutate(c.id, { onSuccess: () => notify(`${c.name} حذف شد`) })} />
+                  <ConfirmDelete
+                    title={`حذف ${c.name}؟`}
+                    description="مرکزی که سفارش باز (تحویل‌نشده و لغونشده) دارد حذف نمی‌شود؛ ابتدا سفارش‌هایش را به مرکز دیگری بسپارید. این کار قابل بازگشت نیست."
+                    onConfirm={() => remove.mutate(c.id, { onSuccess: () => notify(`${c.name} حذف شد`) })}
+                  />
                 </span>
               </AdminRow>
             ))}

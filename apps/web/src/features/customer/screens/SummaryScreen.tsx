@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { notify, toast } from '@/components/ui/sonner'
 import { fa, money } from '@/lib/format'
 import { useCatalog } from '@/lib/query'
+import type { Quote } from '@/lib/types'
 import { isDraftEmpty, selectQuoteInput, useDraft } from '@/stores/draft'
 import { Screen } from '../components/Screen'
 import { ChildAvatar, CtaButton, EditRemoveRow, QuoteLines, RailCard } from '../components/parts'
@@ -14,6 +15,15 @@ import { useOpenPicker } from '../layout/picker'
 import { serviceView } from '../lib/services'
 
 const capLabel = (cap: number) => (cap % 1000 === 0 ? `${fa(cap / 1000)} هزار` : money(cap))
+
+/** v3.3 `Quote.couponReason` → Persian. */
+const COUPON_REASON: Record<NonNullable<Quote['couponReason']>, string> = {
+  invalid: 'کد نامعتبر است',
+  not_started: 'کمپین هنوز شروع نشده',
+  expired: 'مهلت کد تمام شده',
+  full: 'ظرفیت امروز این کد تکمیل شده',
+  not_eligible: 'این کد شامل سرویس‌های سفارش شما نمی‌شود',
+}
 
 export function SummaryScreen() {
   const navigate = useNavigate()
@@ -32,12 +42,21 @@ export function SummaryScreen() {
   const empty = isDraftEmpty({ children, services })
   const q = quote.data
   const campaign = catalog.data?.campaign
+  // v3.3 minimum order: the quote says how much is missing; checkout stays blocked until it is 0.
+  const shortfall = q?.minOrderShortfall ?? 0
+  const minOrder = catalog.data?.prices.minOrderAmount || (q ? q.subtotal + shortfall : 0)
+
+  const clearCoupon = () => {
+    setCoupon(undefined)
+    setCode('')
+    notify('کد تخفیف حذف شد')
+  }
 
   const applyCoupon = async () => {
     const value = code.trim()
     if (!value) {
-      setCoupon(undefined)
-      notify('کد تخفیف را وارد کنید')
+      if (coupon) clearCoupon()
+      else notify('کد تخفیف را وارد کنید')
       return
     }
     setChecking(true)
@@ -48,7 +67,7 @@ export function SummaryScreen() {
         notify('کد تخفیف اعمال شد')
       } else {
         setCoupon(undefined)
-        notify('کد تخفیف معتبر نیست')
+        notify(result.couponReason ? COUPON_REASON[result.couponReason] : 'کد تخفیف معتبر نیست')
       }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'خطا در بررسی کد تخفیف')
@@ -63,7 +82,9 @@ export function SummaryScreen() {
         ? `کد کمپین اعمال شد: ${fa(campaign.couponPct)}٪ معادل ${money(q.couponDiscount)}`
         : `کد تخفیف اعمال شد: ${money(q.couponDiscount)}`
       : coupon && q && !q.couponValid
-        ? 'این کد تخفیف معتبر نیست'
+        ? q.couponReason
+          ? COUPON_REASON[q.couponReason]
+          : 'این کد تخفیف معتبر نیست'
         : campaign
           ? `کد کمپین ${campaign.title}: ${campaign.code} (${fa(campaign.couponPct)}٪ تا سقف ${capLabel(campaign.couponCap)})`
           : 'اگر کد تخفیف دارید، وارد کنید.'
@@ -99,7 +120,7 @@ export function SummaryScreen() {
                     <span className="text-[13.5px] font-extrabold">{total !== undefined ? money(total) : '…'}</span>
                   </div>
                   <EditRemoveRow
-                    onEdit={() => navigate(`/app/child/${i}`)}
+                    onEdit={() => navigate(`/app/child/${i}?from=summary`)}
                     onRemove={() => {
                       removeChild(i)
                       notify(`${c.name || 'فرزند'} از سفارش حذف شد`)
@@ -165,7 +186,14 @@ export function SummaryScreen() {
                 اعمال
               </button>
             </form>
-            <div className="mt-2 text-[11.5px] text-violet-dark">{couponNote}</div>
+            <div className="mt-2 flex items-start justify-between gap-2.5 text-[11.5px] text-violet-dark">
+              <span>{couponNote}</span>
+              {coupon && (
+                <button type="button" onClick={clearCoupon} className="shrink-0 cursor-pointer font-extrabold underline underline-offset-4">
+                  حذف
+                </button>
+              )}
+            </div>
           </div>
 
           <Panel className="mt-3.5">
@@ -185,7 +213,12 @@ export function SummaryScreen() {
           </Panel>
         </>
       )}
-      <CtaButton className="mt-[13px]" disabled={empty} onClick={() => navigate('/app/pickup')}>
+      {!empty && shortfall > 0 && (
+        <InfoBanner tone="amber" className="mt-3.5 font-bold">
+          حداقل مبلغ سفارش {money(minOrder)} است؛ {money(shortfall)} دیگر اضافه کنید.
+        </InfoBanner>
+      )}
+      <CtaButton className="mt-[13px]" disabled={empty || shortfall > 0} onClick={() => navigate('/app/pickup')}>
         تعیین زمان و آدرس تحویل‌گیری
       </CtaButton>
     </Screen>

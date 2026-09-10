@@ -25,7 +25,7 @@ import { RedisService } from '../common/redis/redis.service.js';
 import { addDays, tehranDayStart, tehranYmd } from '../common/utils/dates.js';
 import type { AppConfig } from '../config/configuration.js';
 import { Campaign } from '../modules/campaigns/campaign.schema.js';
-import { DEFAULT_PRICES } from '../modules/catalog/catalog.defaults.js';
+import { BIND_COLORS, DEFAULT_PRICES } from '../modules/catalog/catalog.defaults.js';
 import { Center } from '../modules/centers/center.schema.js';
 import { Courier } from '../modules/courier/courier.schema.js';
 import { orderChildren } from '../modules/orders/order-helpers.js';
@@ -35,7 +35,7 @@ import type { ChildDraft, PricingContext, ServiceDraft } from '../modules/pricin
 import { PricingRule } from '../modules/rules/rule.schema.js';
 import { User } from '../modules/users/user.schema.js';
 import { Zone } from '../modules/zones/zone.schema.js';
-import { CENTERS, COLORS, DEMO_RULE_USAGE, EXTRAS, GRADES, PLANS, ZONES } from './base-data.js';
+import { CENTERS, COLORS, DEMO_RULE_USAGE, EXTRAS, GRADES, PAPERS, PLANS, ZONES } from './base-data.js';
 import { SeedModule, seedBase } from './base.js';
 
 const log = new Logger('Seed');
@@ -81,6 +81,7 @@ const YASAMAN: ChildDraft = { name: 'یاسمن', grade: 'دوم ابتدایی'
 
 const docs = (spec: Record<string, unknown>, childIndex?: number) =>
   ({ kind: 'docs', ...(childIndex !== undefined ? { childIndex } : {}), spec }) as unknown as ServiceDraft;
+const print = (spec: Record<string, unknown>) => ({ kind: 'print', spec }) as unknown as ServiceDraft;
 const flyer = (spec: Record<string, unknown>) => ({ kind: 'flyer', spec }) as unknown as ServiceDraft;
 const cart = (spec: Record<string, unknown>) => ({ kind: 'cart', spec }) as unknown as ServiceDraft;
 const repair = (spec: Record<string, unknown>) => ({ kind: 'repair', spec }) as unknown as ServiceDraft;
@@ -158,7 +159,11 @@ const ORDERS: SeedOrder[] = [
     status: 'courier_assigned', created: { today: 0.15 }, last: { today: 0.25 }, courier: 0, slot: '۱۶ تا ۱۸', coupon: 'SCHOOL1405' },
   { code: 10251, customer: 'aria', services: [cart({ brand: 'HP', model: '85A', count: 2 }), repair({ brand: 'HP', model: 'LaserJet 1102', problem: 'کیفیت چاپ' })],
     status: 'courier_assigned', created: { today: 0.2 }, last: { today: 0.35 }, courier: 0, slot: '۱۸ تا ۲۰' },
-  { code: 10252, customer: 'zahra', services: [docs({ fileName: 'رزومه.pdf', pages: 40, ink: 'color', sides: 'single', copies: 1, bindColor: 'navy', stamp: 'silver' })],
+  { code: 10252, customer: 'zahra', services: [
+    docs({ fileName: 'رزومه.pdf', pages: 40, ink: 'color', sides: 'single', copies: 1, bindColor: 'navy', stamp: 'silver' }),
+    // v3 «چاپ اسناد»
+    print({ fileName: 'نمونه-سوالات.pdf', pages: 30, paper: 'tahrir80', size: 'A4', ink: 'bw', sides: 'double', copies: 2, binding: 'spiral', staple: false, laminate: 'cover' }),
+  ],
     status: 'registered', created: { today: 0.4 }, slot: '۱۲ تا ۱۴' },
   { code: 10253, customer: 'school', services: [flyer({ mode: 'need', qty: 5000, ink: 'color', size: 'A4', paper: 'plain', brief: { business: 'دبستان مهر', text: 'ثبت‌نام کلاس‌های تابستانی' } })],
     status: 'confirmed', created: { today: 0.5 }, last: { today: 0.55 }, slot: '۱۴ تا ۱۶' },
@@ -268,9 +273,11 @@ async function main() {
     const ctx: PricingContext = {
       prices: { ...DEFAULT_PRICES },
       urgentEnabled: true,
-      colors: COLORS.map((c) => ({ key: c.key, extra: c.extra })),
-      extras: EXTRAS.map((e) => ({ key: e.key, price: e.price, on: e.on })),
+      colors: COLORS.map((c) => ({ key: c.key, name: c.name, extra: c.extra, on: c.on, sort: c.sort })),
+      extras: EXTRAS.map((e) => ({ key: e.key, label: e.label, price: e.price, on: e.on, services: e.services })),
+      bindColors: BIND_COLORS.map((b) => ({ key: b.key, name: b.name, extra: b.extra, on: b.on, sort: b.sort })),
       grades: GRADES.map((g) => ({ name: g.name, books: g.books })),
+      papers: PAPERS.map((x) => ({ key: x.key, name: x.name, price: x.price, on: x.on, sort: x.sort })),
       plans: PLANS.map((p) => ({ id: p._id, name: p.name, title: p.title, cap: p.cap, disc: p.disc, freeDelivery: p.freeDelivery, freePickup: p.freePickup })),
       campaign: { title: campaign.title, code: campaign.code, couponPct: campaign.couponPct, couponCap: campaign.couponCap, services: campaign.services },
       rules: rules.map((r) => ({ id: String(r._id), order: r.order, on: r.on, condition: r.condition, effect: r.effect, effectLabel: r.effectLabel })),

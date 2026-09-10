@@ -16,6 +16,21 @@ const range = (c: Campaign) => `${jalali(c.startsAt, DAY_MONTH)} تا ${jalali(c
 const runRange = (c: Campaign) => `${jalali(c.startsAt, DAY_MONTH)} – ${jalali(c.endsAt)}`
 const servicesLabel = (c: Campaign) => (c.services?.length ? c.services.map((s) => CAMPAIGN_SERVICE_LABEL[s] ?? s).join('، ') : '—')
 
+/** Tehran calendar day `yyyy-mm-dd` (the server compares campaign dates as Tehran days). */
+const tehranDay = (d: string | Date) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tehran' }).format(new Date(d))
+
+/** «در حال اجرا / شروع نشده / منقضی» from the dates, in the Tehran day (independent of the active switch). */
+function CampaignPhase({ campaign: c, onDark }: { campaign: Campaign; onDark?: boolean }) {
+  const today = tehranDay(new Date())
+  const phase = today < tehranDay(c.startsAt) ? 'upcoming' : today > tehranDay(c.endsAt) ? 'expired' : 'running'
+  const style = {
+    running: { label: 'در حال اجرا', cls: onDark ? 'bg-[#79e0b0] text-[#0d5334]' : 'bg-green-soft text-green-ink' },
+    upcoming: { label: 'شروع نشده', cls: onDark ? 'bg-[#ffd27a] text-[#5c4306]' : 'bg-amber-soft text-amber-ink' },
+    expired: { label: 'منقضی', cls: onDark ? 'bg-[#ffa8cf] text-[#7c1f4d]' : 'bg-pink-soft text-pink-ink' },
+  }[phase]
+  return <span className={`shrink-0 rounded-full px-[11px] py-1.5 text-xs font-extrabold ${style.cls}`}>{style.label}</span>
+}
+
 export function CampaignsPage() {
   const query = useCampaigns()
   const { update, remove } = useCampaignMutations()
@@ -60,6 +75,7 @@ export function CampaignsPage() {
                           {range(c)} · {fa(c.stats?.orders ?? 0)} سفارش · {servicesLabel(c)}
                         </div>
                       </div>
+                      <CampaignPhase campaign={c} />
                       <span dir="ltr" className="rounded-full bg-line-soft px-3 py-1.5 text-[12px] font-extrabold text-muted-1">
                         {c.code}
                       </span>
@@ -103,6 +119,7 @@ function ActiveCampaign({ campaign: c, onEdit }: { campaign: Campaign; onEdit: (
         <div className="relative">
           <div className="flex items-center gap-2">
             <span className="rounded-full bg-white/20 px-[13px] py-1.5 text-xs font-extrabold text-white">فعال</span>
+            <CampaignPhase campaign={c} onDark />
             <button type="button" onClick={onEdit} className="cursor-pointer rounded-full bg-white/10 px-[13px] py-1.5 text-xs font-extrabold text-white hover:bg-white/25">
               ویرایش
             </button>

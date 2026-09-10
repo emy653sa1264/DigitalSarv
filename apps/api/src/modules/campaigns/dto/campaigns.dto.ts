@@ -53,7 +53,7 @@ export class CreateCampaignDto {
   @IsOptional() @IsString()
   pickupHours?: string;
 
-  /** «سرویس‌های مشمول» (default `['school','docs']`). */
+  /** «سرویس‌های مشمول» (default `['school','docs','print']`). */
   @IsOptional() @Transform(unique) @IsArray(services) @ArrayMinSize(1, services) @IsIn(CAMPAIGN_SERVICES, { each: true, ...services })
   services?: CampaignService[];
 }

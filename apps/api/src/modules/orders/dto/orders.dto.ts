@@ -66,12 +66,16 @@ export class ChildDraftDto {
   @IsOptional() @IsArray() @ArrayMaxSize(30) @IsString({ each: true }) @MaxLength(40, { each: true })
   extras?: string[];
 
+  /** v3.3: text for extras with `needsText` (e.g. «برچسب نام»). */
+  @IsOptional() @IsString() @MaxLength(60, { message: 'متن برچسب حداکثر ۶۰ کاراکتر است' })
+  labelText?: string;
+
   @IsOptional() @IsString() @MaxLength(500)
   note?: string;
 }
 
 export class ServiceDraftDto {
-  @IsIn(['docs', 'flyer', 'cart', 'repair'], { message: 'نوع سرویس معتبر نیست' })
+  @IsIn(['print', 'docs', 'flyer', 'cart', 'repair'], { message: 'نوع سرویس معتبر نیست' })
   kind: ServiceKind;
 
   @IsOptional() @Type(() => Number) @IsInt() @Min(0)
@@ -146,8 +150,9 @@ export class AssignDto {
   centerId?: string | null;
 }
 
+/** v3.3: the upper bound is the order's own checklist length (checked by the service). */
 export class QcDto {
-  @Type(() => Number) @IsInt() @Min(0, { message: 'ردیف چک‌لیست معتبر نیست' }) @Max(8, { message: 'ردیف چک‌لیست معتبر نیست' })
+  @Type(() => Number) @IsInt({ message: 'ردیف چک‌لیست معتبر نیست' }) @Min(0, { message: 'ردیف چک‌لیست معتبر نیست' }) @Max(99, { message: 'ردیف چک‌لیست معتبر نیست' })
   index: number;
 
   @IsBoolean({ message: 'وضعیت چک‌لیست معتبر نیست' })

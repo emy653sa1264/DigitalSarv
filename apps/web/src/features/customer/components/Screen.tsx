@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react'
+import { useNavigate } from 'react-router'
 import { Bell, Plus, type LucideIcon } from 'lucide-react'
 import { HeaderIconButton, MobileHeader, ScreenBody, type BrandTone } from '@/components/brand'
-import { notify } from '@/components/ui/sonner'
 import { fa } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useBack } from '../hooks/nav'
-import { isActiveOrder, useMyOrders } from '../hooks/queries'
+import { useUnreadCount } from '../hooks/notifications'
 import { useOpenPicker } from '../layout/picker'
 
 interface ScreenProps {
@@ -24,9 +24,9 @@ interface ScreenProps {
 /** Customer screen chrome: header (back · badge · title · + · bell) and the scroll body. */
 export function Screen({ title, subtitle, icon, tone = 'blue', back = '/app', addMore = false, bodyClassName, children }: ScreenProps) {
   const goBack = useBack(back || '/app')
+  const navigate = useNavigate()
   const openPicker = useOpenPicker()
-  const { data: orders } = useMyOrders()
-  const active = orders?.filter(isActiveOrder).length ?? 0
+  const unread = useUnreadCount()
 
   const actions = (
     <>
@@ -41,13 +41,12 @@ export function Screen({ title, subtitle, icon, tone = 'blue', back = '/app', ad
           <Plus className="size-5" strokeWidth={3} />
         </button>
       )}
-      <HeaderIconButton
-        aria-label="اعلان‌ها"
-        onClick={() => notify(active ? `${fa(active)} سفارش فعال دارید — وضعیت را در رهگیری ببینید` : 'اعلان جدیدی ندارید')}
-      >
+      <HeaderIconButton aria-label={unread ? `اعلان‌ها — ${fa(unread)} خوانده‌نشده` : 'اعلان‌ها'} onClick={() => navigate('/app/notifications')}>
         <Bell className="size-[19px] text-muted-1" strokeWidth={2.3} />
-        {active > 0 && (
-          <span className="absolute -end-[3px] -top-[3px] size-[11px] rounded-full border-2 border-shell bg-pink" />
+        {unread > 0 && (
+          <span className="absolute -end-[6px] -top-[6px] flex h-[19px] min-w-[19px] items-center justify-center rounded-full border-2 border-shell bg-pink px-1 text-[10px] leading-none font-black text-white">
+            {unread > 99 ? '۹۹+' : fa(unread)}
+          </span>
         )}
       </HeaderIconButton>
     </>

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Camera, Wrench } from 'lucide-react'
-import { Chip, FieldLabel, Panel } from '@/components/brand'
+import { Chip, DsSwitch, FieldLabel, Panel } from '@/components/brand'
 import { Input } from '@/components/ui/input'
 import { notify } from '@/components/ui/sonner'
 import { Textarea } from '@/components/ui/textarea'
@@ -13,20 +13,28 @@ import { CtaButton, FilePick } from '../components/parts'
 import { useServiceEditor } from '../hooks/useServiceEditor'
 import { useUploader } from '../hooks/useUploader'
 
-/** `v` is stored on the spec; `label` is what the chip shows (prototype `problemOpts`). */
-const PROBLEMS = [
-  { v: 'کیفیت چاپ', label: 'کیفیت چاپ' },
-  { v: 'گیر کاغذ', label: 'گیر کردن کاغذ' },
-  { v: 'روشن نشدن', label: 'روشن نمی‌شود' },
-  { v: 'خطای سیستم', label: 'خطای دستگاه' },
-  { v: 'شبکه', label: 'اتصال شبکه' },
+/** The chip label itself is stored as `problem`, so the order shows exactly what the customer picked. */
+const PROBLEMS = ['کیفیت چاپ', 'گیر کردن کاغذ', 'روشن نمی‌شود', 'خطای دستگاه', 'اتصال شبکه']
+/** Values stored before v3.2 → their chip label (so editing an old service keeps the chip selected). */
+const LEGACY_PROBLEM: Record<string, string> = { 'گیر کاغذ': 'گیر کردن کاغذ', 'روشن نشدن': 'روشن نمی‌شود', 'خطای سیستم': 'خطای دستگاه', شبکه: 'اتصال شبکه' }
+
+/** v3.3 «نوع دستگاه». */
+const DEVICES: { v: NonNullable<RepairSpec['device']>; label: string }[] = [
+  { v: 'laser', label: 'لیزری' },
+  { v: 'inkjet', label: 'جوهرافشان' },
+  { v: 'mfp', label: 'چندکاره' },
+  { v: 'copier', label: 'فتوکپی' },
 ]
 
-const FLOW = ['دریافت دستگاه توسط پیک', 'عیب‌یابی در مرکز سرویس', 'ارسال پیش‌فاکتور', 'تأیید شما', 'تعمیر و کنترل کیفیت', 'تحویل درب منزل']
+const FLOW = ['دریافت دستگاه توسط پیک', 'عیب‌یابی در مرکز سرویس', 'تماس کارشناس برای هماهنگی هزینه', 'تعمیر و کنترل کیفیت', 'تحویل درب منزل']
 
 export function RepairScreen() {
   const { initialSpec, isEditing, childName, save } = useServiceEditor('repair')
-  const [spec, setSpec] = useState<RepairSpec>(() => initialSpec ?? { brand: '', model: '', problem: PROBLEMS[0].v, desc: '' })
+  const [spec, setSpec] = useState<RepairSpec>(() =>
+    initialSpec
+      ? { device: 'laser', warranty: false, ...initialSpec, problem: LEGACY_PROBLEM[initialSpec.problem] ?? initialSpec.problem }
+      : { brand: '', model: '', problem: PROBLEMS[0], desc: '', device: 'laser', warranty: false },
+  )
   const patch = (p: Partial<RepairSpec>) => setSpec((s) => ({ ...s, ...p }))
   const uploader = useUploader('device')
   const photoIds = spec.photoIds ?? []
@@ -66,15 +74,32 @@ export function RepairScreen() {
           </div>
         </div>
         <div>
-          <FieldLabel className="mb-[9px]">مشکل دستگاه</FieldLabel>
-          <div className="flex flex-wrap gap-2">
-            {PROBLEMS.map((p) => (
-              <Chip key={p.v} selected={spec.problem === p.v} onClick={() => patch({ problem: p.v })}>
-                {p.label}
+          <FieldLabel className="mb-[9px]">نوع دستگاه</FieldLabel>
+          <div className="flex flex-wrap gap-2" role="group" aria-label="نوع دستگاه">
+            {DEVICES.map((d) => (
+              <Chip key={d.v} selected={spec.device === d.v} onClick={() => patch({ device: d.v })}>
+                {d.label}
               </Chip>
             ))}
           </div>
         </div>
+        <div>
+          <FieldLabel className="mb-[9px]">مشکل دستگاه</FieldLabel>
+          <div className="flex flex-wrap gap-2">
+            {PROBLEMS.map((p) => (
+              <Chip key={p} selected={spec.problem === p} onClick={() => patch({ problem: p })}>
+                {p}
+              </Chip>
+            ))}
+          </div>
+        </div>
+        <Panel className="flex items-center justify-between gap-2.5 p-[15px]">
+          <div>
+            <div className="text-[14.5px] font-extrabold">گارانتی دارد</div>
+            <div className="mt-0.5 text-[11.5px] text-muted-2">اگر دستگاه گارانتی معتبر دارد روشن کنید؛ کارشناس آن را بررسی می‌کند.</div>
+          </div>
+          <DsSwitch checked={!!spec.warranty} onCheckedChange={(warranty) => patch({ warranty })} label="گارانتی دارد" />
+        </Panel>
         <div>
           <FieldLabel htmlFor="repair-desc" className="mb-[7px]">
             توضیحات
@@ -122,7 +147,7 @@ export function RepairScreen() {
             <span className="text-[13px] text-muted-1">{label}</span>
           </div>
         ))}
-        <div className="mt-2.5 text-[11.5px] leading-[1.7] text-muted-2">هزینه تعمیر پس از عیب‌یابی به‌صورت پیش‌فاکتور برای تأیید شما ارسال می‌شود.</div>
+        <div className="mt-2.5 text-[11.5px] leading-[1.7] text-muted-2">کارشناس پس از عیب‌یابی برای هماهنگی هزینه با شما تماس می‌گیرد.</div>
       </Panel>
       <CtaButton tone="green" className="mt-[13px]" onClick={add}>
         {isEditing ? 'ذخیره تغییرات تعمیر' : 'افزودن تعمیر به سفارش'}

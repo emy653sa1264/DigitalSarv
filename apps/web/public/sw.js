@@ -60,6 +60,43 @@ self.addEventListener('fetch', (event) => {
   }
 })
 
+// ── Web Push (v3.3): order updates — `{ title, body, url, tag }` from the API ──
+self.addEventListener('push', (event) => {
+  let data = {}
+  try {
+    data = event.data ? event.data.json() : {}
+  } catch {
+    data = { body: event.data ? event.data.text() : '' }
+  }
+  const title = data.title || 'دیجیتال سرو'
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body: data.body || '',
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      tag: data.tag || undefined,
+      renotify: !!data.tag,
+      lang: 'fa',
+      dir: 'rtl',
+      data: { url: data.url || '/app/notifications' },
+    }),
+  )
+})
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close()
+  const target = new URL((event.notification.data && event.notification.data.url) || '/app/notifications', self.location.origin).href
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windows) => {
+      const exact = windows.find((w) => w.url === target)
+      if (exact) return exact.focus()
+      const appWindow = windows.find((w) => new URL(w.url).pathname.startsWith('/app'))
+      if (appWindow && 'navigate' in appWindow) return appWindow.navigate(target).then((w) => (w || appWindow).focus())
+      return self.clients.openWindow(target)
+    }),
+  )
+})
+
 async function networkFirst(request, shell) {
   const cache = await caches.open(CACHE)
   try {

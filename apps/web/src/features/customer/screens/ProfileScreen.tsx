@@ -4,12 +4,14 @@ import { LogOut, User } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { notify } from '@/components/ui/sonner'
-import { money } from '@/lib/format'
+import { fa, money } from '@/lib/format'
 import { useCatalog, useLogout } from '@/lib/query'
 import { useAuth } from '@/stores/auth'
 import { useDraft } from '@/stores/draft'
+import { PushRow } from '../components/PushRow'
 import { Screen } from '../components/Screen'
 import { CtaButton } from '../components/parts'
+import { useUnreadCount } from '../hooks/notifications'
 import { useMyOrders, useUpdateName } from '../hooks/queries'
 
 export function ProfileScreen() {
@@ -21,6 +23,7 @@ export function ProfileScreen() {
   const orders = useMyOrders()
   const logout = useLogout()
   const updateName = useUpdateName()
+  const unread = useUnreadCount()
   const [editingName, setEditingName] = useState(false)
   const [name, setName] = useState(user?.name ?? '')
 
@@ -39,11 +42,12 @@ export function ProfileScreen() {
     })
   }
 
-  const rows: { label: string; value: string; act: () => void; ltr?: boolean }[] = [
+  /** Rows without `act` are read-only info. */
+  const rows: { label: string; value: string; act?: () => void; ltr?: boolean }[] = [
     { label: 'نام و نام خانوادگی', value: user?.name || 'ثبت نشده', act: () => setEditingName((v) => !v) },
-    { label: 'آدرس‌های ذخیره‌شده', value: lastAddress || 'ثبت نشده', act: () => notify('مدیریت آدرس‌ها') },
+    { label: 'آخرین آدرس تحویل‌گیری', value: lastAddress || 'ثبت نشده' },
     { label: 'فرزندان ثبت‌شده', value: childNames.join('، ') || '—', act: () => navigate('/app/family') },
-    { label: 'سفارش‌های من', value: 'تاریخچه و فاکتورها', act: () => navigate('/app/orders') },
+    { label: 'سفارش‌های من', value: 'تاریخچه و وضعیت', act: () => navigate('/app/orders') },
     {
       label: 'کد معرف',
       value: user?.referralCode || '—',
@@ -54,7 +58,7 @@ export function ProfileScreen() {
         notify('کد معرف کپی شد')
       },
     },
-    { label: 'اعلان‌ها', value: 'پیامک و پوش فعال', act: () => notify('تنظیمات اعلان‌ها') },
+    { label: 'اعلان‌ها', value: unread ? `${fa(unread)} خوانده‌نشده` : 'صندوق اعلان‌های سفارش', act: () => navigate('/app/notifications') },
   ]
 
   const onLogout = async () => {
@@ -96,12 +100,19 @@ export function ProfileScreen() {
       <div className="mt-3 rounded-[22px] border border-line bg-white px-4 py-1">
         {rows.map((r, i) => (
           <div key={r.label} className={i ? 'border-t border-line-soft' : undefined}>
-            <button type="button" onClick={r.act} className="flex w-full cursor-pointer items-center justify-between gap-3 py-[13px] text-start">
-              <span className="shrink-0 text-[13.5px] text-muted-2">{r.label}</span>
-              <span dir={r.ltr ? 'ltr' : undefined} className="min-w-0 truncate text-end text-[13.5px] font-bold">
-                {r.value}
-              </span>
-            </button>
+            {r.act ? (
+              <button type="button" onClick={r.act} className="flex w-full cursor-pointer items-center justify-between gap-3 py-[13px] text-start">
+                <span className="shrink-0 text-[13.5px] text-muted-2">{r.label}</span>
+                <span dir={r.ltr ? 'ltr' : undefined} className="min-w-0 truncate text-end text-[13.5px] font-bold">
+                  {r.value}
+                </span>
+              </button>
+            ) : (
+              <div className="flex w-full items-center justify-between gap-3 py-[13px]">
+                <span className="shrink-0 text-[13.5px] text-muted-2">{r.label}</span>
+                <span className="min-w-0 truncate text-end text-[13.5px] font-bold">{r.value}</span>
+              </div>
+            )}
             {i === 0 && editingName && (
               <form
                 className="flex gap-2 pb-3"
@@ -118,6 +129,12 @@ export function ProfileScreen() {
             )}
           </div>
         ))}
+        <div className="border-t border-line-soft">
+          <PushRow />
+        </div>
+      </div>
+      <div className="mt-2 px-1 text-[11.5px] leading-[1.7] text-muted-2">
+        وضعیت سفارش از طریق اعلان‌های برنامه و مرورگر اطلاع داده می‌شود؛ پیامک فقط برای کد ورود ارسال می‌شود.
       </div>
 
       <CtaButton tone="pink" className="mt-3 h-[54px] text-[15.5px]" onClick={() => navigate('/app/family')}>

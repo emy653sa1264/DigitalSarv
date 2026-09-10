@@ -6,13 +6,12 @@ import {
   Newspaper,
   Printer,
   Route,
-  Truck,
   User,
   Wrench,
   type LucideIcon,
 } from 'lucide-react'
 import type { BrandTone } from '@/components/brand'
-import type { ServiceKind } from '@/lib/types'
+import type { OpsSettings, ServiceKind } from '@/lib/types'
 
 export interface ServiceMeta {
   kind: ServiceKind
@@ -24,7 +23,8 @@ export interface ServiceMeta {
 }
 
 export const SERVICE_META: Record<ServiceKind, ServiceMeta> = {
-  docs: { kind: 'docs', label: 'چاپ اسناد', tone: 'cyan', icon: FileText, path: '/app/docs' },
+  print: { kind: 'print', label: 'چاپ اسناد', tone: 'cyan', icon: FileText, path: '/app/print' },
+  docs: { kind: 'docs', label: 'پایان‌نامه و صحافی', tone: 'pink', icon: ClipboardList, path: '/app/docs' },
   flyer: { kind: 'flyer', label: 'تراکت', tone: 'violet', icon: Newspaper, path: '/app/flyer' },
   cart: { kind: 'cart', label: 'شارژ کارتریج', tone: 'amber', icon: Printer, path: '/app/cart' },
   repair: { kind: 'repair', label: 'تعمیر پرینتر', tone: 'green', icon: Wrench, path: '/app/repair' },
@@ -32,15 +32,17 @@ export const SERVICE_META: Record<ServiceKind, ServiceMeta> = {
 
 /** Family screen "افزودن …" buttons (prototype `addServiceButtons`). */
 export const ADD_SERVICE_BUTTONS: { kind: ServiceKind; label: string }[] = [
-  { kind: 'docs', label: 'چاپ اسناد' },
+  { kind: 'print', label: 'چاپ اسناد' },
+  { kind: 'docs', label: 'پایان‌نامه و صحافی' },
   { kind: 'flyer', label: 'تراکت' },
-  { kind: 'cart', label: 'کارتریج' },
+  { kind: 'cart', label: 'شارژ کارتریج' },
   { kind: 'repair', label: 'تعمیر پرینتر' },
 ]
 
 /** Child editor "سفارش دیگری برای این فرزند" tiles (prototype `childServiceTiles`). */
 export const CHILD_SERVICE_TILES: { kind: ServiceKind; label: string; sub: string }[] = [
-  { kind: 'docs', label: 'چاپ و صحافی', sub: 'جزوه، پایان‌نامه، مدرک' },
+  { kind: 'print', label: 'چاپ اسناد', sub: 'جزوه، مدرک، برگه' },
+  { kind: 'docs', label: 'پایان‌نامه و صحافی', sub: 'جلد، زرکوب، متن روی جلد' },
   { kind: 'flyer', label: 'تراکت', sub: 'طراحی و چاپ' },
   { kind: 'cart', label: 'شارژ کارتریج', sub: 'درب منزل' },
   { kind: 'repair', label: 'تعمیر پرینتر', sub: 'دریافت در محل' },
@@ -48,8 +50,9 @@ export const CHILD_SERVICE_TILES: { kind: ServiceKind; label: string; sub: strin
 
 /** Header "+" bottom sheet (prototype `pickerServices`). */
 export const PICKER_SERVICES: { path: string; label: string; sub: string; tone: BrandTone; icon: LucideIcon }[] = [
-  { path: '/app/family', label: 'کتاب‌های مدرسه', sub: 'پایه را انتخاب کن، کتاب‌ها خودکار', tone: 'blue', icon: Book },
-  { path: '/app/docs', label: 'چاپ و صحافی', sub: 'پایان‌نامه، جزوه، مدرک اداری', tone: 'cyan', icon: FileText },
+  { path: '/app/family', label: 'فنری کتاب مدرسه', sub: 'پایه را انتخاب کن، کتاب‌ها خودکار', tone: 'blue', icon: Book },
+  { path: '/app/print', label: 'چاپ اسناد', sub: 'جزوه، مدرک اداری، برگه', tone: 'cyan', icon: FileText },
+  { path: '/app/docs', label: 'پایان‌نامه و صحافی', sub: 'پایان‌نامه، گزارش و جزوه با جلد', tone: 'pink', icon: ClipboardList },
   { path: '/app/flyer', label: 'تراکت', sub: 'طراحی و چاپ از ۵۰۰ عدد', tone: 'violet', icon: Newspaper },
   { path: '/app/cart', label: 'شارژ کارتریج', sub: 'دریافت و تحویل درب منزل', tone: 'amber', icon: Printer },
   { path: '/app/repair', label: 'تعمیر پرینتر', sub: 'دریافت دستگاه در محل', tone: 'green', icon: Wrench },
@@ -57,12 +60,13 @@ export const PICKER_SERVICES: { path: string; label: string; sub: string; tone: 
 
 /** Home "سرویس‌ها" grid (prototype `bento`). */
 export const HOME_SERVICES: { path: string; title: string; cta: string; tone: BrandTone; icon: LucideIcon }[] = [
-  { path: '/app/docs', title: 'چاپ اسناد', cta: 'سفارش چاپ', tone: 'cyan', icon: FileText },
-  { path: '/app/docs', title: 'پایان‌نامه و صحافی', cta: 'چاپ و صحافی', tone: 'blue', icon: ClipboardList },
-  { path: '/app/flyer', title: 'طراحی و چاپ تراکت', cta: 'شروع کنید', tone: 'violet', icon: Newspaper },
+  // Pickup/delivery is part of every order, so it is not a tile; school books open the order screen.
+  { path: '/app/family', title: 'فنری کتاب مدرسه', cta: 'ثبت سفارش', tone: 'blue', icon: Book },
+  { path: '/app/print', title: 'چاپ اسناد', cta: 'سفارش چاپ', tone: 'cyan', icon: FileText },
+  { path: '/app/docs', title: 'پایان‌نامه و صحافی', cta: 'چاپ و صحافی', tone: 'pink', icon: ClipboardList },
+  { path: '/app/flyer', title: 'تراکت', cta: 'طراحی و چاپ', tone: 'violet', icon: Newspaper },
   { path: '/app/cart', title: 'شارژ کارتریج', cta: 'درخواست سرویس', tone: 'amber', icon: Printer },
   { path: '/app/repair', title: 'تعمیر پرینتر', cta: 'درخواست تعمیر', tone: 'green', icon: Wrench },
-  { path: '/app/family', title: 'تحویل‌گیری و تحویل درب منزل', cta: 'ثبت سفارش', tone: 'pink', icon: Truck },
 ]
 
 export const TABS = [
@@ -72,13 +76,17 @@ export const TABS = [
   { to: '/app/me', label: 'پروفایل', icon: User },
 ]
 
-export const PICKUP_SLOTS = ['۸ تا ۱۰', '۱۰ تا ۱۲', '۱۲ تا ۱۴', '۱۴ تا ۱۶', '۱۶ تا ۱۸', '۱۸ تا ۲۰']
-
-export const SUPPORT_PHONE = '۰۲۱۹۱۰۰۲۲۳۳'
-
-export const STAGE_TITLE = 'اپ مشتری'
-export const STAGE_NOTE =
-  'برای هر فرزند فقط پایه تحصیلی انتخاب می‌شود؛ کتاب‌ها خودکار محاسبه می‌شوند. سرویس‌های دیگر (چاپ اسناد، تراکت، کارتریج، تعمیر) به همان سفارش خانوادگی اضافه می‌شوند.'
+/** Contract defaults of `catalog.ops` — used while the catalog loads (or from an older API). */
+export const DEFAULT_OPS: OpsSettings = {
+  pickupSlots: ['۸ تا ۱۰', '۱۰ تا ۱۲', '۱۲ تا ۱۴', '۱۴ تا ۱۶', '۱۶ تا ۱۸', '۱۸ تا ۲۰'],
+  bookingDays: 30,
+  closedWeekdays: [],
+  holidays: [],
+  sameDayCutoff: '',
+  pickupHoursText: '۸ تا ۲۰',
+  supportPhone: '02191002233',
+  turnaroundText: '۲۴ تا ۴۸ ساعت',
+}
 
 export const TERMS_UPDATED = 'آخرین بازنگری: ۱۵ شهریور ۱۴۰۵'
 
@@ -96,7 +104,7 @@ export const TERMS: { t: string; b: string }[] = [
   { t: 'کمپین‌ها و کدهای تخفیف', b: 'هر کد تخفیف بازه زمانی، حداقل مبلغ سفارش، سقف تخفیف و ظرفیت روزانه دارد. استفاده از یک کد در چند حساب متعلق به یک شخص، یا سفارش‌های صوری برای دریافت تخفیف، موجب ابطال کد و تخفیف اعمال‌شده می‌شود.' },
   { t: 'محتوای ارسالی و مالکیت فکری', b: 'کاربر تأیید می‌کند حق چاپ فایل‌های ارسالی را دارد. سفارش چاپ آثار دارای حق نشر بدون مجوز، اسناد جعلی، یا محتوای مغایر قوانین جمهوری اسلامی ایران پذیرفته نمی‌شود و پلتفرم می‌تواند چنین سفارشی را لغو کند.' },
   { t: 'حریم خصوصی و داده‌ها', b: 'فایل‌های ارسالی فقط برای انجام همان سفارش استفاده می‌شوند و حداکثر ۳۰ روز پس از تحویل از سرور حذف می‌گردند. شماره تماس و آدرس فقط در اختیار پیک همان سفارش قرار می‌گیرد. داده‌ها بدون رضایت کاربر به شخص سوم فروخته یا واگذار نمی‌شود؛ درخواست حذف کامل حساب از بخش پشتیبانی قابل ثبت است.' },
-  { t: 'اطلاع‌رسانی', b: 'پیام‌های مربوط به وضعیت سفارش (پیامک و پوش) بخشی از خدمات است و قابل غیرفعال‌سازی کامل نیست؛ پیام‌های تبلیغاتی از پروفایل قابل خاموش کردن است.' },
+  { t: 'اطلاع‌رسانی', b: 'کد ورود با پیامک ارسال می‌شود؛ وضعیت سفارش از طریق اعلان‌های برنامه و مرورگر اطلاع داده می‌شود. اعلان‌های داخل برنامه بخشی از خدمات است و قابل غیرفعال‌سازی کامل نیست؛ اعلان‌های مرورگر را هر زمان می‌توانید از پروفایل خاموش کنید.' },
   { t: 'موارد خارج از تعهد', b: 'قطعی برق و اینترنت، تعطیلی‌های غیرمترقبه، محدودیت‌های حمل‌ونقل شهری و حوادث قهری، تعهد زمانی را به تعویق می‌اندازد؛ در این موارد کاربر می‌تواند سفارش را بدون هزینه لغو کند.' },
   { t: 'تغییر قوانین و حل اختلاف', b: 'تغییر این قوانین از طریق پلتفرم اطلاع‌رسانی می‌شود و نسبت به سفارش‌های ثبت‌شده پیش از تغییر اثر ندارد. رسیدگی به اختلاف ابتدا از مسیر پشتیبانی و در صورت عدم توافق، بر اساس قوانین تجارت الکترونیک ایران انجام می‌شود.' },
 ]

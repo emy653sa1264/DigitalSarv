@@ -1,14 +1,18 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
-import { Check } from 'lucide-react'
+import { Check, ChevronLeft } from 'lucide-react'
 import { EmptyState, ErrorState, LoadingBlock, TONES } from '@/components/brand'
 import { notify } from '@/components/ui/sonner'
-import { fa } from '@/lib/format'
+import { fa, money } from '@/lib/format'
 import type { Order, ProductionColumn } from '@/lib/types'
+import { ORDER_STATUS_LABEL } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { useAdminOrder, useCenters, useOrderMutations, useProduction } from '../api'
+import { AdminSelect, NONE, StatusTag } from '../components/controls'
+import { OrderFilesList } from '../components/files'
 import { AdminCard, CardTitle, PageHeader, QueryView } from '../components/kit'
-import { PRODUCTION_TONE, QC_LABELS_FALLBACK } from '../lib'
+import { ServiceSpec, useCatalogNames } from '../components/ServiceSpec'
+import { PRODUCTION_TONE, QC_LABELS_FALLBACK, SERVICE_LABEL, isTerminal, nextFlowStatus, orderFiles } from '../lib'
 
 export function ProductionPage() {
   const board = useProduction()
@@ -18,6 +22,7 @@ export function ProductionPage() {
   const allItems = columns.flatMap((c) => c.items)
   const fallback = columns.find((c) => c.status === 'qc')?.items[0]?.id ?? allItems[0]?.id
   const activeId = selected && allItems.some((i) => i.id === selected) ? selected : fallback
+  const activeItem = allItems.find((i) => i.id === activeId)
 
   return (
     <>
@@ -34,7 +39,7 @@ export function ProductionPage() {
 
       {board.isSuccess &&
         (activeId ? (
-          <OrderFloor orderId={activeId} qcLabels={qcLabels} />
+          <OrderFloor orderId={activeId} qcLabels={activeItem?.qcLabels?.length ? activeItem.qcLabels : qcLabels} />
         ) : (
           <EmptyState className="mt-4" title="سفارشی در مرحله تولید نیست" hint="سفارش‌ها پس از تحویل‌گیری از منزل اینجا نمایش داده می‌شوند." />
         ))}
@@ -79,13 +84,55 @@ function OrderFloor({ orderId, qcLabels }: { orderId: string; qcLabels: string[]
   if (query.isPending) return <LoadingBlock rows={2} className="mt-4" />
   if (query.isError) return <ErrorState className="mt-4" error={query.error} onRetry={() => void query.refetch()} />
   const order = query.data
+  // The order's own snapshot (v3.3) wins; then the board's; then the pre-v3.3 nine.
+  const labels = order.qcLabels?.length ? order.qcLabels : qcLabels
   return (
-    <div className="mt-4 grid gap-4 lg:grid-cols-2">
-      <QcCard order={order} labels={qcLabels} />
-      <div className="flex flex-col gap-4">
-        <FamilyCard order={order} />
-        <CenterCard order={order} />
+    <>
+      <NextStepBar order={order} qcTotal={labels.length} />
+      <div className="mt-4 grid gap-4 lg:grid-cols-2">
+        <div className="flex flex-col gap-4">
+          <QcCard order={order} labels={labels} />
+          <ServicesFilesCard order={order} />
+        </div>
+        <div className="flex flex-col gap-4">
+          <FamilyCard order={order} />
+          <CenterCard order={order} />
+        </div>
       </div>
+    </>
+  )
+}
+
+/** «مرحله بعد»: moves the order one step along `ORDER_FLOW`; QC → packing only once all checks are ticked. */
+function NextStepBar({ order, qcTotal }: { order: Order; qcTotal: number }) {
+  const { setStatus } = useOrderMutations()
+  const next = nextFlowStatus(order.status)
+  const qcDone = Array.from({ length: qcTotal }, (_, i) => !!order.qc?.[i]).every(Boolean)
+  const blocked = order.status === 'qc' && !qcDone
+
+  const advance = () => {
+    if (!next) return
+    setStatus.mutate({ id: order.id, status: next }, { onSuccess: () => notify(`وضعیت سفارش: ${ORDER_STATUS_LABEL[next]}`) })
+  }
+
+  return (
+    <div className="mt-4 flex flex-wrap items-center gap-3 rounded-[22px] border border-line bg-white px-4 py-3.5">
+      <span className="text-[14.5px] font-black">سفارش {fa(order.code)}</span>
+      <StatusTag status={order.status} />
+      <span className="min-w-[160px] flex-1 text-[12px] leading-6 text-muted-2">
+        {blocked ? `برای رفتن به مرحله بعد، هر ${fa(qcTotal)} مورد چک‌لیست کیفیت را تأیید کنید.` : !next ? 'مرحله بعدی برای این سفارش در دسترس نیست.' : ''}
+      </span>
+      {next && (
+        <button
+          type="button"
+          onClick={advance}
+          disabled={blocked || setStatus.isPending}
+          className="inline-flex cursor-pointer items-center gap-1.5 rounded-full bg-accent px-5 py-3 text-[13.5px] font-extrabold text-white shadow-[0_8px_18px_var(--glow)] hover:bg-accent-dark disabled:cursor-default disabled:opacity-50 disabled:shadow-none"
+        >
+          {setStatus.isPending ? 'در حال ثبت…' : `مرحله بعد: ${ORDER_STATUS_LABEL[next]}`}
+          <ChevronLeft className="size-4" strokeWidth={2.6} />
+        </button>
+      )}
     </div>
   )
 }
@@ -115,7 +162,7 @@ function QcCard({ order, labels }: { order: Order; labels: string[] }) {
       <div className="mt-1">
         {labels.map((label, i) => (
           <button
-            key={label}
+            key={`${i}-${label}`}
             type="button"
             role="checkbox"
             aria-checked={checks[i]}
@@ -138,7 +185,37 @@ function QcCard({ order, labels }: { order: Order; labels: string[] }) {
   )
 }
 
+/** Full spec of every non-book service plus the customer's files — the job sheet of the print centre. */
+function ServicesFilesCard({ order }: { order: Order }) {
+  const files = orderFiles(order)
+  if (!order.services.length && !files.length) return null
+  return (
+    <AdminCard>
+      <CardTitle className="mb-2">سرویس‌ها و فایل‌ها</CardTitle>
+      {order.services.map((s, i) => (
+        <div key={i} className="border-t border-line-soft py-2.5 first:border-t-0">
+          <div className="mb-2 flex items-start justify-between gap-3 text-[13.5px] font-bold">
+            <span className="min-w-0">
+              {s.label || SERVICE_LABEL[s.kind]}
+              {s.childName && <span className="font-medium text-muted-2"> — {s.childName}</span>}
+            </span>
+            <span className="shrink-0 text-[12.5px] font-extrabold">{s.price ? money(s.price) : 'پس از عیب‌یابی'}</span>
+          </div>
+          <ServiceSpec service={s} />
+        </div>
+      ))}
+      {files.length > 0 && (
+        <div className={cn(order.services.length > 0 && 'mt-2 border-t border-line pt-3')}>
+          <div className="mb-1 text-[13px] font-extrabold text-muted-1">فایل‌های پیوست · {fa(files.length)} فایل</div>
+          <OrderFilesList files={files} />
+        </div>
+      )}
+    </AdminCard>
+  )
+}
+
 function FamilyCard({ order }: { order: Order }) {
+  const names = useCatalogNames()
   const total = order.children.reduce((s, c) => s + c.books, 0)
   return (
     <div className="rounded-[26px] bg-green-soft p-5 text-green-ink">
@@ -148,11 +225,30 @@ function FamilyCard({ order }: { order: Order }) {
       ) : (
         <>
           {order.children.map((c, i) => (
-            <div key={i} className="flex justify-between gap-2.5 border-t border-[rgba(13,83,52,0.14)] py-2 text-[13.5px]">
-              <span>
-                {c.name || 'فرزند'} — {c.grade}
-              </span>
-              <span className="font-extrabold">{fa(c.books)} کتاب</span>
+            <div key={i} className="border-t border-[rgba(13,83,52,0.14)] py-2 text-[13.5px]">
+              <div className="flex justify-between gap-2.5">
+                <span>
+                  {c.name || 'فرزند'} — {c.grade}
+                </span>
+                <span className="font-extrabold">{fa(c.books)} کتاب</span>
+              </div>
+              <div className="mt-0.5 text-[12px] leading-6 opacity-85">
+                فنری {names.color(c.color)}
+                {c.lined
+                  ? ` · ${fa(c.linedCount)} برگ خط‌دار${c.linedPos === 'range' && c.pageFrom ? ` (صفحه ${fa(c.pageFrom)}–${fa(c.pageTo ?? 0)})` : ' (همه کتاب‌ها)'}`
+                  : ' · بدون برگ خط‌دار'}
+                {c.extras.length > 0 && ` · خدمات اضافی: ${names.extras(c.extras)}`}
+              </div>
+              {c.labelText && (
+                <div className="text-[12px] leading-6 font-semibold">
+                  متن برچسب: <bdi>{c.labelText}</bdi>
+                </div>
+              )}
+              {c.note && (
+                <div className="text-[12px] leading-6 font-semibold">
+                  یادداشت: <bdi>{c.note}</bdi>
+                </div>
+              )}
             </div>
           ))}
           <div className="mt-3 flex justify-between gap-2.5 border-t-[1.5px] border-[rgba(13,83,52,0.25)] pt-3 text-[15px] font-black">
@@ -165,21 +261,36 @@ function FamilyCard({ order }: { order: Order }) {
   )
 }
 
+/** Picks the print centre that does this order (`PATCH /admin/orders/:id/assign { centerId }`). */
 function CenterCard({ order }: { order: Order }) {
   const navigate = useNavigate()
   const centers = useCenters()
-  const center = centers.data?.find((c) => c.id === order.centerId)
+  const { assign } = useOrderMutations()
+  const locked = isTerminal(order.status) || order.status === 'pending_payment'
+
+  const change = (v: string) =>
+    assign.mutate({ id: order.id, centerId: v === NONE ? null : v }, { onSuccess: () => notify('مرکز چاپ سفارش تعیین شد') })
+
   return (
     <div className="rounded-[26px] bg-night p-5 text-[#9aa2b8]">
       <div className="mb-2 text-[17px] font-black text-white">تخصیص به مرکز چاپ</div>
-      <div className="text-[13px] leading-[1.85]">
-        سفارش بر اساس موقعیت، ظرفیت، سرویس، سرعت و امتیاز کیفیت به بهترین مرکز اختصاص می‌یابد. وزن هر معیار در تنظیمات قابل تغییر است.
-      </div>
-      <div className="mt-2 text-[12.5px] font-bold text-[#c9bcff]">{center ? `مرکز فعلی: ${center.name}` : 'هنوز مرکزی تعیین نشده است'}</div>
+      <div className="mb-3 text-[13px] leading-[1.85]">مرکز چاپی را که این سفارش را انجام می‌دهد انتخاب کنید.</div>
+      {centers.isError ? (
+        <div className="text-[12.5px] font-bold text-[#ffa8cf]">فهرست مراکز چاپ دریافت نشد.</div>
+      ) : (
+        <AdminSelect
+          ariaLabel="مرکز چاپ"
+          value={order.centerId || NONE}
+          onValueChange={change}
+          disabled={locked || assign.isPending || centers.isPending}
+          placeholder={centers.isPending ? 'در حال بارگذاری…' : 'انتخاب مرکز'}
+          options={[{ value: NONE, label: 'بدون مرکز' }, ...(centers.data ?? []).map((c) => ({ value: c.id, label: c.name }))]}
+        />
+      )}
       <button
         type="button"
         onClick={() => navigate('/admin/centers')}
-        className="mt-3.5 cursor-pointer rounded-full bg-accent px-[22px] py-[13px] text-[13.5px] font-extrabold text-white shadow-[0_8px_18px_var(--glow)] hover:bg-accent-dark"
+        className="mt-3 cursor-pointer text-[12.5px] font-bold text-[#c9bcff] hover:text-white"
       >
         مشاهده مراکز چاپ
       </button>

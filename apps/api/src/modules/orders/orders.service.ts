@@ -20,11 +20,13 @@ import {
 } from '../../common/constants.js';
 import { RedisService } from '../../common/redis/redis.service.js';
 import { tehranYmd } from '../../common/utils/dates.js';
+import { fa } from '../../common/utils/fa.js';
 import { assertObjectId } from '../../common/utils/object-id.js';
 import { escapeRegex, pageParams, type Paged } from '../../common/utils/pagination.js';
 import { saveOrConflict } from '../../common/utils/save-or-conflict.js';
 import { normalizePhone, toAsciiDigits } from '../../common/utils/phone.js';
 import { CampaignsService } from '../campaigns/campaigns.service.js';
+import { defaultChecklists, defaultOps } from '../catalog/catalog.defaults.js';
 import { Center } from '../centers/center.schema.js';
 import { Courier } from '../courier/courier.schema.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
@@ -41,12 +43,17 @@ import {
   TERMINAL_STATUSES,
   canAdminTransition,
   draftFromOrder,
+  needsQcGuard,
   orderChildren,
+  orderQcLabels,
   orderSummary,
+  qcComplete,
+  qcLabelsOf,
   refundableAmount,
   timelineEntry,
 } from './order-helpers.js';
 import { Order, OrderDocument, type DeferredEffects } from './order.schema.js';
+import { pickupProblem } from './pickup-rules.js';
 
 /** `Order & { paymentUrl }` for a freshly created / re-opened gateway payment. */
 function withPaymentUrl(order: OrderDocument, paymentUrl: string) {
@@ -97,6 +104,7 @@ export class OrdersService {
     return u?.planId;
   }
 
+  /** Prices a draft; the pickup is not validated here (only when the order is placed). */
   async quote(dto: OrderDraftDto, user?: AuthUser) {
     const planId = dto.planId ?? (await this.planFor(user));
     // docs with an uploaded PDF are priced by the server's page count (lenient: bad ids are ignored here)
@@ -115,7 +123,6 @@ export class OrdersService {
     if (!dto.children.length && !dto.services.length) throw new BadRequestException('سفارش خالی است؛ حداقل یک مورد اضافه کنید');
     const pickupPhone = normalizePhone(dto.pickup.phone);
     if (!pickupPhone) throw new BadRequestException('شماره تماس تحویل‌گیری معتبر نیست');
-    if (dto.pickup.date < tehranYmd()) throw new BadRequestException('تاریخ تحویل‌گیری گذشته است');
 
     const user = await this.users.findById(authUser.id);
     if (!user) throw new NotFoundException('کاربر یافت نشد');
@@ -124,8 +131,14 @@ export class OrdersService {
     // customer's own (docs take their page count from the uploaded PDF)
     const { draft, uploadIds } = await this.uploads.applyToDraft(dto as unknown as OrderDraft, authUser.id, true);
     const ctx = await this.pricing.context();
+    // v3.3: the pickup must be bookable (slot, booking window, closed days/holidays, same-day cutoff), Tehran time
+    const pickupError = pickupProblem(dto.pickup, ctx.ops ?? defaultOps());
+    if (pickupError) throw new BadRequestException(pickupError);
     const planId = dto.planId ?? user.planId;
     const { quote, appliedRuleIds } = await this.pricing.quote(draft, planId, ctx);
+    if (quote.minOrderShortfall) {
+      throw new BadRequestException(`حداقل مبلغ سفارش ${fa(quote.subtotal + quote.minOrderShortfall)} تومان است`);
+    }
     // a zero total (e.g. repair-only, invoiced after diagnosis) has nothing to pay at the gateway
     const gateway = dto.payMethod === 'gateway' && quote.total > 0;
     const deferred: DeferredEffects = {
@@ -145,12 +158,17 @@ export class OrdersService {
     const charged = dto.payMethod === 'wallet' || (dto.payMethod === 'gateway' && !gateway);
     const status: OrderStatus = gateway ? 'pending_payment' : 'registered';
     const now = new Date();
+    const services = this.pricing.pricedServices(draft, ctx);
+    // v3.3: the order keeps the checklists it was placed with (later settings edits don't change it)
+    const checklists = ctx.checklists ?? defaultChecklists();
+    const qcLabels = orderQcLabels(draft.children.length > 0, services.map((s) => s.kind), checklists);
+    const pickupLabels = [...checklists.pickup];
     const base = {
       customerId: user._id,
       customerName: user.name || 'مشتری',
       customerPhone: user.phone,
       children: orderChildren(draft.children, quote.children.map((c) => c.total), ctx),
-      services: this.pricing.pricedServices(draft, ctx),
+      services,
       quote,
       pickup: { ...dto.pickup, phone: pickupPhone },
       payMethod: dto.payMethod,
@@ -163,6 +181,10 @@ export class OrdersService {
       status,
       timeline: [{ status, label: STATUS_LABELS[status], at: now }],
       zone: user.zone,
+      qcLabels,
+      qc: qcLabels.map(() => false),
+      pickupLabels,
+      pickupChecks: pickupLabels.map(() => false),
       ...(gateway ? { payment: { driver: this.payments.driver.name, status: 'pending' as const, amount: quote.total }, deferred } : {}),
     };
 
@@ -331,7 +353,11 @@ export class OrdersService {
     return new ConflictException('وضعیت سفارش هم‌زمان تغییر کرد؛ دوباره تلاش کنید');
   }
 
-  /** Compare-and-set on the current status; allowed transitions per `canAdminTransition`. */
+  /**
+   * Compare-and-set on the current status; allowed transitions per `canAdminTransition`. QC guard (v3.3):
+   * leaving production (`picked_up … qc`) for packing / out_for_delivery / delivered needs every QC item
+   * done — checked again atomically in the update, so an item unticked meanwhile makes it a 409.
+   */
   async setStatus(id: string, status: OrderStatus): Promise<OrderDocument> {
     const order = await this.findById(id);
     if (order.status === status) return order;
@@ -343,12 +369,18 @@ export class OrdersService {
       if (!cancelled) throw OrdersService.raced();
       return cancelled;
     }
+    let qcGuard: QueryFilter<Order> = {};
+    if (needsQcGuard(order.status, status)) {
+      if (!qcComplete(order)) throw new BadRequestException('کنترل کیفیت کامل نشده است');
+      const last = qcLabelsOf(order).length - 1;
+      qcGuard = { [`qc.${last}`]: true, qc: { $not: { $elemMatch: { $ne: true } } } };
+    }
     const codPaid =
       status === 'delivered' && order.payMethod === 'cod' && !order.paid
         ? { paid: true, chargedAmount: order.quote?.total ?? 0, paidVia: 'cod' as const }
         : {};
     const updated = await this.orders.findOneAndUpdate(
-      { _id: order._id, status: order.status },
+      { _id: order._id, status: order.status, ...qcGuard },
       { $set: { status, ...codPaid }, $push: { timeline: timelineEntry(status) }, $inc: { __v: 1 } },
       { returnDocument: 'after' },
     );
@@ -396,15 +428,18 @@ export class OrdersService {
     return updated;
   }
 
+  /** `index` must be inside the order's own QC checklist (v3.3 snapshot; older orders: the 9 labels). */
   async setQc(id: string, index: number, done: boolean): Promise<OrderDocument> {
     const order = await this.findById(id);
-    const qc = [...(order.qc?.length === 9 ? order.qc : Array(9).fill(false))];
+    const labels = qcLabelsOf(order);
+    if (index >= labels.length) throw new BadRequestException('ردیف چک‌لیست معتبر نیست');
+    const qc = labels.map((_, i) => order.qc?.[i] === true);
     qc[index] = done;
     order.qc = qc;
     return saveOrConflict(order);
   }
 
-  /** Production board: the design's 6 columns (with tone) + the QC checklist labels. */
+  /** Production board: the design's 6 columns (with tone); each item carries its own QC labels (v3.3). */
   async production() {
     const orders = await this.orders
       .find({ status: { $in: PRODUCTION_COLUMNS.map((c) => c.status) } })
@@ -413,9 +448,10 @@ export class OrdersService {
       columns: PRODUCTION_COLUMNS.map(({ status, label, tone }) => {
         const items = orders
           .filter((o) => o.status === status)
-          .map((o) => ({ id: o.id as string, code: o.code, label: `${o.customerName} · ${orderSummary(o)}` }));
+          .map((o) => ({ id: o.id as string, code: o.code, label: `${o.customerName} · ${orderSummary(o)}`, qcLabels: qcLabelsOf(o) }));
         return { status, label, tone, count: items.length, items };
       }),
+      // v1/v2 board-level list (the school labels), kept for older clients
       qcLabels: QC_LABELS,
     };
   }

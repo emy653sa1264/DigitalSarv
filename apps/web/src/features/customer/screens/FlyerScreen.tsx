@@ -18,7 +18,7 @@ import { useUploader } from '../hooks/useUploader'
 type Brief = NonNullable<FlyerSpec['brief']>
 type Mode = FlyerSpec['mode']
 
-const DEFAULT_FLYER: Omit<FlyerSpec, 'mode'> = { qty: 1000, ink: 'color', size: 'A5', paper: 'glossy', brief: {} }
+const DEFAULT_FLYER: Omit<FlyerSpec, 'mode'> = { qty: 1000, ink: 'color', size: 'A5', paper: 'glossy', sides: 'single', brief: {} }
 
 const MODES: { v: Mode; label: string; sub: string; tone: 'violet' | 'pink'; icon: typeof Upload }[] = [
   { v: 'have', label: 'طراحی دارم', sub: 'فایل آماده را بفرستید', tone: 'violet', icon: Upload },
@@ -70,10 +70,15 @@ export function FlyerScreen() {
 
   const inkLabel = spec.ink === 'color' ? 'تمام‌رنگی' : 'سیاه‌وسفید'
   const paperLabel = spec.paper === 'glossy' ? 'گلاسه' : 'تحریر'
+  const sides = spec.sides ?? 'single'
 
   const add = () => {
     if (!mode) {
       notify('اول مشخص کنید طراحی دارید یا نه')
+      return
+    }
+    if (mode === 'need' && !spec.brief?.business?.trim() && !spec.brief?.text?.trim()) {
+      notify('برای طراحی، نام کسب‌وکار یا متن اصلی تراکت را وارد کنید')
       return
     }
     if ((mode === 'have' && designUp.busy) || (mode === 'need' && logoUp.busy)) {
@@ -187,7 +192,9 @@ export function FlyerScreen() {
         </div>
         <div className="mt-2.5 text-[11.5px] leading-[1.7] text-muted-2">
           حداقل تیراژ ۵۰۰ عدد · هر پله ۵۰۰ عدد
-          {prices ? ` · تخفیف ${fa(prices.flyerBulk2000)}٪ از ۲٬۰۰۰ و ${fa(prices.flyerBulk5000)}٪ از ۵٬۰۰۰ عدد` : ''}
+          {prices
+            ? ` · تخفیف ${fa(prices.flyerBulk2000)}٪ از ${fa(prices.flyerBulk1Qty ?? 2000)} و ${fa(prices.flyerBulk5000)}٪ از ${fa(prices.flyerBulk2Qty ?? 5000)} عدد`
+            : ''}
         </div>
       </StepCard>
 
@@ -234,12 +241,20 @@ export function FlyerScreen() {
               تحریر
             </Chip>
           </OptionRow>
+          <OptionRow label="چند رو">
+            <Chip size="sm" selected={sides === 'single'} onClick={() => patch({ sides: 'single' })}>
+              یک‌رو
+            </Chip>
+            <Chip size="sm" selected={sides === 'double'} onClick={() => patch({ sides: 'double' })}>
+              دورو{prices?.flyerDoublePct ? ` · +${fa(prices.flyerDoublePct)}٪` : ''}
+            </Chip>
+          </OptionRow>
         </div>
       </StepCard>
 
       <TotalsPanel
         className="mt-3.5"
-        meta={`${fa(qty)} عدد · ${spec.size} · ${inkLabel} · ${paperLabel}`}
+        meta={`${fa(qty)} عدد · ${spec.size} · ${inkLabel} · ${paperLabel}${sides === 'double' ? ' · دورو' : ''}`}
         label={mode === 'need' ? `شامل ${money(prices?.flyerDesign ?? 0)} هزینه طراحی` : 'با فایل طراحی خودتان'}
         amount={price !== undefined ? money(price) : quote.isError ? '—' : '…'}
       />

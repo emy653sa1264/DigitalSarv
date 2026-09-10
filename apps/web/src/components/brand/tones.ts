@@ -21,4 +21,4 @@ export const TONES: Record<BrandTone, ToneSpec> = {
 }
 
 /** Service kind → tone, as used across the prototype. */
-export const SERVICE_TONE = { school: 'blue', docs: 'cyan', flyer: 'violet', cart: 'amber', repair: 'green', pickup: 'pink' } as const
+export const SERVICE_TONE = { school: 'blue', print: 'cyan', docs: 'cyan', flyer: 'violet', cart: 'amber', repair: 'green', pickup: 'pink' } as const

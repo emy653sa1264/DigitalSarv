@@ -54,7 +54,10 @@ export interface AppConfig {
     /** Files are deleted this many days after their order was delivered/cancelled. */
     retentionDays: number;
   };
+  /** SMS is only used for the login OTP (v3.3: order events are in-app + web push). */
   sms: { driver: SmsDriverName; apiKey: string; sender: string; otpTemplate: string };
+  /** Web Push (VAPID) keys; `null` = order notifications are in-app only. */
+  vapid: { publicKey: string; privateKey: string; subject: string } | null;
   /** Normalized phones upserted as admins on boot. */
   adminPhones: string[];
 }
@@ -218,6 +221,7 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       sender: (env.SMS_SENDER ?? '').trim(),
       otpTemplate: (env.SMS_OTP_TEMPLATE ?? '').trim(),
     },
+    vapid: vapidConfig(env, isProduction, errors),
     adminPhones: [...new Set(adminPhones)],
   };
 
@@ -228,3 +232,27 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
 }
 
 export default () => ({ app: loadAppConfig() });
+
+/**
+ * Web Push (VAPID): both keys or neither (neither = in-app notifications only); `VAPID_SUBJECT` must be a
+ * `mailto:` or `https://` URL and is required in production when the keys are set.
+ */
+function vapidConfig(env: NodeJS.ProcessEnv, isProduction: boolean, errors: string[]): AppConfig['vapid'] {
+  const publicKey = (env.VAPID_PUBLIC_KEY ?? '').trim();
+  const privateKey = (env.VAPID_PRIVATE_KEY ?? '').trim();
+  const subject = (env.VAPID_SUBJECT ?? '').trim();
+  if (!publicKey && !privateKey) return null;
+  if (!publicKey || !privateKey) {
+    errors.push('VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY must be set together (or both left empty)');
+    return null;
+  }
+  if (subject && !/^(mailto:\S+|https:\/\/\S+)$/.test(subject)) {
+    errors.push(`VAPID_SUBJECT must be a mailto: or https:// URL (got "${subject}")`);
+    return null;
+  }
+  if (!subject && isProduction) {
+    errors.push('VAPID_SUBJECT must be set when the VAPID keys are set');
+    return null;
+  }
+  return { publicKey, privateKey, subject: subject || 'mailto:dev@localhost' };
+}

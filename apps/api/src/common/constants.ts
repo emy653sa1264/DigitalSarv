@@ -98,9 +98,19 @@ export const QC_LABELS = [
 ];
 
 /** Campaign «سرویس‌های مشمول»: `school` = school-book binding, the rest are service kinds. */
-export const CAMPAIGN_SERVICES = ['school', 'docs', 'flyer', 'cart', 'repair'] as const;
+export const CAMPAIGN_SERVICES = ['school', 'print', 'docs', 'flyer', 'cart', 'repair'] as const;
 export type CampaignService = (typeof CAMPAIGN_SERVICES)[number];
-export const DEFAULT_CAMPAIGN_SERVICES: CampaignService[] = ['school', 'docs'];
+export const DEFAULT_CAMPAIGN_SERVICES: CampaignService[] = ['school', 'docs', 'print'];
+
+/** v3.3: where an extra is offered and priced (`Extra.services`; missing = both). */
+export const EXTRA_SERVICES = ['school', 'print'] as const;
+export type ExtraService = (typeof EXTRA_SERVICES)[number];
+
+/** Every order event the server dispatches (each has a `push` template seeded by `seed:base`). */
+export const DISPATCHED_EVENTS: OrderStatus[] = [
+  'registered', 'confirmed', 'courier_assigned', 'picked_up', 'preparing', 'binding', 'extras', 'qc',
+  'packing', 'out_for_delivery', 'delivered', 'awaiting_approval', 'cancelled',
+];
 
 export const UPLOAD_PURPOSES = ['docs', 'flyer', 'logo', 'cartridge', 'device', 'pickup'] as const;
 export type UploadPurpose = (typeof UPLOAD_PURPOSES)[number];

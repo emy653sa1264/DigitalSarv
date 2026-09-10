@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { CatalogModule } from '../catalog/catalog.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
 import { PricingModule } from '../pricing/pricing.module.js';
 import { UploadsModule } from '../uploads/uploads.module.js';
@@ -6,7 +7,7 @@ import { AdminCouriersController, CourierController } from './courier.controller
 import { CourierService } from './courier.service.js';
 
 @Module({
-  imports: [PricingModule, NotificationsModule, UploadsModule],
+  imports: [CatalogModule, PricingModule, NotificationsModule, UploadsModule],
   controllers: [CourierController, AdminCouriersController],
   providers: [CourierService],
 })

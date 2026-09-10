@@ -75,6 +75,7 @@ describe('draftFileRefs', () => {
       { kind: 'cart', spec: { photoIds: ['c1'] } },
       { kind: 'repair', spec: { photoIds: ['r1'] } },
       { kind: 'docs', spec: { pages: 1 } },
+      { kind: 'print', spec: { fileId: 'p1', pages: 4 } },
     ]);
     expect(refs.map((r) => [r.id, r.serviceIndex, r.field, r.purposes.join('|')])).toEqual([
       ['d1', 0, 'fileId', 'docs'],
@@ -83,6 +84,7 @@ describe('draftFileRefs', () => {
       ['l2', 1, 'logoFileIds', 'logo|flyer'],
       ['c1', 2, 'photoIds', 'cartridge'],
       ['r1', 3, 'photoIds', 'device'],
+      ['p1', 5, 'fileId', 'docs'],
     ]);
     expect(draftFileRefs(undefined)).toEqual([]);
   });

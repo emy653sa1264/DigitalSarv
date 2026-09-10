@@ -1,6 +1,7 @@
-import { useState, type ComponentProps, type ReactNode } from 'react'
-import { Pencil, Plus, Trash2 } from 'lucide-react'
+import { useState, type ComponentProps, type MouseEvent, type ReactNode } from 'react'
+import { ChevronDown, ChevronUp, Pencil, Plus, Trash2 } from 'lucide-react'
 import { DsSwitch } from '@/components/brand'
+import { Button } from '@/components/ui/button'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -57,6 +58,22 @@ export function IconAction({ kind, label, className, ...props }: ComponentProps<
     >
       <Icon className="size-[15px]" strokeWidth={2.4} />
     </button>
+  )
+}
+
+/** Stacked ▲/▼ buttons for reordering a row (same look as the pricing-rules list). */
+export function MoveButtons({ onUp, onDown, upDisabled, downDisabled }: { onUp: () => void; onDown: () => void; upDisabled?: boolean; downDisabled?: boolean }) {
+  const cls =
+    'flex h-[17px] w-7 cursor-pointer items-center justify-center rounded-md text-muted-2 hover:bg-accent-soft hover:text-accent-soft-ink disabled:cursor-default disabled:opacity-30'
+  return (
+    <div className="flex shrink-0 flex-col gap-0.5">
+      <button type="button" aria-label="انتقال به بالا" disabled={upDisabled} onClick={onUp} className={cls}>
+        <ChevronUp className="size-4" strokeWidth={2.6} />
+      </button>
+      <button type="button" aria-label="انتقال به پایین" disabled={downDisabled} onClick={onDown} className={cls}>
+        <ChevronDown className="size-4" strokeWidth={2.6} />
+      </button>
+    </div>
   )
 }
 
@@ -170,12 +187,34 @@ export function AdminSelect({
 }
 export const NONE = '__none'
 
-/** Trash button that asks for confirmation first. */
-export function ConfirmDelete({ title, description, onConfirm, disabled }: { title: string; description?: string; onConfirm: () => void; disabled?: boolean }) {
+/** Trash button (or a text button when `triggerLabel` is given) that asks for confirmation first. */
+export function ConfirmDelete({
+  title,
+  description,
+  onConfirm,
+  disabled,
+  triggerLabel,
+}: {
+  title: string
+  description?: string
+  onConfirm: () => void
+  disabled?: boolean
+  triggerLabel?: string
+}) {
   const [open, setOpen] = useState(false)
+  const openDialog = (e: MouseEvent) => {
+    e.stopPropagation()
+    setOpen(true)
+  }
   return (
     <>
-      <IconAction kind="delete" label="حذف" disabled={disabled} onClick={(e) => { e.stopPropagation(); setOpen(true) }} />
+      {triggerLabel ? (
+        <Button type="button" variant="destructive" disabled={disabled} onClick={openDialog}>
+          {triggerLabel}
+        </Button>
+      ) : (
+        <IconAction kind="delete" label="حذف" disabled={disabled} onClick={openDialog} />
+      )}
       <AlertDialog open={open} onOpenChange={setOpen}>
         <AlertDialogContent className="rounded-[26px] border-line bg-white" onClick={(e) => e.stopPropagation()}>
           <AlertDialogHeader>

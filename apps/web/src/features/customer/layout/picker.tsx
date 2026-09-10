@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, type ReactNode } from 'react'
-import { useNavigate } from 'react-router'
+import { useLocation, useNavigate } from 'react-router'
 import { ChevronLeft, X } from 'lucide-react'
 import { useShallow } from 'zustand/react/shallow'
 import { GradientBadge, TONES } from '@/components/brand'
@@ -37,9 +37,13 @@ function ServicePicker({ open, onOpenChange }: { open: boolean; onOpenChange: (o
     (childCount ? `${fa(childCount)} فرزند · ${fa(totalBooks)} کتاب` : 'بدون کتاب مدرسه') +
     (serviceCount ? ` · ${fa(serviceCount)} سرویس دیگر` : '')
 
+  // Opened from the summary: a service added from here returns to the summary (`?from=summary`).
+  const { pathname } = useLocation()
+  const fromSummary = pathname === '/app/summary'
+
   const go = (path: string) => {
     onOpenChange(false)
-    navigate(path)
+    navigate(fromSummary && path !== '/app/family' && path !== '/app/summary' ? `${path}?from=summary` : path)
   }
 
   return (

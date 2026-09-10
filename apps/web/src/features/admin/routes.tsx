@@ -11,9 +11,11 @@ import { DashboardPage } from './pages/DashboardPage'
 import { AdminLoginPage } from './pages/LoginPage'
 import { NotificationsPage } from './pages/NotificationsPage'
 import { OrdersPage } from './pages/OrdersPage'
+import { PlansPage } from './pages/PlansPage'
 import { PricesPage } from './pages/PricesPage'
 import { ProductionPage } from './pages/ProductionPage'
 import { RulesPage } from './pages/RulesPage'
+import { SettingsPage } from './pages/SettingsPage'
 
 export const adminRoutes: RouteObject[] = [
   { path: '/admin/login', element: <AdminLoginPage /> },
@@ -29,6 +31,8 @@ export const adminRoutes: RouteObject[] = [
           { path: 'production', element: <ProductionPage /> },
           { path: 'services', element: <CatalogPage /> },
           { path: 'prices', element: <PricesPage /> },
+          { path: 'plans', element: <PlansPage /> },
+          { path: 'settings', element: <SettingsPage /> },
           { path: 'rules', element: <RulesPage /> },
           { path: 'campaigns', element: <CampaignsPage /> },
           { path: 'customers', element: <CustomersPage /> },

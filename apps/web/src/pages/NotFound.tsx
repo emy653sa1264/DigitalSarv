@@ -14,10 +14,3 @@ export function NotFound({ homeHref = '/' }: { homeHref?: string }) {
     </div>
   )
 }
-
-/** Temporary screen used by route stubs until a feature is implemented. */
-export function Placeholder({ title }: { title: string }) {
-  return (
-    <div className="flex min-h-[50dvh] items-center justify-center p-10 text-xl font-black text-muted-2">{title} — به‌زودی</div>
-  )
-}

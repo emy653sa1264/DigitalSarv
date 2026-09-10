@@ -2,14 +2,13 @@ import { Link, useNavigate } from 'react-router'
 import { ClipboardList } from 'lucide-react'
 import { EmptyState, ErrorState, GradientBadge, LoadingBlock } from '@/components/brand'
 import { Button } from '@/components/ui/button'
-import { notify } from '@/components/ui/sonner'
 import { fa, jalali, money } from '@/lib/format'
 import { ORDER_STATUS_LABEL, type Order } from '@/lib/types'
 import { cn } from '@/lib/utils'
-import { useDraft } from '@/stores/draft'
+import { useReorderFlow } from '../components/ReorderFlow'
 import { Screen } from '../components/Screen'
 import { RailCard } from '../components/parts'
-import { isActiveOrder, isAwaitingPayment, useMyOrders, usePayOrder, useReorder } from '../hooks/queries'
+import { isActiveOrder, isAwaitingPayment, useMyOrders, usePayOrder } from '../hooks/queries'
 import { orderIcon, orderTitle, orderTone } from '../lib/orders'
 
 function statusTag(o: Order) {
@@ -22,21 +21,12 @@ function statusTag(o: Order) {
 export function OrdersScreen() {
   const navigate = useNavigate()
   const orders = useMyOrders()
-  const reorder = useReorder()
+  const reorder = useReorderFlow()
   const payment = usePayOrder()
-  const applyDraft = useDraft((s) => s.applyDraft)
-
-  const again = (o: Order) =>
-    reorder.mutate(o.id, {
-      onSuccess: (draft) => {
-        applyDraft(draft)
-        notify(`سفارش ${fa(o.code)} دوباره ثبت شد — خلاصه را بررسی کنید`)
-        navigate('/app/summary')
-      },
-    })
 
   return (
     <Screen title="سفارش‌های من" subtitle="تاریخچه و سفارش دوباره" icon={ClipboardList} back="/app">
+      {reorder.dialog}
       {orders.isPending ? (
         <LoadingBlock rows={4} />
       ) : orders.isError ? (
@@ -44,7 +34,7 @@ export function OrdersScreen() {
       ) : orders.data.length === 0 ? (
         <EmptyState
           title="هنوز سفارشی ثبت نکرده‌اید"
-          hint="سفارش‌های ثبت‌شده و فاکتورها اینجا نمایش داده می‌شوند."
+          hint="سفارش‌های ثبت‌شده اینجا نمایش داده می‌شوند."
           action={
             <Button size="sm" className="mt-1" onClick={() => navigate('/app/family')}>
               ثبت سفارش جدید
@@ -56,7 +46,7 @@ export function OrdersScreen() {
           {orders.data.map((o) => {
             const tone = orderTone(o)
             const Icon = orderIcon(o)
-            const busy = reorder.isPending && reorder.variables === o.id
+            const busy = reorder.busyId === o.id
             return (
               <RailCard key={o.id} tone={tone} className="p-3.5">
                 <Link to={`/app/track/${o.id}`} className="flex items-center gap-[11px]">
@@ -73,13 +63,12 @@ export function OrdersScreen() {
                 </Link>
                 <div className="mt-[11px] flex items-center gap-2 border-t border-line-soft pt-[11px]">
                   <span className="flex-1 text-[13.5px] font-extrabold">{money(o.quote?.total ?? 0)}</span>
-                  <button
-                    type="button"
-                    onClick={() => notify(`فاکتور سفارش ${fa(o.code)} دانلود شد`)}
+                  <Link
+                    to={`/app/track/${o.id}`}
                     className="cursor-pointer rounded-full bg-line-soft px-3.5 py-[9px] text-[12.5px] font-extrabold text-muted-1 hover:bg-blue-soft"
                   >
-                    فاکتور
-                  </button>
+                    جزئیات
+                  </Link>
                   {isAwaitingPayment(o) ? (
                     <button
                       type="button"
@@ -93,7 +82,7 @@ export function OrdersScreen() {
                     <button
                       type="button"
                       disabled={busy}
-                      onClick={() => again(o)}
+                      onClick={() => reorder.start(o)}
                       className="cursor-pointer rounded-full bg-accent px-4 py-[9px] text-[12.5px] font-extrabold text-white shadow-[0_6px_14px_rgba(47,109,246,0.35)] hover:bg-accent-dark disabled:opacity-60"
                     >
                       سفارش دوباره

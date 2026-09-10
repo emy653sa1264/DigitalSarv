@@ -1,4 +1,3 @@
-import { NotificationsService } from '../notifications/notifications.service.js';
 import { KavenegarSmsDriver, LogSmsDriver, type FetchLike } from './sms-driver.js';
 
 function fetchReturning(body: unknown, status = 200) {
@@ -20,7 +19,7 @@ describe('KavenegarSmsDriver', () => {
     expect(Object.fromEntries(calls[0].params)).toEqual({ receptor: '09123456789', token: '4821', template: 'sarv-otp' });
   });
 
-  it('without a template the OTP and notifications use sms/send (with the sender line)', async () => {
+  it('without a template the OTP (and plain send) use sms/send (with the sender line)', async () => {
     const { fetch, calls } = fetchReturning(OK);
     const kn = new KavenegarSmsDriver({ apiKey: 'KEY', sender: '10004346', fetch });
     await kn.sendOtp('09123456789', '4821');
@@ -39,12 +38,8 @@ describe('KavenegarSmsDriver', () => {
   });
 });
 
-describe('LogSmsDriver / notification text', () => {
+describe('LogSmsDriver', () => {
   it('log driver never throws', async () => {
     await expect(new LogSmsDriver().sendOtp('09123456789', '1234')).resolves.toBeUndefined();
-  });
-
-  it('notification SMS carries the order code in Persian digits', () => {
-    expect(NotificationsService.smsText('سفارش شما ثبت شد.', '10255')).toBe('دیجیتال سرو — سفارش ۱۰۲۵۵: سفارش شما ثبت شد.');
   });
 });

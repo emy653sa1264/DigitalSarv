@@ -1,5 +1,6 @@
 import {
   Body,
+  ConflictException,
   Controller,
   Delete,
   Get,
@@ -14,11 +15,14 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Type } from 'class-transformer';
 import { IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { Roles } from '../../common/auth/decorators.js';
 import { JwtAuthGuard, RolesGuard } from '../../common/auth/guards.js';
 import { defined } from '../../common/utils/defined.js';
+import { fa } from '../../common/utils/fa.js';
 import { assertObjectId } from '../../common/utils/object-id.js';
+import { TERMINAL_STATUSES } from '../orders/order-helpers.js';
+import { Order } from '../orders/order.schema.js';
 import { Center } from './center.schema.js';
 
 export class CreateCenterDto {
@@ -47,7 +51,10 @@ export class UpdateCenterDto {
 
 @Injectable()
 export class CentersService {
-  constructor(@InjectModel(Center.name) private readonly centers: Model<Center>) {}
+  constructor(
+    @InjectModel(Center.name) private readonly centers: Model<Center>,
+    @InjectModel(Order.name) private readonly orders: Model<Order>,
+  ) {}
 
   list() { return this.centers.find().sort({ _id: 1 }); }
   create(dto: CreateCenterDto) { return this.centers.create(defined(dto)); }
@@ -59,8 +66,12 @@ export class CentersService {
     return doc;
   }
 
+  /** 409 while open (not delivered/cancelled) orders are assigned to the centre — they would be orphaned. */
   async remove(id: string) {
     assertObjectId(id, 'مرکز چاپ');
+    if (!(await this.centers.exists({ _id: id }))) throw new NotFoundException('مرکز چاپ یافت نشد');
+    const open = await this.orders.countDocuments({ centerId: new Types.ObjectId(id), status: { $nin: TERMINAL_STATUSES } });
+    if (open) throw new ConflictException(`این مرکز چاپ ${fa(open)} سفارش باز دارد؛ ابتدا سفارش‌ها را به مرکز دیگری بدهید`);
     if (!(await this.centers.findByIdAndDelete(id))) throw new NotFoundException('مرکز چاپ یافت نشد');
     return { ok: true };
   }

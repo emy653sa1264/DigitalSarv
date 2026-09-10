@@ -1,11 +1,9 @@
-import { useState } from 'react'
 import { Medal } from 'lucide-react'
 import { EmptyState, ErrorState } from '@/components/brand'
 import { Skeleton } from '@/components/ui/skeleton'
-import { notify } from '@/components/ui/sonner'
 import { fa } from '@/lib/format'
 import { useCatalog } from '@/lib/query'
-import type { Plan, PlanId } from '@/lib/types'
+import type { Plan } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/stores/auth'
 import { FAQ } from './content'
@@ -17,16 +15,11 @@ import { FAQ } from './content'
 export function MembershipSection({ showPlans, showFaq }: { showPlans: boolean; showFaq: boolean }) {
   const { data: catalog, isPending, isError, error, refetch } = useCatalog()
   const user = useAuth((s) => s.user)
-  const [selected, setSelected] = useState<PlanId | null>(user?.role === 'customer' ? user.planId : null)
+  const selected = user?.role === 'customer' ? user.planId : null
 
   if (!showPlans && !showFaq) return null
   const plans = catalog?.plans ?? []
   const active = plans.find((p) => p.id === selected)
-
-  const pick = (p: Plan) => {
-    setSelected(p.id)
-    notify(`پلن ${p.title} (${p.name}) انتخاب شد`)
-  }
 
   return (
     <section
@@ -37,7 +30,7 @@ export function MembershipSection({ showPlans, showFaq }: { showPlans: boolean; 
         <div className="lg:col-start-1 lg:row-start-1">
           <h2 className="mt-0 mb-2 text-[26px] sm:text-[28px]">عضویت</h2>
           <p className="m-0 text-[15px] leading-[1.8] text-muted-1">
-            روی هر پلن کلیک کنید تا انتخاب شود؛ تخفیف همان لحظه روی سفارش شما اعمال می‌شود.
+            پلن‌ها را مقایسه کنید؛ با زدن هر پلن، در اپ اثر آن را روی سفارش خود می‌بینید و فعالش می‌کنید.
             {active && (
               <>
                 {' '}
@@ -60,7 +53,7 @@ export function MembershipSection({ showPlans, showFaq }: { showPlans: boolean; 
           ) : plans.length === 0 ? (
             <EmptyState title="پلنی تعریف نشده است" className="sm:col-span-2" />
           ) : (
-            plans.map((p) => <PlanCard key={p.id} plan={p} on={p.id === selected} onPick={() => pick(p)} />)
+            plans.map((p) => <PlanCard key={p.id} plan={p} on={p.id === selected} />)
           )}
         </div>
       )}
@@ -80,14 +73,13 @@ export function MembershipSection({ showPlans, showFaq }: { showPlans: boolean; 
   )
 }
 
-function PlanCard({ plan: p, on, onPick }: { plan: Plan; on: boolean; onPick: () => void }) {
+/** Cross-app link: the customer app's «عضویت» screen compares and activates the plan. */
+function PlanCard({ plan: p, on }: { plan: Plan; on: boolean }) {
   const badge = on ? 'پلن فعال' : p.id === 'gold' ? 'پیشنهاد ما' : null
   return (
-    <button
-      type="button"
-      aria-pressed={on}
-      onClick={onPick}
-      className="block w-full cursor-pointer rounded-[24px] p-5 text-start transition-transform hover:-translate-y-0.5"
+    <a
+      href="/app/membership"
+      className="block w-full cursor-pointer rounded-[24px] p-5 text-start no-underline transition-transform hover:-translate-y-0.5"
       style={{ background: p.soft, color: p.ink, border: on ? `2.5px solid ${p.grad[1]}` : `1.5px solid ${p.border}` }}
     >
       <span className="flex items-center gap-[11px]">
@@ -116,6 +108,6 @@ function PlanCard({ plan: p, on, onPick }: { plan: Plan; on: boolean; onPick: ()
       <span className="mt-3.5 mb-0.5 block text-[22px] font-black">{fa(p.price)}</span>
       <span className="block text-xs opacity-75">تومان در ماه</span>
       <span className="mt-3 block text-[13px] leading-[1.9]">{fa(p.perks)}</span>
-    </button>
+    </a>
   )
 }

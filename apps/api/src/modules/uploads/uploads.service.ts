@@ -146,8 +146,8 @@ export class UploadsService {
 
   /**
    * Resolves the upload references of a draft. `strict` (order creation) rejects foreign/missing
-   * ids; the quote endpoint is lenient and anonymous quotes ignore ids. For docs with a PDF upload
-   * the server's page count replaces the client's `pages`.
+   * ids; the quote endpoint is lenient and anonymous quotes ignore ids. For docs/print with a PDF
+   * upload the server's page count replaces the client's `pages`.
    */
   async applyToDraft(draft: OrderDraft, ownerId: string | undefined, strict: boolean) {
     const refs = draftFileRefs(draft.services);
@@ -166,7 +166,7 @@ export class UploadsService {
     const byId = new Map(docs.map((d) => [String(d._id), d]));
 
     const services = draft.services.map((s) => {
-      if (s.kind !== 'docs') return s;
+      if (s.kind !== 'docs' && s.kind !== 'print') return s;
       const fileId = (s.spec as { fileId?: unknown })?.fileId;
       const upload = typeof fileId === 'string' ? byId.get(fileId) : undefined;
       if (!upload?.pages || upload.purpose !== 'docs') return s;

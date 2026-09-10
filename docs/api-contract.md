@@ -55,6 +55,7 @@ interface Catalog {
   extras: Extra[];      // only on === true
   grades: Grade[];      // only on === true, sorted
   bindColors: BindColor[];
+  papers: Paper[];      // only on === true, sorted — «نوع کاغذ» of چاپ اسناد (v3)
   plans: Plan[];
   prices: Prices;
   urgentEnabled: boolean;
@@ -62,6 +63,7 @@ interface Catalog {
 }
 interface Color { id: string; key: string; name: string; hex: string; extra: number; on: boolean; sort: number }
 interface Extra { id: string; key: string; label: string; price: number; on: boolean; sort: number }
+interface Paper { id: string; key: string; name: string; price: number; on: boolean; sort: number } // price = toman per A4 sheet
 interface Grade { id: string; name: string; books: number; on: boolean; sort: number }
 interface BindColor { key: 'maroon' | 'navy' | 'marbled'; name: string; css: string }
 type PlanId = 'bronze' | 'silver' | 'gold' | 'platinum';
@@ -78,10 +80,15 @@ interface Prices {
   flyerA4: number; flyerA5: number; flyerA6: number; flyerBwPct: number; flyerGlossyPct: number;
   flyerBulk2000: number; flyerBulk5000: number; flyerDesign: number;
   cartridge: number;
+  // چاپ اسناد (v3)
+  printBw: number; printColor: number; printDoubleDiscount: number; printA5Pct: number; printA3Pct: number;
+  printBindSpiral: number; printBindGlue: number; printBindHard: number; printStaple: number;
+  printLamCover: number; printLamSheet: number;
 }
 ```
 
-Default prices (seed + "reset"): `bindPerBook 28000, linedSheet 700, pickupFee 35000, deliveryFee 35000, urgentFee 80000, couponPct 5, couponCap 100000, docBw 380, docColor 1200, docMixed 560, docDoubleDiscount 12, docBind 65000, stampGold 45000, stampSilver 38000, flyerA4 1100, flyerA5 700, flyerA6 450, flyerBwPct 62, flyerGlossyPct 15, flyerBulk2000 10, flyerBulk5000 18, flyerDesign 250000, cartridge 420000`.
+Default prices (seed + "reset"): `bindPerBook 28000, linedSheet 700, pickupFee 35000, deliveryFee 35000, urgentFee 80000, couponPct 5, couponCap 100000, docBw 380, docColor 1200, docMixed 560, docDoubleDiscount 12, docBind 65000, stampGold 45000, stampSilver 38000, flyerA4 1100, flyerA5 700, flyerA6 450, flyerBwPct 62, flyerGlossyPct 15, flyerBulk2000 10, flyerBulk5000 18, flyerDesign 250000, cartridge 420000, printBw 250, printColor 1000, printDoubleDiscount 10, printA5Pct 60, printA3Pct 200, printBindSpiral 35000, printBindGlue 45000, printBindHard 120000, printStaple 2000, printLamCover 15000, printLamSheet 6000`.
+Settings saved before v3 have no `print*` keys: the server merges `DEFAULT_PRICES` under the stored prices, so they read as the defaults.
 
 ## Order draft, quote and pricing (server is authoritative)
 
@@ -94,13 +101,29 @@ interface ChildDraft {
   extras: string[];         // Extra.key[]
   note?: string;
 }
+type ServiceKind = 'print' | 'docs' | 'flyer' | 'cart' | 'repair';
 type ServiceDraft =
-  | { kind: 'docs'; childIndex?: number; spec: DocsSpec }
+  | { kind: 'print'; childIndex?: number; spec: PrintSpec } // «چاپ اسناد» (v3)
+  | { kind: 'docs'; childIndex?: number; spec: DocsSpec }   // «پایان‌نامه و صحافی»
   | { kind: 'flyer'; childIndex?: number; spec: FlyerSpec }
   | { kind: 'cart'; childIndex?: number; spec: CartSpec }
   | { kind: 'repair'; childIndex?: number; spec: RepairSpec };
+interface PrintSpec {
+  fileId?: string; fileName?: string; pages: number;
+  scope: 'all' | 'range'; from?: number; to?: number; // همه صفحات / بازه صفحات (1 ≤ from ≤ to ≤ pages)
+  paper: string;                          // Paper.key — not chosen in the UI; '' / unknown → the first `on` paper
+  size: 'A4' | 'A5' | 'A3'; ink: 'bw' | 'color' | 'mixed'; sides: 'single' | 'double'; copies: number;
+  colorRanges?: { from: number; to: number }[]; colorPages?: string; // only kept when ink === 'mixed'
+  binding: 'none' | 'spiral' | 'glue' | 'hardcover'; // بدون / فنری / ته‌چسب / گالینگور
+  spiralColor?: string;                   // Color.key («رنگ فنری») — only kept when binding === 'spiral'
+  staple: boolean;                        // منگنه — only with binding 'none' (the server forces false otherwise)
+  laminate: 'none' | 'cover' | 'all';     // بدون / فقط جلد / همه صفحات
+  extras?: string[];                      // Extra.key[] («خدمات اضافی», same admin list as school books)
+  desc?: string;
+}
 interface DocsSpec {
   fileName?: string; pages: number; scope: 'all' | 'range'; from?: number; to?: number;
+  pageRanges?: { from: number; to: number }[]; pagePages?: string; // v3: pages to print when scope === 'range' (from/to = legacy single range)
   ink: 'bw' | 'color' | 'mixed'; sides: 'single' | 'double'; copies: number;
   bindColor: 'maroon' | 'navy' | 'marbled'; stamp: 'gold' | 'silver';
   colorRanges?: { from: number; to: number }[]; colorPages?: string;
@@ -137,7 +160,8 @@ interface Quote {
 
 - `bookCount(c) = c.books` (default = grade.books)
 - `childTotal = n × (bindPerBook + color.extra + Σ extras.price) + (lined ? n × linedCount × linedSheet : 0)`
-- docs: `pagesN = scope==='range' ? to-from+1 : pages`; `inkRate = color→docColor | mixed→docMixed | bw→docBw`; `sidesMul = double ? 1 - docDoubleDiscount/100 : 1`; `bind = docBind + (stamp==='silver' ? stampSilver : stampGold)`; `price = round(pagesN × inkRate × sidesMul × copies + bind × copies)`
+- docs: `pagesN = scope==='range' ? printedN : pages` where `printedN` (v3) = the pages of `1..pages` covered by `pageRanges ∪ pagePages` (parsed, clipped and merged exactly like print's colour pages; overlaps count once); when `pageRanges` is absent (pre-v3 specs) `printedN = to-from+1`; when the union is empty `printedN = pages`. `pageRanges` (max 50) / `pagePages` (≤200 chars) are only kept when `scope==='range'`; `inkRate = color→docColor | mixed→docMixed | bw→docBw`; `sidesMul = double ? 1 - docDoubleDiscount/100 : 1`; `bind = docBind + (stamp==='silver' ? stampSilver : stampGold)`; `price = round(pagesN × inkRate × sidesMul × copies + bind × copies)`
+- print (v3): `pages = max(1, pages)`; `from`/`to` clamped like docs (`1 ≤ from ≤ to ≤ pages`); `pagesN = scope==='range' ? to-from+1 : pages`; `sheets = sides==='double' ? ceil(pagesN/2) : pagesN`; `colorN = ink==='color' ? pagesN : ink==='bw' ? 0 : |printed pages covered by colorRanges ∪ colorPages|` (printed pages = `from..to` for a range, else `1..pages`; overlaps count once; ranges with `to < from` are ignored; `colorPages` = integers separated by `,` `،` `٬` or spaces, Persian/Arabic digits accepted, other tokens ignored; computed by merging intervals, never by iterating pages); `sizeMul = A4→1 | A5→printA5Pct/100 | A3→printA3Pct/100`; `sidesMul = double ? 1 - printDoubleDiscount/100 : 1`; `print = (colorN × printColor + (pagesN - colorN) × printBw) × sidesMul × sizeMul`; `paper = Paper(paper).price` (unknown or switched-off key → the first `on` paper by `sort`, whose key is stored; no paper at all → 0); `bind = spiral→printBindSpiral + Color(spiralColor).extra | glue→printBindGlue | hardcover→printBindHard | none→0` (`spiralColor`: unknown or switched-off key → the first `on` colour by `sort`, whose key is stored; none → omitted, extra 0); `extras = Σ Extra(key).price` over `spec.extras` (only `on` extras are kept, deduplicated, max 30); `perCopy = print + sheets × paper × sizeMul + (laminate==='all' ? sheets × printLamSheet × sizeMul : 0) + bind + (staple ? printStaple : 0) + (laminate==='cover' ? printLamCover : 0) + extras`; `price = round(perCopy × copies)`
 - flyer: `qty = max(500, qty)`; `base = flyerA4|A5|A6`; `rate = base × (ink==='color' ? 1 : flyerBwPct/100) × (paper==='glossy' ? 1 + flyerGlossyPct/100 : 1) × (qty ≥ 5000 ? 1 - flyerBulk5000/100 : qty ≥ 2000 ? 1 - flyerBulk2000/100 : 1)`; `price = round(qty × rate) + (mode==='need' ? flyerDesign : 0)`
 - cart: `price = cartridge × count`
 - repair: `price = 0` (invoice after diagnosis; label "پس از عیب‌یابی")
@@ -152,7 +176,7 @@ interface Quote {
 `lines` (in this order, Persian labels exactly as in the design): `فنری کتاب‌ها (N کتاب)`, `سرویس‌های دیگر (N مورد)`, `تحویل‌گیری`, `تحویل`, `تخفیف عضویت <plan.name>`, `کد تخفیف`, `قوانین قیمت`, `سفارش فوری`.
 All 8 lines are always present (`key`: `binding, services, pickup, delivery, plan, coupon, rules, urgent`); an inapplicable line has `amount: 0` (render "—"). `pickup`/`delivery` with `amount: 0` carry `accent: true` (render "رایگان با عضویت"). A 9th line `{ key: 'ruleFee', label: 'هزینه قوانین قیمت' }` is appended only when `ruleFee > 0`. Σ `lines.amount` = `total` (unless clamped at 0).
 
-Service `label` / `detail` (Persian digits): docs `چاپ اسناد` · `۱۲۰ صفحه · A4 · دورو[ · ۲ سری]`; flyer `تراکت` · `طراحی آماده|طراحی توسط ما · ۱٬۰۰۰ عدد A5 · تمام‌رنگی|سیاه‌وسفید`; cart `شارژ کارتریج` · `HP 85A · ۲ عدد`; repair `تعمیر پرینتر` · `HP LaserJet 1102 · <problem>`. Missing/invalid spec fields fall back to defaults (docs: 1 page, bw, single, 1 copy, maroon, gold; flyer: have, 1000, color, A5, glossy; cart: 1).
+Service `label` / `detail` (Persian digits): print `چاپ اسناد` · `۳۰ صفحه[ (صفحه ۱–۳۰)] · A4 · تحریر ۸۰ گرم · سیاه‌وسفید|همه رنگی|ترکیبی (۱۱ صفحه رنگی) · یک‌رو|دورو[ · فنری آبی|فنری|ته‌چسب|گالینگور][ · منگنه][ · لمینت جلد|لمینت همه صفحات][ · برچسب نام، برش لبه][ · ۲ نسخه]` (paper = the resolved `Paper.name`, omitted when there is none; spiral colour = the resolved `Color.name`; extras = their `Extra.label`s joined with `، `); docs `پایان‌نامه و صحافی` (v1–v2 orders keep their stored `چاپ اسناد`) · `۱۲۰ صفحه[ (صفحه ۱۰–۲۰، ۳۵)] · A4 · سیاه‌وسفید|همه رنگی|ترکیبی · یک‌رو|دورو · جلد <BindColor.name> · زرکوب|نقره‌کوب[ · ۲ سری]` (the range part lists the merged printed intervals `a–b` / single `a`, joined with `، `, at most 6 then `…`; omitted when the union is empty; v3.2 added ink, binding colour and stamp); flyer `تراکت` · `طراحی آماده|طراحی توسط ما · ۱٬۰۰۰ عدد A5 · تمام‌رنگی|سیاه‌وسفید · گلاسه|تحریر` (v3.2 added paper); cart `شارژ کارتریج` · `HP 85A[ · <type>] · ۲ عدد` (v3.2 added the type when given); repair `تعمیر پرینتر` · `HP LaserJet 1102 · <problem>`. Missing/invalid spec fields fall back to defaults (print: 1 page, all pages, first `on` paper, A4, bw, single, 1 copy, binding none, no staple, laminate none, no extras; docs: 1 page, bw, single, 1 copy, maroon, gold; flyer: have, 1000, color, A5, glossy; cart: 1).
 
 ## Orders
 
@@ -221,6 +245,7 @@ interface Courier { id: string; userId?: string; name: string; phone: string; co
 | Colors | `GET/POST /admin/colors` · `PATCH/DELETE /admin/colors/:id` · `POST /admin/colors/toggle-all {on}` — body `{ name, hex, extra, on? }` (key auto-generated) |
 | Extras | same shape at `/admin/extras` — body `{ label, price, on? }` |
 | Grades | same shape at `/admin/grades` — body `{ name, books, on? }`. Renaming a grade does not rewrite historical orders. |
+| Papers (v3) | same shape at `/admin/papers` — body `{ name, price, on? }` (key auto-generated; `price` = toman per A4 sheet). Renaming or repricing a paper does not rewrite historical orders. |
 | Prices | `GET /admin/prices` · `PUT /admin/prices` (partial `Prices`) · `POST /admin/prices/reset` — all return `Prices & { urgentEnabled: boolean }`; `PUT` also accepts `urgentEnabled` (the catalog's urgent switch) |
 | Plans | `GET /admin/plans` · `PATCH /admin/plans/:id` |
 | Rules | `GET/POST /admin/rules` · `PATCH/DELETE /admin/rules/:id` · `POST /admin/rules/reorder {ids}` |
@@ -229,7 +254,7 @@ interface Courier { id: string; userId?: string; name: string; phone: string; co
 | Couriers | `GET/POST /admin/couriers` · `PATCH/DELETE /admin/couriers/:id` |
 | Zones | `GET/POST /admin/zones` · `PATCH/DELETE /admin/zones/:id` — `{ id, name, feeNote, feePct, sla, agentsCount }` |
 | Centers | `GET/POST /admin/centers` · `PATCH/DELETE /admin/centers/:id` — `{ id, name, zone, capacityPerDay, processingHours, commissionPct, rating, address, lat?, lng? }` |
-| CMS | `GET /cms` (public: `{ key, label, on, order }[]`) · `GET /admin/cms` · `POST /admin/cms {label}` · `PATCH /admin/cms/:id {label?, on?, order?}` |
+| CMS | `GET /cms` (public: `{ key, label, on, order }[]`) · `GET /admin/cms` · `PATCH /admin/cms/:id {label?, on?, order?}` (v3.2: `POST /admin/cms` removed — sections are fixed by the landing code) |
 | Notifications | `GET /admin/notifications` · `PATCH /admin/notifications/:id {text?, on?}` — `{ id, event: OrderStatus, channel: 'sms' | 'push', text, on }` |
 
 ### Admin status transitions
@@ -308,7 +333,7 @@ Source design is now four files (`design/v2/{landing,customer,delivery,admin}.dc
 - PDF pages are counted in a worker thread with a 5 s budget; a PDF that cannot be counted in time (or at all) is stored without `pages` and the customer enters the page count manually.
 - `GET /uploads/:id` → streams the file (`Content-Disposition` with original name) to the uploader, any admin, or the courier assigned to **any** order that references it.
 - An upload may be referenced by several orders (a reorder copies its file ids): the server tracks every referencing order (`orderIds`, internal).
-- Spec fields: `DocsSpec.fileId?` (server takes `pages` from the upload when present), `FlyerSpec.designFileId?`, `FlyerSpec.logoFileIds?: string[]`, `CartSpec.photoIds?: string[]`, `RepairSpec.photoIds?: string[]`; courier `POST /courier/orders/:id/verify` accepts `photoIds?: string[]` stored as `Order.pickupPhotoIds`.
+- Spec fields: `DocsSpec.fileId?` and `PrintSpec.fileId?` (server takes `pages` from the upload when present), `FlyerSpec.designFileId?`, `FlyerSpec.logoFileIds?: string[]`, `CartSpec.photoIds?: string[]`, `RepairSpec.photoIds?: string[]`; courier `POST /courier/orders/:id/verify` accepts `photoIds?: string[]` stored as `Order.pickupPhotoIds`.
 - Files are deleted 30 days after the order is delivered/cancelled (terms clause «حریم خصوصی و داده‌ها») — for a file referenced by several orders, only once **all** of them are delivered/cancelled past the retention period.
 
 ### SMS (env `SMS_DRIVER=log|kavenegar`, `SMS_API_KEY`, `SMS_SENDER`, `SMS_OTP_TEMPLATE`)
@@ -317,7 +342,7 @@ OTP uses the provider's verify/lookup API when configured; order notifications u
 
 ### Campaign
 
-`Campaign.services: ('school'|'docs'|'flyer'|'cart'|'repair')[]` — «سرویس‌های مشمول»; the coupon discount applies only to the subtotal of eligible services (`school` = binding total).
+`Campaign.services: ('school'|'print'|'docs'|'flyer'|'cart'|'repair')[]` — «سرویس‌های مشمول»; the coupon discount applies only to the subtotal of eligible services (`school` = binding total). `print` added in v3.
 
 ### Ops
 
@@ -341,17 +366,108 @@ These refine the v2 section where it was silent; the web app can rely on them.
 - Production column labels are the design's (`دریافت‌شده`, `آماده‌سازی`, `فنری`, `خدمات اضافی`, `کنترل کیفیت`, `بسته‌بندی`), not the timeline `STATUS_LABELS`. The timeline label of `extras` is «خدمات اضافی», of `pending_payment` «در انتظار پرداخت».
 
 **Uploads**
-- Purposes per spec field: `DocsSpec.fileId` → `docs`; `FlyerSpec.designFileId` / `logoFileIds` → `flyer` or `logo`; `CartSpec.photoIds` → `cartridge`; `RepairSpec.photoIds` → `device`; courier `photoIds` → `pickup` (uploaded by that courier). `POST /orders` answers 400 when a referenced upload is missing, deleted, has the wrong purpose or belongs to someone else. `POST /orders/quote` ignores such ids (and all ids for anonymous callers). Up to 10 ids per list field.
+- Purposes per spec field: `DocsSpec.fileId` and `PrintSpec.fileId` → `docs`; `FlyerSpec.designFileId` / `logoFileIds` → `flyer` or `logo`; `CartSpec.photoIds` → `cartridge`; `RepairSpec.photoIds` → `device`; courier `photoIds` → `pickup` (uploaded by that courier). `POST /orders` answers 400 when a referenced upload is missing, deleted, has the wrong purpose or belongs to someone else. `POST /orders/quote` ignores such ids (and all ids for anonymous callers). Up to 10 ids per list field.
 - The file type is checked by extension **and** content (magic bytes); `logo` accepts the same types as `docs`/`flyer`. `Upload.pages` is the PDF page count, `1` for images, absent for doc/docx. Files over `UPLOAD_MAX_MB` → 413 with a Persian message.
 - `GET /uploads/:id` is also allowed for the **customer who owns a referencing order** (e.g. to see pickup photos). Images are served `inline`, documents as `attachment`. After the retention job removed a file: **410**.
 - Retention deletes a file once **every** order referencing it is delivered/cancelled for more than `UPLOAD_RETENTION_DAYS` (default 30); it also deletes uploads never attached to an order once they are older than that; runs hourly. The `Upload` record stays (with `deletedAt`) for the order history.
 
 **Campaign**
-- `quote.couponValid` is `true` only when the code matches **and** the order contains at least one eligible service (otherwise the coupon line is 0 and stats are not bumped). The cap applies to the eligible part. Campaigns saved before v2 get `['school','docs']`.
+- `quote.couponValid` is `true` only when the code matches **and** the order contains at least one eligible service (otherwise the coupon line is 0 and stats are not bumped). The cap applies to the eligible part. Campaigns saved without `services` (pre-v2) are priced with `DEFAULT_CAMPAIGN_SERVICES` (v3: `['school','docs','print']`) and `seed:base` backfills that list into them.
 - `services` is accepted on `POST/PATCH /admin/campaigns` (non-empty, deduplicated).
 
 **Auth / SMS / ops**
 - If the SMS provider fails to send the OTP, `POST /auth/otp/request` answers **503** and the code is invalidated. Order SMS read `دیجیتال سرو — سفارش ۱۰۲۵۵: <template text>` and are sent in the background (never block or fail the order flow); `push` templates are logged (no push provider yet).
 - Rate limits (per client IP, behind `TRUST_PROXY` trusted proxy hops — default 1 = nginx only, 2 = Caddy/CDN + nginx; also `true`/`false` or comma-separated CIDRs): all routes `THROTTLE_LIMIT`/`THROTTLE_TTL` s and `/api/auth/*` `THROTTLE_AUTH_LIMIT`/`THROTTLE_AUTH_TTL` s; `POST /api/uploads` additionally **per user** `THROTTLE_UPLOAD_LIMIT`/`THROTTLE_UPLOAD_TTL` s; exceeding them → **429** «تعداد درخواست‌ها بیش از حد مجاز است…». `/api/health*` is never throttled. Defaults: production 600/60 s, 30/60 s and 20/60 s; otherwise 10000, 1000 and 1000.
 - `GET /health` keeps the v1 body (always 200); `GET /health/ready` returns the same body with 503 when a dependency is down.
-- Demo seed: order 10240 is in `extras` (the design's «خدمات اضافی · لمینت جلد»), centres are the design's 5, seeded gateway orders carry a paid `mock` payment record. `seed:base` only inserts missing documents (never overwrites admin edits); the campaign is inserted active only if no other campaign is active.
+- Demo seed: order 10240 is in `extras` (the design's «خدمات اضافی · لمینت جلد»), centres are the design's 5, seeded gateway orders carry a paid `mock` payment record. `seed:base` only inserts missing documents (never overwrites admin edits); the campaign is inserted active only if no other campaign is active. Sole exception: it deletes CMS sections whose key is in `OBSOLETE_CMS_KEYS` (v3: `pickup` — the landing «تحویل‌گیری و تحویل درب منزل» card was removed), so admin never shows a switch that controls nothing.
+
+---
+
+## v3 — «چاپ اسناد» split from «پایان‌نامه و صحافی»
+
+The design sent both home/landing cards («چاپ اسناد» and «پایان‌نامه و صحافی») to one form. They are now two services:
+
+| Service | `kind` | Web route | Form |
+|---|---|---|---|
+| چاپ اسناد | `print` (new) | `/app/print` | file + pages · همه صفحات/بازه صفحات (از/تا) · A4/A5/A3 (no paper choice — the web leaves `paper` to the server, which uses the first `on` paper) · سیاه‌وسفید/همه رنگی/ترکیبی (color ranges + single pages, as in docs) · یک‌رو/دورو · صحافی (بدون/فنری/ته‌چسب/گالینگور) · رنگ فنری (`catalog.colors`, when فنری) · منگنه · لمینت (بدون/فقط جلد/همه صفحات) · خدمات اضافی (`catalog.extras`) · توضیحات · تعداد نسخه |
+| پایان‌نامه و صحافی | `docs` (unchanged spec) | `/app/docs` | the v1 form: pages/range, color/mixed, sides, binding colour, زرکوب/نقره‌کوب, cover texts, copies |
+
+- `docs` keeps its spec, formula and stored orders, so existing orders, reorders and edits are untouched; only its new `label` is `پایان‌نامه و صحافی`.
+- `docs` form (v3.1): «تعداد صفحات فایل» is hidden when a PDF upload gave `pages` (still shown for Word/images or before a file is chosen, since nothing else knows the count); «بازه صفحات» is a list of ranges («از صفحه ۱۰ تا ۲۰», «افزودن بازه», default `[{10,20}]`) plus «صفحه‌های تک (اختیاری)», sent as `pageRanges`/`pagePages` (the web no longer sends `from`/`to`); the fixed «کاغذ تحریر ۸۰ گرم · قطع A4» note is removed from the form.
+- `ServiceDraftDto.kind` accepts `print`. Types and schemas: `PrintSpec`, `Paper`, `Prices.print*` above; formula and label/detail under «Pricing formulas».
+- Papers are a catalog collection like extras (`key`, `name`, `price`, `on`, `sort`); every `/admin/papers` write invalidates the catalog. `seed:base` inserts the missing defaults `tahrir80` «تحریر ۸۰ گرم» 250 (sort 1), `tahrir70` «تحریر ۷۰ گرم» 200 (sort 2), `glossy` «گلاسه» 1200 (sort 3).
+- The pricing context carries `papers: { key, name, price, on, sort }[]` (all papers; only `on` ones are selectable), and its `colors` / `extras` entries also carry `name`/`on`/`sort` and `label` so print can resolve the spiral colour and name the extras. Spiral colour and extras reuse the school-book admin lists («رنگ‌های فنری», «خدمات اضافی»), so their on/off switches apply to چاپ اسناد too; both are charged per copy.
+- Campaigns: `DEFAULT_CAMPAIGN_SERVICES = ['school','docs','print']` and the seeded `SCHOOL1405` campaign covers `print` too. Campaigns already stored keep their services (an admin adds «چاپ اسناد» by hand).
+- Admin labels: `print` «چاپ اسناد» (short «چاپ»), `docs` «پایان‌نامه و صحافی» (short «صحافی»). Admin «قیمت‌ها» gets a «چاپ اسناد» group (`print*` keys) and the old group is renamed «پایان‌نامه و صحافی»; «سرویس‌ها و گزینه‌ها» gets a «نوع کاغذ» card.
+
+## v3.2 — audit fixes (dead / orphan controls)
+
+- Service `detail` strings now carry every priced choice (docs ink, binding colour, stamp; flyer paper; cart type) — see «Service `label` / `detail`».
+- Couriers: `PATCH /admin/couriers/:id` accepts `zoneId: null` (or `''`) to clear the zone (`$unset`). Every courier response derives `zoneName` from `zoneId` when it is set; the stored free-text `zoneName` is only a fallback for couriers without a zone.
+- Zones: `GET /admin/zones` computes `agentsCount` on read (couriers whose `zoneId` is that zone); the stored value is ignored. `DELETE /admin/zones/:id` also unsets `zoneId` on that zone's couriers.
+- Deletes that would orphan live orders: `DELETE /admin/couriers/:id` and `DELETE /admin/centers/:id` answer **409** (Persian message with the count) while any order that is not `delivered`/`cancelled` references them.
+- CMS: the landing's two document cards get their own switches — new section `print` «چاپ اسناد» (inserted by `seed:base`), and `docs` is «پایان‌نامه و صحافی» (`seed:base` relabels it only while its label is still the old default «چاپ اسناد»). `reviews` joins `OBSOLETE_CMS_KEYS` (no landing section renders it). `POST /admin/cms` is removed: sections are fixed by the landing code, so an added section could never control anything.
+- Notifications: `seed:base` inserts the missing `push` templates for `confirmed`, `binding`, `extras`, `awaiting_approval` and `cancelled` (`cancelled` and `awaiting_approval` on, the other three off), so every status the server dispatches has a template an admin can switch on and word. (v3.3 turns `push` into the in-app inbox + web push and drops SMS for order events.)
+- `Prices.couponPct` / `couponCap` are the defaults a new campaign starts with in the admin dialog; pricing always uses the campaign's own `couponPct` / `couponCap`.
+
+## v3.3 — owner-approved controls + notifications without SMS
+
+Approved items (owner's numbering): 1 flyer sides · 3 cartridge type · 5 repair device · 6 repair warranty · 10 child label text · 11 extras scope · 12 campaign enforcement · 14 minimum order · 17 bind colours · 18 flyer tiers · 19 «تنظیمات» · 20 courier pay · 22 notification templates · 23 checklists · 24 QC guard · 26 list ordering.
+
+### Notifications — SMS only for the login OTP
+- SMS is sent **only** for the OTP. Order events never send SMS (cost).
+- Every order event the server dispatches, when its template is `on`, creates an in-app notification for the order's customer — collection `userNotifications`:
+  ```ts
+  interface UserNotification { id: string; orderId: string; orderCode: string; event: OrderStatus; text: string; read: boolean; createdAt: string }
+  ```
+  — and, when `VAPID_PUBLIC_KEY` / `VAPID_PRIVATE_KEY` (+ `VAPID_SUBJECT`, e.g. `mailto:`) are set and the customer subscribed, a Web Push message `{ title: 'دیجیتال سرو', body: text, url: '/app/track/<orderId>', tag: orderId }`. No VAPID keys → inbox only. Push is fire-and-forget (never blocks or fails the order flow); a subscription answering 404/410 is deleted.
+- `NotificationTemplate.channel` is always `'push'` (= inbox + web push). `seed:base` converts existing `sms` templates to `push` (when the event has no `push` template yet; otherwise deletes the `sms` row) and inserts missing `push` templates for every dispatched event (`registered, confirmed, courier_assigned, picked_up, preparing, binding, extras, qc, packing, out_for_delivery, delivered, awaiting_approval, cancelled`). The text is used as written (no «دیجیتال سرو — سفارش …» prefix; the inbox shows the order code).
+- Customer endpoints (role `customer`):
+
+  | Method | Path | Body | Response |
+  |---|---|---|---|
+  | GET | `/notifications/mine?page=&limit=` | — | `{ items: UserNotification[], total, page, limit, unread: number }` newest first |
+  | POST | `/notifications/mine/read` | `{ ids?: string[] }` (omit = all) | `{ ok: true, unread: number }` |
+  | GET | `/notifications/push/key` | — (public) | `{ publicKey: string \| null }` |
+  | POST | `/notifications/push/subscribe` | `{ endpoint, keys: { p256dh, auth } }` | `{ ok: true }` (upsert by endpoint, owned by the caller) |
+  | POST | `/notifications/push/unsubscribe` | `{ endpoint }` | `{ ok: true }` |
+- Admin (item 22): `POST /admin/notifications { event: OrderStatus, text, on? }` (409 if the event already has a template) and `DELETE /admin/notifications/:id`; `PATCH` unchanged.
+- Web: the header bell shows the unread count and opens `/app/notifications` (tap an item → mark read → `/app/track/<orderId>`, «همه خوانده شد»). Profile «اعلان‌ها» row → «فعال‌سازی اعلان‌های مرورگر» (permission + subscribe through `public/sw.js`, which handles `push` and `notificationclick`). Admin «اعلان‌ها» says «پیامک فقط برای کد ورود ارسال می‌شود».
+
+### «تنظیمات» (item 19) and courier pay (item 20)
+`Settings` gains `ops`, `courier` and `checklists` (below). `GET /catalog` gains `ops: OpsSettings` (public).
+```ts
+interface OpsSettings {
+  pickupSlots: string[];     // default ['۸ تا ۱۰','۱۰ تا ۱۲','۱۲ تا ۱۴','۱۴ تا ۱۶','۱۶ تا ۱۸','۱۸ تا ۲۰']
+  bookingDays: number;       // days ahead a pickup can be booked, 1..90, default 30
+  closedWeekdays: number[];  // JS getDay() of the Tehran date: 0 Sunday … 5 Friday, 6 Saturday; default []
+  holidays: string[];        // 'yyyy-mm-dd' (Gregorian, Tehran), default []
+  sameDayCutoff: string;     // 'HH:mm' Tehran — after it, today can't be booked; '' = none (default)
+  pickupHoursText: string;   // default '۸ تا ۲۰'
+  supportPhone: string;      // ASCII digits, default '02191002233'
+  turnaroundText: string;    // default '۲۴ تا ۴۸ ساعت'
+}
+interface CourierPaySettings { perTaskFee: number /* default 75000 */; settlementWeekday: number /* JS getDay, default 4 = Thursday */ }
+```
+- Admin: `GET /admin/settings` → `{ ops, courier, checklists }`; `PUT /admin/settings` partial `{ ops?, courier?, checklists? }` (validated; invalidates the catalog).
+- `POST /orders` validates `pickup` (Persian 400s): `slot ∈ ops.pickupSlots`; `today ≤ date ≤ today + bookingDays`; not a closed weekday or holiday; if `date` is today: now < `sameDayCutoff` (when set) and the slot's start hour (first number in its label, Persian or ASCII digits) is still ahead. `POST /orders/quote` does not validate pickup.
+- Courier earnings: `today = tasks completed today × courier.perTaskFee`; `nextSettlement` = the next `settlementWeekday`. Per-courier `rating` (0–5) and `bonus` (toman) are editable through `PATCH /admin/couriers/:id`.
+
+### Pricing and catalog additions
+- **Prices** gain `flyerDoublePct 40`, `flyerBulk1Qty 2000`, `flyerBulk2Qty 5000`, `cartridgeColor 650000`, `cartridgeInkjet 250000`, `minOrderAmount 0` (0 = off). `flyerBulk2000` / `flyerBulk5000` keep their keys and are now the percentages of tier 1 / tier 2.
+- **Flyer (1, 18):** `FlyerSpec.sides?: 'single' | 'double'` (default single). `rate × (double ? 1 + flyerDoublePct/100 : 1)`; bulk % = `qty ≥ flyerBulk2Qty ? flyerBulk5000 : qty ≥ flyerBulk1Qty ? flyerBulk2000 : 0`. Detail appends ` · دورو` when double.
+- **Cartridge (3):** `CartSpec.cartType?: 'laserBw' | 'laserColor' | 'inkjet'` (default laserBw) → price `(laserColor → cartridgeColor | inkjet → cartridgeInkjet | laserBw → cartridge) × count`. Free-text `type` is still accepted (old orders). Detail: `HP 85A · لیزری سیاه|لیزری رنگی|جوهرافشان · ۲ عدد`.
+- **Repair (5, 6):** `RepairSpec.device?: 'laser' | 'inkjet' | 'mfp' | 'copier'` (لیزری / جوهرافشان / چندکاره / فتوکپی) and `RepairSpec.warranty?: boolean`. No price impact; detail adds the device and «گارانتی دارد» when true.
+- **Extras (10, 11):** `Extra` gains `services: ('school' | 'print')[]` (default both) and `needsText: boolean` (default false). School binding and print keep/price only extras whose `services` include them. `ChildDraft.labelText?: string` (≤ 60) — the text printed for extras with `needsText` (e.g. «برچسب نام», «چاپ نام روی جلد»); the child editor asks for it when such an extra is chosen (default = the child's name). `seed:base` backfills the seeded keys once when the fields are missing: `laminate`, `tag`, `cover` → `['school']`, the rest both; `tag`, `cover` → `needsText: true`. Admin extras body gains `services?`, `needsText?`.
+- **Bind colours (17):** an admin-managed collection like colours — `BindColor { id, key, name, hex, css, extra, on, sort }` (`css` derived from `hex` on create/update; the seeded «ابر و باد» keeps its pattern until its hex is edited). `catalog.bindColors` = `on` ones by `sort`. `DocsSpec.bindColor` is a `BindColor.key` string (unknown/off → first `on`). Docs `bind = docBind + stamp + BindColor(bindColor).extra` (per copy). Admin `/admin/bind-colors` has the colours shape (body `{ name, hex, extra, on? }`). Seed inserts the 3 existing ones (extra 0).
+- **Minimum order (14):** when `minOrderAmount > 0` and `quote.subtotal < minOrderAmount`, `POST /orders` answers 400 «حداقل مبلغ سفارش … تومان است». `Quote.minOrderShortfall?: number` (> 0 when below) lets the web warn and block checkout.
+- **Campaign enforcement (12):** a coupon applies only when its campaign is `active`, today (Tehran calendar day) is within `startsAt..endsAt` (inclusive, compared as Tehran days), and today's non-cancelled, paid-or-registered orders that used it are fewer than `dailyCapacity` (`0` = unlimited). `GET /catalog` returns `campaign: null` outside the window (evaluated at read time, not frozen in the cache). `Quote.couponReason?: 'invalid' | 'not_started' | 'expired' | 'full' | 'not_eligible'` explains a coupon that did not apply.
+
+### Checklists (23) and QC guard (24)
+- `Settings.checklists = { qc: { school: string[]; print: string[]; docs: string[]; flyer: string[]; cart: string[]; repair: string[] }; pickup: string[] }`. Defaults: `qc.school` = the current 9 labels, short sensible lists for the others, `pickup` = the current 4.
+- Each new order snapshots its lists: `Order.qcLabels` = `qc.school` (if it has children) + the list of each distinct service kind (deduplicated, in that order); `Order.qc` has the same length. `Order.pickupLabels` snapshots `pickup`. Orders created before v3.3 fall back to the old 9 / 4 labels.
+- `PATCH /admin/orders/:id/qc {index, done}`: `index < qcLabels.length`. `GET /admin/production` items carry their `qcLabels`. Courier verify `checks` must match the order's pickup list length.
+- **QC guard:** `PATCH /admin/orders/:id/status` to `packing`, `out_for_delivery` or `delivered` from a production status (`picked_up … qc`) answers 400 «کنترل کیفیت کامل نشده است» unless every `qc` item is done.
+
+### List ordering (26)
+`POST /admin/{colors|extras|grades|papers|bind-colors}/reorder { ids: string[] }` sets `sort` = 1-based position; invalidates the catalog. The first `on` item by `sort` is the default paper / spiral colour / bind colour.

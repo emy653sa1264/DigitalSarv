@@ -7,6 +7,7 @@ import { fa, money } from '@/lib/format'
 import { qk, queryClient } from '@/lib/query'
 import type { Order } from '@/lib/types'
 import { Screen } from '../components/Screen'
+import { useReorderFlow } from '../components/ReorderFlow'
 import { CtaButton } from '../components/parts'
 import { customerKeys, useOrder, usePayOrder } from '../hooks/queries'
 import { orderBooks, orderTitle } from '../lib/orders'
@@ -135,6 +136,7 @@ function PayVerifying({ order: o, refreshing, onRefresh }: { order: Order; refre
 function PayFailure({ order: o }: { order: Order }) {
   const navigate = useNavigate()
   const { pay, busyId } = usePayOrder()
+  const reorder = useReorderFlow()
   const cancelled = o.status === 'cancelled'
   const busy = busyId === o.id
 
@@ -167,6 +169,13 @@ function PayFailure({ order: o }: { order: Order }) {
           {busy ? 'در حال انتقال به درگاه پرداخت…' : 'پرداخت دوباره'}
         </CtaButton>
       )}
+      {cancelled && !o.refunded && (
+        // Cancelled for non-payment: rebuild the same order as a draft and review it in the summary.
+        <CtaButton className="mt-3.5" disabled={reorder.busyId === o.id} onClick={() => reorder.start(o)}>
+          {reorder.busyId === o.id ? 'در حال آماده‌سازی…' : 'سفارش دوباره'}
+        </CtaButton>
+      )}
+      {reorder.dialog}
       <Button variant="outline" block className="mt-[9px] h-[52px] text-[15px]" onClick={() => navigate('/app/orders')}>
         بازگشت به سفارش‌ها
       </Button>

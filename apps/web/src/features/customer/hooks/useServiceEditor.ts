@@ -8,10 +8,11 @@ import { useReturnTo } from './nav'
 export type SpecOf<K extends ServiceKind> = Extract<ServiceDraft, { kind: K }>['spec']
 
 /**
- * Shared add/edit flow for the docs/flyer/cart/repair screens.
+ * Shared add/edit flow for the print/docs/flyer/cart/repair screens.
  * URL drives the mode so deep links and "back" stay correct:
  * `?edit=<serviceIndex>` edits in place (then returns to the summary),
- * `?for=<childIndex>` binds a new service to a child (then returns to that child).
+ * `?for=<childIndex>` binds a new service to a child (then returns to that child),
+ * `?from=summary` (added via the summary's «افزودن سرویس دیگر») returns to the summary.
  */
 export function useServiceEditor<K extends ServiceKind>(kind: K) {
   const [params] = useSearchParams()
@@ -38,7 +39,7 @@ export function useServiceEditor<K extends ServiceKind>(kind: K) {
     }
     addService(service)
     notify(label + (children.length ? ' به سفارش خانوادگی اضافه شد' : ' به سفارش شما اضافه شد'))
-    returnTo(forChild !== undefined ? `/app/child/${forChild}` : '/app/family')
+    returnTo(forChild !== undefined ? `/app/child/${forChild}` : params.get('from') === 'summary' ? '/app/summary' : '/app/family')
   }
 
   return {

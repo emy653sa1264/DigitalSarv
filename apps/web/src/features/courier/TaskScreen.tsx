@@ -11,14 +11,17 @@ import { useCourierOrder, useCourierTasks, useMarkDelivered } from './api'
 import { ContentRow, PrimaryAction } from './components'
 import { isTaskDone, KIND_LABEL, kindOf, mapEmbedSrc, openMap, useLastTask, type TaskKind } from './utils'
 
-/** `/courier/task` — the "سفارش" tab: last opened task, else the next open task of today, else an empty state. */
+/**
+ * `/courier/task` — the "سفارش" tab: the last opened task while it is still open, else the next open task
+ * of today, else an empty state (a finished task never keeps the tab).
+ */
 export function TaskIndex() {
   const lastId = useLastTask((s) => s.orderId)
   const tasks = useCourierTasks()
 
-  if (lastId) return <Navigate to={`/courier/task/${lastId}`} replace />
-  const next = tasks.data?.find((t) => !isTaskDone(t.kind, t.status)) ?? tasks.data?.[0]
-  if (next) return <Navigate to={`/courier/task/${next.orderId}`} replace />
+  const open = tasks.data?.filter((t) => !isTaskDone(t.kind, t.status)) ?? []
+  const target = open.find((t) => t.orderId === lastId) ?? open[0]
+  if (target) return <Navigate to={`/courier/task/${target.orderId}`} replace />
 
   return (
     <>
@@ -30,8 +33,8 @@ export function TaskIndex() {
           <ErrorState error={tasks.error} onRetry={() => void tasks.refetch()} />
         ) : (
           <EmptyState
-            title="سفارشی برای نمایش نیست"
-            hint="امروز سفارشی به شما سپرده نشده است."
+            title="سفارش بازی برای نمایش نیست"
+            hint={tasks.data.length ? 'همه کارهای امروز انجام شده است.' : 'امروز سفارشی به شما سپرده نشده است.'}
             action={
               <Button variant="secondary" size="sm" asChild>
                 <Link to="/courier">مسیر امروز</Link>
@@ -90,6 +93,8 @@ function TaskDetail({ order, kind, task }: { order: Order; kind: TaskKind; task?
   const phone = order.pickup?.phone || order.customerPhone || task?.phone || ''
   const slot = task?.slot || order.pickup?.slot
   const done = isTaskDone(kind, order.status)
+  // Cartridge / repair / flyer pickups have no books to count.
+  const books = order.quote?.totalBooks ?? order.children.reduce((s, c) => s + c.books, 0)
 
   const markDelivered = () =>
     delivered.mutate(undefined, {
@@ -123,7 +128,7 @@ function TaskDetail({ order, kind, task }: { order: Order; kind: TaskKind; task?
         </div>
         <div className="mt-3 text-lg font-black">{order.customerName}</div>
         <div className="mt-1 text-[13px] leading-[1.7] text-muted-2">
-          {fa(address)}
+          {address}
           <br />
           {slot && <>{fa(slot)} · </>}
           <span dir="ltr">{fa(phone)}</span>
@@ -131,12 +136,14 @@ function TaskDetail({ order, kind, task }: { order: Order; kind: TaskKind; task?
       </Panel>
 
       <div className="mt-[11px] rounded-[22px] bg-accent-soft p-4 text-accent-soft-ink">
-        <div className="mb-2.5 text-sm font-extrabold">محتوای سفارش · {fa(order.quote?.totalBooks ?? 0)} کتاب</div>
+        <div className="mb-2.5 text-sm font-extrabold">
+          محتوای سفارش · {books > 0 ? `${fa(books)} کتاب` : `${fa(order.services.length)} مورد`}
+        </div>
         {order.children.map((c, i) => (
           <ContentRow key={`c${i}`} label={`${c.name} — ${c.grade}`} value={`${fa(c.books)} کتاب`} />
         ))}
         {order.services.map((s, i) => (
-          <ContentRow key={`s${i}`} label={s.label} value={fa(s.detail)} />
+          <ContentRow key={`s${i}`} label={s.label} value={<bdi>{s.detail}</bdi>} />
         ))}
         {order.children.length === 0 && order.services.length === 0 && <div className="text-[13px] opacity-80">موردی ثبت نشده است.</div>}
       </div>
@@ -158,7 +165,9 @@ function TaskDetail({ order, kind, task }: { order: Order; kind: TaskKind; task?
           {KIND_LABEL[kind]} این سفارش انجام شده است — {ORDER_STATUS_LABEL[order.status]}
         </InfoBanner>
       ) : kind === 'pickup' ? (
-        <PrimaryAction onClick={() => navigate(`/courier/verify/${order.id}`)}>رسیدم — شمارش کتاب‌ها</PrimaryAction>
+        <PrimaryAction onClick={() => navigate(`/courier/verify/${order.id}`)}>
+          {books > 0 ? 'رسیدم — شمارش کتاب‌ها' : 'رسیدم — تحویل‌گیری اقلام'}
+        </PrimaryAction>
       ) : (
         <PrimaryAction onClick={markDelivered} disabled={delivered.isPending}>
           {delivered.isPending ? 'در حال ثبت…' : 'تحویل شد'}

@@ -20,13 +20,14 @@ export function CouriersPage() {
   const [courierDialog, setCourierDialog] = useState<{ open: boolean; item?: Courier }>({ open: false })
   const [zoneDialog, setZoneDialog] = useState<{ open: boolean; item?: Zone }>({ open: false })
 
-  const zoneName = (c: Courier) => c.zoneName ?? zones.data?.find((z) => z.id === c.zoneId)?.name ?? '—'
+  // The zone list wins for couriers with a zone; the stored free-text name is only a fallback (contract v3.2).
+  const zoneName = (c: Courier) => (c.zoneId ? zones.data?.find((z) => z.id === c.zoneId)?.name : undefined) ?? c.zoneName ?? '—'
 
   return (
     <>
       <PageHeader
         title="پیک‌ها و مناطق"
-        subtitle="تخصیص مأموریت بر اساس منطقه، ظرفیت پیک و نرخ حمل همان منطقه انجام می‌شود."
+        subtitle="پیک‌ها و منطقه هر پیک را مدیریت کنید. نرخ حمل مناطق فعلاً فقط نمایشی است و در قیمت سفارش اعمال نمی‌شود."
         actions={<AddButton onClick={() => setCourierDialog({ open: true })}>افزودن پیک</AddButton>}
       />
       <QueryView query={couriers} rows={4} isEmpty={(d) => d.length === 0} empty={{ title: 'هنوز پیکی ثبت نشده است' }}>
@@ -48,7 +49,11 @@ export function CouriersPage() {
                   </span>
                   <span className="flex justify-end gap-1.5">
                     <IconAction kind="edit" label="ویرایش" onClick={() => setCourierDialog({ open: true, item: c })} />
-                    <ConfirmDelete title={`حذف پیک ${c.name}؟`} onConfirm={() => remove.mutate(c.id, { onSuccess: () => notify(`پیک ${c.name} حذف شد`) })} />
+                    <ConfirmDelete
+                      title={`حذف پیک ${c.name}؟`}
+                      description="پیکی که سفارش باز (تحویل‌نشده و لغونشده) دارد حذف نمی‌شود؛ ابتدا سفارش‌هایش را به پیک دیگری بسپارید. این کار قابل بازگشت نیست."
+                      onConfirm={() => remove.mutate(c.id, { onSuccess: () => notify(`پیک ${c.name} حذف شد`) })}
+                    />
                   </span>
                 </AdminRow>
               )

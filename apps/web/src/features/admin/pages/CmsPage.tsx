@@ -1,17 +1,13 @@
-import { useState } from 'react'
 import { DsSwitch } from '@/components/brand'
-import { Input } from '@/components/ui/input'
-import { notify, toast } from '@/components/ui/sonner'
+import { notify } from '@/components/ui/sonner'
 import { fa } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useCmsMutations, useCmsSections } from '../api'
-import { Field, FormDialog } from '../components/FormDialog'
-import { PageHeader, QueryView } from '../components/kit'
+import { CardNote, PageHeader, QueryView } from '../components/kit'
 
 export function CmsPage() {
   const query = useCmsSections()
   const { update } = useCmsMutations()
-  const [adding, setAdding] = useState(false)
 
   return (
     <>
@@ -45,48 +41,7 @@ export function CmsPage() {
           </div>
         )}
       </QueryView>
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-4 rounded-[24px] bg-night p-5">
-        <div>
-          <div className="text-[15px] font-extrabold text-white">بنر، تصویر و انیمیشن هر بخش</div>
-          <div className="mt-1 text-[13px] text-[#9aa2b8]">برای هر بخش می‌توان بنر، تصویر یا انیمیشن سبک بارگذاری کرد؛ ترتیب با کشیدن تغییر می‌کند.</div>
-        </div>
-        <button
-          type="button"
-          onClick={() => setAdding(true)}
-          className="cursor-pointer rounded-full bg-accent px-[22px] py-[13px] text-[13.5px] font-extrabold text-white shadow-[0_8px_18px_var(--glow)] hover:bg-accent-dark"
-        >
-          افزودن بخش
-        </button>
-      </div>
-      <AddSectionDialog key={String(adding)} open={adding} onOpenChange={setAdding} />
+      <CardNote>بخش‌ها و ترتیبشان را کد صفحه اصلی تعیین می‌کند؛ از اینجا فقط روشن یا خاموش می‌شوند.</CardNote>
     </>
-  )
-}
-
-function AddSectionDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
-  const [label, setLabel] = useState('')
-  const { create } = useCmsMutations()
-  const submit = () => {
-    const name = label.trim()
-    if (!name) {
-      toast.error('عنوان بخش را وارد کنید')
-      return
-    }
-    create.mutate(
-      { label: name },
-      {
-        onSuccess: () => {
-          notify(`بخش ${name} اضافه شد`)
-          onOpenChange(false)
-        },
-      },
-    )
-  }
-  return (
-    <FormDialog open={open} onOpenChange={onOpenChange} title="افزودن بخش" submitLabel="افزودن" pending={create.isPending} onSubmit={submit}>
-      <Field label="عنوان بخش">
-        <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="مثلاً نظر مشتریان" autoFocus />
-      </Field>
-    </FormDialog>
   )
 }

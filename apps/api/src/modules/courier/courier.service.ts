@@ -11,11 +11,21 @@ import type { AuthUser } from '../../common/auth/auth-user.js';
 import type { OrderStatus } from '../../common/constants.js';
 import { addDays, tehranDayStart, tehranYmd } from '../../common/utils/dates.js';
 import { defined } from '../../common/utils/defined.js';
+import { fa } from '../../common/utils/fa.js';
 import { assertObjectId } from '../../common/utils/object-id.js';
 import { normalizePhone } from '../../common/utils/phone.js';
 import { saveOrConflict } from '../../common/utils/save-or-conflict.js';
+import { CatalogService } from '../catalog/catalog.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
-import { courierDetail, draftFromOrder, orderChildren, pushStatus, recountChildren } from '../orders/order-helpers.js';
+import {
+  courierDetail,
+  draftFromOrder,
+  orderChildren,
+  pickupLabelsOf,
+  pushStatus,
+  recountChildren,
+  TERMINAL_STATUSES,
+} from '../orders/order-helpers.js';
 import { Order, OrderDocument } from '../orders/order.schema.js';
 import { PricingService } from '../pricing/pricing.service.js';
 import { UploadsService } from '../uploads/uploads.service.js';
@@ -26,8 +36,6 @@ import { Courier, CourierDocument } from './courier.schema.js';
 import type { CreateCourierDto, UpdateCourierDto, VerifyPickupDto } from './dto/courier.dto.js';
 
 const PICKUP_PENDING: OrderStatus[] = ['registered', 'confirmed', 'courier_assigned'];
-/** Stubbed payroll: flat fee per completed pickup/delivery. */
-export const PER_TASK_FEE = 75000;
 
 export interface CourierTask {
   id: string;
@@ -60,12 +68,27 @@ export class CourierService {
     private readonly pricing: PricingService,
     private readonly notifications: NotificationsService,
     private readonly uploads: UploadsService,
+    private readonly catalog: CatalogService,
   ) {}
 
   async forUser(user: AuthUser): Promise<CourierDocument> {
     const courier = await this.couriers.findOne({ userId: new Types.ObjectId(user.id) });
     if (!courier) throw new ForbiddenException('حساب پیک برای این کاربر تعریف نشده است');
     return courier;
+  }
+
+  /**
+   * Courier JSON with `zoneName` derived from `zoneId` when it is set (v3.2); the stored free-text
+   * `zoneName` is only a fallback for couriers without a (still existing) zone.
+   */
+  private async withZoneNames(couriers: CourierDocument[]) {
+    const ids = [...new Set(couriers.filter((c) => c.zoneId).map((c) => String(c.zoneId)))];
+    const zones = ids.length ? await this.zones.find({ _id: { $in: ids } }, { name: 1 }) : [];
+    const names = new Map(zones.map((z) => [String(z._id), z.name]));
+    return couriers.map((c) => ({
+      ...c.toJSON(),
+      zoneName: (c.zoneId && names.get(String(c.zoneId))) || c.zoneName,
+    }));
   }
 
   /** Orders relevant to the courier today: pending pickups/deliveries + anything completed today. */
@@ -125,14 +148,16 @@ export class CourierService {
     const { orders, since } = await this.todaysOrders(courier._id);
     const pickupsToday = orders.filter((o) => eventToday(o, 'picked_up', since) || eventToday(o, 'awaiting_approval', since)).length;
     const deliveriesToday = orders.filter((o) => eventToday(o, 'delivered', since)).length;
-    const todayEarnings = (pickupsToday + deliveriesToday) * PER_TASK_FEE;
+    // v3.3 «تنظیمات»: the fee per completed task and the settlement weekday
+    const { courier: pay } = await this.catalog.getSettings();
+    const todayEarnings = (pickupsToday + deliveriesToday) * pay.perTaskFee;
 
     const noon = new Date(`${tehranYmd()}T12:00:00+03:30`);
-    const toThursday = (4 - noon.getUTCDay() + 7) % 7 || 7;
-    const zone = courier.zoneId ? await this.zones.findById(courier.zoneId, { name: 1 }) : null;
+    const toSettlement = (pay.settlementWeekday - noon.getUTCDay() + 7) % 7 || 7;
+    const [json] = await this.withZoneNames([courier]);
 
     return {
-      courier: { ...courier.toJSON(), zoneName: courier.zoneName ?? zone?.name, todayCount: this.toTasks(orders, since).length },
+      courier: { ...json, todayCount: this.toTasks(orders, since).length },
       stats: {
         pickupsToday,
         deliveriesToday,
@@ -143,7 +168,7 @@ export class CourierService {
         today: todayEarnings,
         week: courier.earningsWeekBase + todayEarnings,
         bonus: courier.bonus,
-        nextSettlement: tehranYmd(addDays(noon, toThursday)),
+        nextSettlement: tehranYmd(addDays(noon, toSettlement)),
       },
     };
   }
@@ -160,6 +185,11 @@ export class CourierService {
   async verify(user: AuthUser, orderId: string, dto: VerifyPickupDto) {
     const { courier, order } = await this.assignedOrder(user, orderId);
     if (!PICKUP_PENDING.includes(order.status)) throw new BadRequestException('این سفارش در مرحله تحویل‌گیری نیست');
+    // v3.3: one answer per item of the order's own pickup checklist (older orders: the 4 defaults)
+    const pickupLabels = pickupLabelsOf(order);
+    if (dto.checks.length !== pickupLabels.length) {
+      throw new BadRequestException(`چک‌لیست تحویل‌گیری این سفارش ${fa(pickupLabels.length)} مورد دارد`);
+    }
 
     // pickup photos must be this courier's own `pickup` uploads
     const photos = dto.photoIds?.length ? await this.uploads.requireOwned(dto.photoIds, user.id, ['pickup']) : [];
@@ -230,7 +260,7 @@ export class CourierService {
         return this.toTasks(orders, since).length;
       }),
     );
-    return couriers.map((c, i) => ({ ...c.toJSON(), todayCount: counts[i] }));
+    return (await this.withZoneNames(couriers)).map((c, i) => ({ ...c, todayCount: counts[i] }));
   }
 
   /** Links (or creates) the courier's login user so the phone can sign in to the courier app. */
@@ -256,7 +286,8 @@ export class CourierService {
       ...(dto.zoneId ? { zoneId: new Types.ObjectId(dto.zoneId) } : {}),
     });
     courier.userId = await this.linkUser(courier._id, phone, dto.name);
-    return courier.save();
+    const [json] = await this.withZoneNames([await courier.save()]);
+    return json;
   }
 
   async update(id: string, dto: UpdateCourierDto) {
@@ -268,7 +299,9 @@ export class CourierService {
     }
     const { phone: rawPhone, zoneId, ...rest } = dto;
     Object.assign(courier, defined(rest));
-    if (zoneId) courier.zoneId = new Types.ObjectId(zoneId);
+    // null (or '') clears the zone ($unset on save); undefined leaves it untouched
+    if (zoneId === null) courier.set('zoneId', undefined);
+    else if (zoneId) courier.zoneId = new Types.ObjectId(zoneId);
     if (rawPhone) {
       const phone = normalizePhone(rawPhone);
       if (!phone) throw new BadRequestException('شماره موبایل پیک معتبر نیست');
@@ -278,11 +311,16 @@ export class CourierService {
         courier.userId = await this.linkUser(courier._id, phone, courier.name);
       }
     }
-    return courier.save();
+    const [json] = await this.withZoneNames([await courier.save()]);
+    return json;
   }
 
+  /** 409 while the courier still has open (not delivered/cancelled) orders — they would be orphaned. */
   async remove(id: string) {
     assertObjectId(id, 'پیک');
+    if (!(await this.couriers.exists({ _id: id }))) throw new NotFoundException('پیک یافت نشد');
+    const open = await this.orders.countDocuments({ courierId: new Types.ObjectId(id), status: { $nin: TERMINAL_STATUSES } });
+    if (open) throw new ConflictException(`این پیک ${fa(open)} سفارش باز دارد؛ ابتدا سفارش‌ها را به پیک دیگری بدهید`);
     const courier = await this.couriers.findByIdAndDelete(id);
     if (!courier) throw new NotFoundException('پیک یافت نشد');
     if (courier.userId) {

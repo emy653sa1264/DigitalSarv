@@ -24,6 +24,8 @@ export const ADMIN_MENU: AdminMenuItem[] = [
   { key: 'prod', to: '/admin/production', label: 'تولید و کنترل کیفیت' },
   { key: 'colors', to: '/admin/services', label: 'سرویس‌ها و گزینه‌ها' },
   { key: 'prices', to: '/admin/prices', label: 'قیمت‌ها' },
+  { key: 'plans', to: '/admin/plans', label: 'عضویت‌ها' },
+  { key: 'settings', to: '/admin/settings', label: 'تنظیمات' },
   { key: 'rules', to: '/admin/rules', label: 'قوانین قیمت' },
   { key: 'camp', to: '/admin/campaigns', label: 'کمپین‌ها' },
   { key: 'customers', to: '/admin/customers', label: 'مشتریان' },

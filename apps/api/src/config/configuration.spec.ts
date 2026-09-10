@@ -100,4 +100,15 @@ describe('loadAppConfig', () => {
     expect(() => loadAppConfig({ ...PROD, API_PUBLIC_URL: 'sarv.example' })).toThrow(/API_PUBLIC_URL/);
     expect(() => loadAppConfig({ NODE_ENV: 'development', UPLOAD_MAX_MB: 'lots' })).toThrow(/UPLOAD_MAX_MB/);
   });
+
+  it('web push (VAPID) is optional: both keys or neither; a subject is required in production', () => {
+    expect(loadAppConfig({ NODE_ENV: 'development' }).vapid).toBeNull();
+    expect(loadAppConfig({ NODE_ENV: 'development', VAPID_PUBLIC_KEY: 'pub', VAPID_PRIVATE_KEY: 'priv' }).vapid)
+      .toEqual({ publicKey: 'pub', privateKey: 'priv', subject: 'mailto:dev@localhost' });
+    expect(() => loadAppConfig({ NODE_ENV: 'development', VAPID_PUBLIC_KEY: 'pub' })).toThrow(/VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY/);
+    expect(() => loadAppConfig({ ...PROD, VAPID_PUBLIC_KEY: 'pub', VAPID_PRIVATE_KEY: 'priv' })).toThrow(/VAPID_SUBJECT must be set/);
+    expect(() => loadAppConfig({ NODE_ENV: 'development', VAPID_PUBLIC_KEY: 'p', VAPID_PRIVATE_KEY: 'q', VAPID_SUBJECT: 'me' })).toThrow(/VAPID_SUBJECT/);
+    expect(loadAppConfig({ ...PROD, VAPID_PUBLIC_KEY: 'p', VAPID_PRIVATE_KEY: 'q', VAPID_SUBJECT: 'mailto:ops@sarv.example' }).vapid?.subject)
+      .toBe('mailto:ops@sarv.example');
+  });
 });

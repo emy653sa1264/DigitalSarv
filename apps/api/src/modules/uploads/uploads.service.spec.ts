@@ -7,7 +7,8 @@ import { Types } from 'mongoose';
 import { PDFDocument } from 'pdf-lib';
 import { fakeModel, type Doc } from '../../../test/fake-model.js';
 import type { AuthUser } from '../../common/auth/auth-user.js';
-import type { OrderDraft } from '../pricing/pricing.types.js';
+import { normalizeDocs } from '../pricing/pricing.js';
+import type { DocsSpec, OrderDraft } from '../pricing/pricing.types.js';
 import { LocalStorageDriver } from './storage.js';
 import { UploadsService } from './uploads.service.js';
 
@@ -114,6 +115,29 @@ describe('UploadsService ownership', () => {
     const pages = (r: { draft: OrderDraft }) => (r.draft.services[0].spec as { pages: number }).pages;
     expect(pages(await svc.applyToDraft(draft(String(theirs._id), 7), String(customerId), false))).toBe(7);
     expect(pages(await svc.applyToDraft(draft(String(mine._id), 7), undefined, false))).toBe(7);
+  });
+
+  it('applyToDraft takes pages from the PDF for a print service too (purpose docs only)', async () => {
+    const { svc } = setup([mine, photo]);
+    const printDraft = (fileId: string): OrderDraft => ({
+      children: [],
+      services: [{ kind: 'print', spec: { fileId, pages: 1, scope: 'all', paper: 'tahrir80', size: 'A4', ink: 'bw', sides: 'single', copies: 1, binding: 'none', staple: false, laminate: 'none' } }],
+    });
+    const { draft: d, uploadIds } = await svc.applyToDraft(printDraft(String(mine._id)), String(customerId), true);
+    expect(d.services[0].spec).toMatchObject({ pages: 12, fileName: 'a.pdf' });
+    expect(uploadIds).toEqual([String(mine._id)]);
+    await expect(svc.applyToDraft(printDraft(String(photo._id)), String(customerId), true)).rejects.toThrow(/برای این بخش/);
+  });
+
+  it('the PDF page count still overrides `pages` for a v3 docs range (its ranges are clipped to it when priced)', async () => {
+    const { svc } = setup([mine]);
+    const rangeDraft: OrderDraft = {
+      children: [],
+      services: [{ kind: 'docs', spec: { fileId: String(mine._id), pages: 500, scope: 'range', pageRanges: [{ from: 10, to: 20 }], pagePages: '400', ink: 'bw', sides: 'single', copies: 1, bindColor: 'navy', stamp: 'gold' } }],
+    };
+    const { draft: d } = await svc.applyToDraft(rangeDraft, String(customerId), true);
+    expect(d.services[0].spec).toMatchObject({ pages: 12, pageRanges: [{ from: 10, to: 20 }], pagePages: '400' });
+    expect(normalizeDocs(d.services[0].spec as DocsSpec).pagesN).toBe(3); // 10–12; page 400 is outside the file
   });
 });
 

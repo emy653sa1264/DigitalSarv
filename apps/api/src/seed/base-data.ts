@@ -2,7 +2,7 @@
  * Production-safe reference data (catalog, prices, plans, rules, campaign, CMS, notification
  * templates, zones, centres) — values from the design prototype (design/v2/_new_script_admin.js).
  */
-import type { CampaignService } from '../common/constants.js';
+import type { CampaignService, ExtraService } from '../common/constants.js';
 
 export const PLANS = [
   { _id: 'bronze', name: 'برنزی', title: 'دفترچه', price: 0, cap: 0, disc: 0, freeDelivery: false, freePickup: false,
@@ -29,6 +29,11 @@ export const COLORS = [
   { key: 'gold', name: 'طلایی ویژه', hex: '#c9962b', extra: 20000, on: false },
 ].map((c, i) => ({ ...c, sort: i + 1 }));
 
+/** v3.3 extras scope: these are school-binding only (the rest are offered for چاپ اسناد too). */
+export const SCHOOL_ONLY_EXTRAS = ['laminate', 'tag', 'cover'];
+/** v3.3: extras that print the child's label text. */
+export const TEXT_EXTRAS = ['tag', 'cover'];
+
 export const EXTRAS = [
   { key: 'tag', label: 'برچسب نام', price: 3000, on: true },
   { key: 'laminate', label: 'لمینت جلد', price: 12000, on: true },
@@ -42,12 +47,24 @@ export const EXTRAS = [
   { key: 'round', label: 'گردکردن گوشه‌ها', price: 5500, on: false },
   { key: 'sleeve', label: 'کاور پلاستیکی', price: 6500, on: true },
   { key: 'numbering', label: 'شماره‌گذاری صفحات', price: 4500, on: false },
-].map((e, i) => ({ ...e, sort: i + 1 }));
+].map((e, i) => ({
+  ...e,
+  sort: i + 1,
+  services: (SCHOOL_ONLY_EXTRAS.includes(e.key) ? ['school'] : ['school', 'print']) as ExtraService[],
+  needsText: TEXT_EXTRAS.includes(e.key),
+}));
 
 export const GRADES = Object.entries({
   'اول ابتدایی': 8, 'دوم ابتدایی': 8, 'سوم ابتدایی': 9, 'چهارم ابتدایی': 10, 'پنجم ابتدایی': 11, 'ششم ابتدایی': 11,
   'هفتم': 12, 'هشتم': 12, 'نهم': 13, 'اول دبیرستان': 13, 'دوم دبیرستان': 13, 'سوم دبیرستان': 14,
 }).map(([name, books], i) => ({ name, books, on: true, sort: i + 1 }));
+
+/** «نوع کاغذ» of چاپ اسناد (v3); `price` = toman per A4 sheet. */
+export const PAPERS = [
+  { key: 'tahrir80', name: 'تحریر ۸۰ گرم', price: 250, on: true, sort: 1 },
+  { key: 'tahrir70', name: 'تحریر ۷۰ گرم', price: 200, on: true, sort: 2 },
+  { key: 'glossy', name: 'گلاسه', price: 1200, on: true, sort: 3 },
+];
 
 /** The prototype's 5 rules, typed. Rule 4 is off: the coupon itself already applies the campaign discount. */
 export const RULES = [
@@ -66,25 +83,45 @@ export const RULES = [
 /** The prototype's rule usage counters (demo seed only). */
 export const DEMO_RULE_USAGE = [412, 186, 230, 842, 57];
 
-/** Landing sections, design order («قیمت‌ها» and «نظر مشتریان» off). */
+/**
+ * Landing sections, design order («قیمت‌ها» off). v3.2: the two document cards have their own switches —
+ * `print` «چاپ اسناد» and `docs` «پایان‌نامه و صحافی».
+ */
 export const CMS = [
-  ['hero', 'هیرو', true], ['school', 'فنری کتاب مدرسه', true], ['docs', 'چاپ اسناد', true],
+  ['hero', 'هیرو', true], ['school', 'فنری کتاب مدرسه', true],
+  ['print', 'چاپ اسناد', true], ['docs', 'پایان‌نامه و صحافی', true],
   ['flyer', 'تراکت', true], ['cartridge', 'کارتریج', true], ['repair', 'تعمیر پرینتر', true],
-  ['pickup', 'تحویل‌گیری و تحویل درب منزل', true], ['how', 'چطور کار می‌کند', true], ['prices', 'قیمت‌ها', false],
-  ['plans', 'عضویت', true], ['campaign', 'کمپین', true], ['reviews', 'نظر مشتریان', false],
+  ['how', 'چطور کار می‌کند', true], ['prices', 'قیمت‌ها', false],
+  ['plans', 'عضویت', true], ['campaign', 'کمپین', true],
   ['faq', 'پرسش‌های پرتکرار', true], ['cta', 'فراخوان نهایی', true], ['footer', 'فوتر', true],
 ] as const;
 
-/** Design `notifs` (channel chips پیامک = sms, پوش = push). */
+/** Landing sections the landing does not render — `seed:base` deletes them so admin has no switch that controls nothing. */
+export const OBSOLETE_CMS_KEYS = ['pickup', 'reviews'];
+
+/** The pre-v3.2 default label of the `docs` section; `seed:base` relabels it only while it is unchanged. */
+export const CMS_DOCS_OLD_LABEL = 'چاپ اسناد';
+
+/**
+ * One template per dispatched event (`DISPATCHED_EVENTS`), all `push` = in-app notification + web push
+ * (v3.3: SMS is only for the login OTP). Texts from the design `notifs` plus the v3.2 additions; the
+ * text is shown as written (the inbox shows the order code).
+ */
 export const NOTIFICATIONS = [
-  { event: 'registered', channel: 'sms', text: 'سفارش شما ثبت شد.', on: true },
+  { event: 'registered', channel: 'push', text: 'سفارش شما ثبت شد.', on: true },
+  { event: 'confirmed', channel: 'push', text: 'سفارش شما تأیید شد.', on: false },
   { event: 'courier_assigned', channel: 'push', text: 'پیک برای شما تعیین شد.', on: true },
-  { event: 'picked_up', channel: 'sms', text: 'کتاب‌های شما دریافت شدند.', on: true },
+  { event: 'picked_up', channel: 'push', text: 'کتاب‌های شما دریافت شدند.', on: true },
+  { event: 'awaiting_approval', channel: 'push', text: 'تعداد اقلام تحویل‌گرفته با سفارش فرق داشت؛ پشتیبانی برای هماهنگی تماس می‌گیرد.', on: true },
   { event: 'preparing', channel: 'push', text: 'سفارش وارد مرحله تولید شد.', on: true },
+  { event: 'binding', channel: 'push', text: 'سفارش شما در حال فنری/صحافی است.', on: false },
+  { event: 'extras', channel: 'push', text: 'خدمات اضافی سفارش در حال انجام است.', on: false },
   { event: 'qc', channel: 'push', text: 'سفارش در حال کنترل کیفیت است.', on: false },
-  { event: 'packing', channel: 'sms', text: 'سفارش آماده شده است.', on: true },
+  { event: 'packing', channel: 'push', text: 'سفارش آماده شده است.', on: true },
   { event: 'out_for_delivery', channel: 'push', text: 'پیک در مسیر شماست.', on: true },
-  { event: 'delivered', channel: 'sms', text: 'سفارش تحویل داده شد.', on: true },
+  { event: 'delivered', channel: 'push', text: 'سفارش تحویل داده شد.', on: true },
+  // cash-on-delivery and unpaid orders are cancelled too, so the refund is worded conditionally
+  { event: 'cancelled', channel: 'push', text: 'سفارش شما لغو شد؛ اگر مبلغی پرداخت کرده بودید، به کیف پول شما برگشت.', on: true },
 ] as const;
 
 export const ZONES = [
@@ -107,7 +144,7 @@ export const CENTERS = [
     address: 'تهران، پونک، بلوار عدل، پلاک ۶۲', lat: 35.7615, lng: 51.3312 },
 ];
 
-/** The design's campaign («اول مهر ۱۴۰۵»): «سرویس‌های مشمول: فنری کتاب، چاپ اسناد». */
+/** The design's campaign («اول مهر ۱۴۰۵»): «سرویس‌های مشمول: فنری کتاب، پایان‌نامه و صحافی، چاپ اسناد» (print since v3). */
 export const SCHOOL_CAMPAIGN = {
   title: 'اول مهر ۱۴۰۵',
   code: 'SCHOOL1405',
@@ -116,5 +153,5 @@ export const SCHOOL_CAMPAIGN = {
   dailyCapacity: 120,
   bannerNote: 'تا پایان شهریور: ۵٪ تخفیف با کد SCHOOL1405',
   pickupHours: '۱۰ تا ۲۰',
-  services: ['school', 'docs'] as CampaignService[],
+  services: ['school', 'docs', 'print'] as CampaignService[],
 };

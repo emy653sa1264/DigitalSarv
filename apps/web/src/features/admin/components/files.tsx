@@ -59,6 +59,26 @@ export function UploadThumb({ id, label, className }: { id: string; label: strin
   )
 }
 
+/** Document rows first, then a wrap of photo thumbnails (e.g. the output of `orderFiles`). */
+export function OrderFilesList({ files }: { files: { id: string; label: string; photo: boolean }[] }) {
+  const docs = files.filter((f) => !f.photo)
+  const photos = files.filter((f) => f.photo)
+  return (
+    <>
+      {docs.map((f) => (
+        <UploadLink key={f.id} id={f.id} label={f.label} />
+      ))}
+      {photos.length > 0 && (
+        <div className={cn('flex flex-wrap gap-2', docs.length > 0 && 'mt-2 border-t border-line-soft pt-3')}>
+          {photos.map((f) => (
+            <UploadThumb key={f.id} id={f.id} label={f.label} />
+          ))}
+        </div>
+      )}
+    </>
+  )
+}
+
 /** "label · دریافت" row for a non-image attachment. */
 export function UploadLink({ id, label }: { id: string; label: string }) {
   return (

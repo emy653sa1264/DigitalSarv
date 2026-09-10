@@ -60,31 +60,71 @@ function KpiGrid({ kpis }: { kpis: Dashboard['kpis'] }) {
   )
 }
 
+/** Tallest bar in px; the value label sits above it inside the 150px plot. */
+const BAR_MAX = 118
+
+/** Today as the API's Tehran `yyyy-mm-dd`. */
+const tehranToday = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tehran' }).format(new Date())
+
+/**
+ * Books per day, last 7 days. Bars are solid admin violet (hex from the design tokens, set inline so they can
+ * never end up transparent); today — or the busiest day when today is not in the range — is the dark gradient
+ * with a glow and a filled value pill. Heights are in px so the plot works at any width.
+ */
 function BooksChart({ data }: { data: Dashboard }) {
-  const max = Math.max(1, ...data.booksLast7.map((b) => b.count))
+  const days = data.booksLast7
+  const max = Math.max(1, ...days.map((b) => b.count))
+  const todayIdx = days.findIndex((b) => b.date.slice(0, 10) === tehranToday())
+  const highlight = todayIdx >= 0 ? todayIdx : days.findIndex((b) => b.count === max)
+  const violet = TONES.violet
+
   return (
     <AdminCard>
       <div className="mb-4 flex items-center justify-between gap-2.5">
         <CardTitle>کتاب‌های فنری‌شده در ۷ روز</CardTitle>
         <span className="rounded-full bg-accent-soft px-3 py-[5px] text-[11.5px] font-extrabold text-accent-soft-ink">{fa(data.booksLast7Total)} کتاب</span>
       </div>
-      <div className="flex h-[170px] items-end gap-2 sm:gap-3">
-        {data.booksLast7.map((b) => {
-          const ratio = b.count / max
-          return (
-            <div key={b.date} className="flex h-full flex-1 flex-col items-center justify-end gap-2" title={`${fa(b.count)} کتاب`}>
-              <span className="text-[10.5px] font-bold text-muted-2">{fa(b.count)}</span>
-              <div
-                className={cn(
-                  'w-full max-w-[34px] rounded-[12px_12px_6px_6px]',
-                  ratio > 0.85 ? 'bg-[linear-gradient(180deg,#b9a4ff,#4c31b8)]' : 'bg-[linear-gradient(180deg,#e3dbff,#b9a4ff)]',
-                )}
-                style={{ height: `${Math.max(4, ratio * 100)}%` }}
-              />
-              <span className="text-[11.5px] text-muted-2">{b.label}</span>
-            </div>
-          )
-        })}
+      <div role="img" aria-label={`کتاب‌های فنری‌شده: ${days.map((b) => `${b.label} ${fa(b.count)}`).join('، ')}`}>
+        <div className="grid h-[150px] grid-cols-7 items-end gap-1.5 border-b-2 border-line-input sm:gap-3" aria-hidden>
+          {days.map((b, i) => {
+            const on = i === highlight
+            const height = b.count > 0 ? Math.max(6, Math.round((b.count / max) * BAR_MAX)) : 3
+            return (
+              <div key={b.date} className="flex min-w-0 flex-col items-center justify-end" title={`${b.label}: ${fa(b.count)} کتاب`}>
+                <span
+                  className={cn(
+                    'mb-1 rounded-full px-1.5 py-px text-[10.5px] leading-5 font-extrabold sm:text-[11.5px]',
+                    on ? 'bg-violet text-white' : 'text-ink',
+                  )}
+                >
+                  {fa(b.count)}
+                </span>
+                <div
+                  className="w-full max-w-[40px] rounded-t-[10px] rounded-b-[3px]"
+                  style={{
+                    height,
+                    background: b.count === 0 ? '#cfd8ec' : on ? `linear-gradient(180deg, ${violet.base} 0%, ${violet.dark} 100%)` : violet.base,
+                    boxShadow: on && b.count > 0 ? `0 8px 18px ${violet.glow}` : undefined,
+                  }}
+                />
+              </div>
+            )
+          })}
+        </div>
+        <div className="mt-2 grid grid-cols-7 gap-1.5 sm:gap-3" aria-hidden>
+          {days.map((b, i) => (
+            <span
+              key={b.date}
+              title={b.label}
+              className={cn(
+                'min-w-0 truncate text-center text-[10.5px] sm:text-[11.5px]',
+                i === highlight ? 'font-extrabold text-violet-dark' : 'font-semibold text-muted-2',
+              )}
+            >
+              {b.label}
+            </span>
+          ))}
+        </div>
       </div>
     </AdminCard>
   )

@@ -77,8 +77,8 @@ function TaskCard({ task }: { task: CourierTask }) {
         <span className="text-[12.5px] font-bold text-muted-1">{fa(task.code)}</span>
       </div>
       <div className="mt-2.5 text-[15px] font-extrabold">{task.customer}</div>
-      <div className="mt-[3px] text-[12.5px] leading-[1.6] text-muted-2">{fa(task.address)}</div>
-      <div className="mt-2 text-[12.5px] font-extrabold text-green-dark">{fa(task.detail)}</div>
+      <div className="mt-[3px] text-[12.5px] leading-[1.6] text-muted-2">{task.address}</div>
+      <div className="mt-2 text-[12.5px] font-extrabold text-green-dark">{task.detail}</div>
       <div className="mt-3 flex gap-2">
         <Button variant="secondary" size="sm" className="h-10 flex-1" onClick={open}>
           جزئیات

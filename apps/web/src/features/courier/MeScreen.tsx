@@ -1,11 +1,22 @@
+import { useState } from 'react'
 import { LogOut, User } from 'lucide-react'
 import { ErrorState, LoadingBlock, MobileHeader, Panel, ScreenBody, TONES, type BrandTone } from '@/components/brand'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/components/ui/sonner'
 import { fa, money } from '@/lib/format'
 import { useLogout } from '@/lib/query'
 import type { CourierMe } from '@/lib/types'
-import { useCourierMe, useEndShift } from './api'
+import { useCourierMe, useCourierTasks, useEndShift } from './api'
 import { faDecimal, settlementLabel } from './utils'
 
 export function MeScreen() {
@@ -39,6 +50,9 @@ function gradient(tone: BrandTone) {
 function MeContent({ data }: { data: CourierMe }) {
   const { courier, stats, earnings } = data
   const endShift = useEndShift()
+  const tasks = useCourierTasks()
+  const openTasks = tasks.data?.filter((t) => !t.done).length ?? 0
+  const [confirmEnd, setConfirmEnd] = useState(false)
   const logout = useLogout()
   const offShift = courier.status === 'off_shift'
   const zone = courier.zoneName ? (courier.zoneName.startsWith('منطقه') ? courier.zoneName : `منطقه ${courier.zoneName}`) : null
@@ -99,19 +113,44 @@ function MeContent({ data }: { data: CourierMe }) {
         <button
           type="button"
           disabled={offShift || endShift.isPending}
-          onClick={() => endShift.mutate(undefined, { onSuccess: () => notify('شیفت امروز بسته شد') })}
+          onClick={() => setConfirmEnd(true)}
           className="flex-1 cursor-pointer rounded-full bg-green-soft py-[15px] text-sm font-extrabold text-green-dark hover:bg-[#c3edd9] disabled:cursor-default disabled:opacity-60"
         >
-          پایان شیفت
+          {endShift.isPending ? 'در حال ثبت…' : 'پایان شیفت'}
         </button>
-        <button
-          type="button"
-          onClick={() => notify('فرم گزارش مشکل باز شد')}
-          className="flex-1 cursor-pointer rounded-full bg-green-soft py-[15px] text-sm font-extrabold text-green-dark hover:bg-[#c3edd9]"
+        <a
+          href="tel:02191002233"
+          className="flex flex-1 items-center justify-center rounded-full bg-green-soft py-[15px] text-sm font-extrabold text-green-dark hover:bg-[#c3edd9]"
         >
-          گزارش مشکل
-        </button>
+          تماس با پشتیبانی
+        </a>
       </div>
+
+      <AlertDialog open={confirmEnd} onOpenChange={setConfirmEnd}>
+        <AlertDialogContent className="rounded-[26px] border-line bg-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-lg font-black">پایان شیفت امروز؟</AlertDialogTitle>
+            <AlertDialogDescription className="text-[13.5px] leading-7 text-muted-1">
+              {tasks.isPending
+                ? 'در حال بررسی کارهای امروز…'
+                : tasks.isError
+                  ? 'فهرست کارهای امروز دریافت نشد؛ پیش از پایان شیفت مطمئن شوید کار بازی ندارید.'
+                  : openTasks > 0
+                    ? `هنوز ${fa(openTasks)} کار باز در مسیر امروز دارید. با پایان شیفت، وضعیت شما «خارج از شیفت» می‌شود.`
+                    : 'همه کارهای امروز انجام شده است. با پایان شیفت، وضعیت شما «خارج از شیفت» می‌شود.'}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>انصراف</AlertDialogCancel>
+            <AlertDialogAction
+              variant={openTasks > 0 ? 'destructive' : 'default'}
+              onClick={() => endShift.mutate(undefined, { onSuccess: () => notify('شیفت امروز بسته شد') })}
+            >
+              پایان شیفت
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <Button variant="outline" block className="mt-3 h-12 hover:bg-accent-soft" onClick={() => void signOut()}>
         <LogOut strokeWidth={2.4} />

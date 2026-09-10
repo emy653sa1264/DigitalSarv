@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
-import { ClipboardList } from 'lucide-react'
+import { ClipboardList, CreditCard } from 'lucide-react'
 import { RadioGroup as RadioGroupPrimitive } from 'radix-ui'
 import { useShallow } from 'zustand/react/shallow'
-import { EmptyState, ErrorState, LoadingBlock, Panel, TotalsPanel } from '@/components/brand'
+import { EmptyState, ErrorState, GradientBadge, LoadingBlock, Panel, TotalsPanel } from '@/components/brand'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/components/ui/sonner'
 import { fa, money, pct, toEnDigits } from '@/lib/format'
@@ -81,7 +81,16 @@ export function PayScreen() {
 
   return (
     <Screen title="پرداخت" subtitle="مرور نهایی و روش پرداخت" icon={ClipboardList} tone="violet" back="/app/membership">
-      {empty ? (
+      {leaving ? (
+        // The draft is already reset while the browser leaves for the bank — don't flash the empty state.
+        <Panel className="flex flex-col items-center gap-2 py-8 text-center">
+          <GradientBadge tone="violet" size={56}>
+            <CreditCard className="size-[26px]" strokeWidth={2.4} />
+          </GradientBadge>
+          <div className="mt-2 text-[15px] font-extrabold">در حال انتقال به درگاه…</div>
+          <div className="text-xs text-muted-2">چند لحظه صبر کنید؛ صفحه پرداخت بانک باز می‌شود.</div>
+        </Panel>
+      ) : empty ? (
         <EmptyState
           title="سفارش شما خالی است"
           hint="برای پرداخت، ابتدا سفارش خود را بسازید."
@@ -154,7 +163,13 @@ export function PayScreen() {
         </>
       )}
       <CtaButton className="mt-[13px]" disabled={(empty && !leaving) || createOrder.isPending || leaving} onClick={submit}>
-        {leaving ? 'در حال انتقال به درگاه پرداخت…' : createOrder.isPending ? 'در حال ثبت سفارش…' : 'پرداخت و ثبت سفارش'}
+        {leaving
+          ? 'در حال انتقال به درگاه پرداخت…'
+          : createOrder.isPending
+            ? 'در حال ثبت سفارش…'
+            : draft.payMethod === 'cod'
+              ? 'ثبت سفارش'
+              : 'پرداخت و ثبت سفارش'}
       </CtaButton>
     </Screen>
   )

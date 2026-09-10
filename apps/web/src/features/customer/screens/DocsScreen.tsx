@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { FileText, Plus, Upload, X } from 'lucide-react'
+import { ClipboardList, Upload } from 'lucide-react'
 import { Chip, ErrorState, GradientBadge, LoadingBlock, TotalsPanel } from '@/components/brand'
 import { Input } from '@/components/ui/input'
 import { notify } from '@/components/ui/sonner'
@@ -10,20 +10,22 @@ import { useCatalog } from '@/lib/query'
 import type { DocsSpec } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { AttachmentRow, PendingRow } from '../components/Attachments'
+import { MixedColorPanel, PageScopeBlock, RangeListPanel } from '../components/PageScope'
 import { Screen } from '../components/Screen'
-import { CtaButton, FilePick, InlineStepper, NumInput, OptionRow, StepCard } from '../components/parts'
+import { CtaButton, FilePick, InlineStepper, OptionRow, StepCard } from '../components/parts'
 import { useServiceQuote } from '../hooks/queries'
 import { useServiceEditor } from '../hooks/useServiceEditor'
 import { useUploader, useUploadMeta } from '../hooks/useUploader'
+import { countPages, pageIntervals, type Interval } from '../lib/pages'
 
 const DEFAULT_DOCS: DocsSpec = {
   pages: 120,
   scope: 'all',
-  from: 1,
-  to: 120,
+  pageRanges: [{ from: 10, to: 20 }],
+  pagePages: '',
   ink: 'bw',
   sides: 'double',
-  copies: 2,
+  copies: 1,
   bindColor: 'maroon',
   stamp: 'gold',
   colorRanges: [{ from: 10, to: 20 }],
@@ -38,12 +40,17 @@ const INK_LABEL: Record<DocsSpec['ink'], string> = { bw: 'سیاه‌وسفید'
 const fieldInput = 'h-auto bg-field px-4 py-3 text-sm'
 const fieldArea = 'min-h-0 rounded-[18px] bg-field px-[15px] py-3 text-[13.5px]'
 const subLabel = 'mb-[7px] block text-[12.5px] font-bold text-muted-1'
-const cyanInput = 'border-[#9fd9e2]'
+
+/** Pre-v3 specs carry a single from/to range — open them as a one-row `pageRanges`. */
+function fromSaved(s: DocsSpec): DocsSpec {
+  const legacy = s.from !== undefined && s.to !== undefined ? [{ from: s.from, to: s.to }] : undefined
+  return { ...s, from: undefined, to: undefined, pageRanges: s.pageRanges ?? legacy ?? DEFAULT_DOCS.pageRanges, pagePages: s.pagePages ?? '' }
+}
 
 export function DocsScreen() {
   const catalog = useCatalog()
   const { initialSpec, isEditing, childName, save } = useServiceEditor('docs')
-  const [spec, setSpec] = useState<DocsSpec>(() => initialSpec ?? DEFAULT_DOCS)
+  const [spec, setSpec] = useState<DocsSpec>(() => (initialSpec ? fromSaved(initialSpec) : DEFAULT_DOCS))
   const patch = (p: Partial<DocsSpec>) => setSpec((s) => ({ ...s, ...p }))
   const uploader = useUploader('docs')
   const fileMeta = useUploadMeta(spec.fileId)
@@ -52,43 +59,50 @@ export function DocsScreen() {
 
   const pickFile = (file: File) =>
     uploader.start(file, (u) =>
-      setSpec((s) => ({ ...s, fileId: u.id, fileName: u.name, ...(u.pages ? { pages: u.pages, from: 1, to: u.pages } : {}) })),
+      setSpec((s) => ({ ...s, fileId: u.id, fileName: u.name, ...(u.pages ? { pages: u.pages } : {}) })),
     )
   const removeFile = () => {
     patch({ fileId: undefined, fileName: undefined })
     notify('فایل حذف شد')
   }
 
-  // Clamp like the prototype: 1 ≤ from ≤ to ≤ pages.
+  // Printed pages = 1..pages covered by pageRanges ∪ pagePages (all pages when that is empty), exactly like the server.
   const filePages = Math.max(1, spec.pages || 1)
-  const from = Math.min(Math.max(1, spec.from || 1), filePages)
-  const to = Math.min(Math.max(from, spec.to || filePages), filePages)
-  const pagesN = spec.scope === 'range' ? to - from + 1 : filePages
-  const normalized: DocsSpec = { ...spec, pages: filePages, from, to, copies: Math.max(1, spec.copies) }
+  const isRange = spec.scope === 'range'
+  const pageRanges = spec.pageRanges ?? []
+  const pagePages = spec.pagePages ?? ''
+  const picked = pageIntervals(pageRanges, pagePages, 1, filePages)
+  const printed: Interval[] = isRange && picked.length ? picked : [[1, filePages]]
+  const pagesN = countPages(printed)
+  // v3.3 admin-managed bind colours; an unknown/switched-off key falls back to the first (the server does the same).
+  const bindColors = catalog.data?.bindColors ?? []
+  const bind = bindColors.find((c) => c.key === spec.bindColor) ?? bindColors[0]
+  const normalized: DocsSpec = {
+    ...spec,
+    pages: filePages,
+    from: undefined,
+    to: undefined,
+    pageRanges: isRange ? pageRanges : undefined,
+    pagePages: isRange ? pagePages : undefined,
+    copies: Math.max(1, spec.copies),
+    bindColor: bind?.key ?? spec.bindColor,
+  }
+  const pageNote = !picked.length
+    ? `بازه‌ای انتخاب نشده؛ همه ${fa(filePages)} صفحه چاپ می‌شود.`
+    : pagesFromFile
+      ? `از ${fa(filePages)} صفحه فایل، ${fa(pagesN)} صفحه چاپ می‌شود.`
+      : `مجموع ${fa(pagesN)} صفحه چاپ می‌شود.`
 
   const quote = useServiceQuote({ kind: 'docs', spec: normalized })
   const price = quote.data?.services[0]?.price
 
-  const ranges = spec.colorRanges ?? []
-  const setRange = (ri: number, p: Partial<{ from: number; to: number }>) =>
-    patch({ colorRanges: ranges.map((r, j) => (j === ri ? { ...r, ...p } : r)) })
-  const validRanges = ranges.filter((r) => r.to >= r.from)
-  const colorCount = validRanges.reduce((sum, r) => sum + (r.to - r.from + 1), 0)
-  const pageList = (spec.colorPages ?? '').trim()
-  const colorNote =
-    !validRanges.length && !pageList
-      ? 'بازه اضافه کنید یا شماره صفحه‌ها را جدا با ویرگول بنویسید؛ بقیه سیاه‌وسفید چاپ می‌شود.'
-      : `مجموع ${fa(colorCount)} صفحه رنگی از بازه‌ها${pageList ? ` به‌علاوه صفحه‌های ${pageList}` : ''} · بقیه سیاه‌وسفید.`
-
-  const bindColors = catalog.data?.bindColors ?? []
   const prices = catalog.data?.prices
-  const bindName = bindColors.find((c) => c.key === spec.bindColor)?.name ?? 'زرشکی'
 
   return (
     <Screen
-      title="چاپ و صحافی اسناد"
-      subtitle={childName ? `برای ${childName}` : 'پایان‌نامه، جزوه، مدرک اداری'}
-      icon={FileText}
+      title="پایان‌نامه و صحافی"
+      subtitle={childName ? `برای ${childName}` : 'پایان‌نامه، گزارش و جزوه با جلد'}
+      icon={ClipboardList}
       tone="cyan"
       back="/app/family"
       addMore
@@ -124,40 +138,29 @@ export function DocsScreen() {
       )}
 
       <StepCard title="۱. صفحات" className="mt-3">
-        <div className="mb-3 flex items-center justify-between gap-2.5">
-          <span className="text-[12.5px] font-bold text-muted-1">
-            تعداد صفحات فایل
-            {pagesFromFile && <span className="ms-1.5 font-semibold text-cyan-dark">(از روی فایل)</span>}
-          </span>
-          <NumInput
-            aria-label="تعداد صفحات فایل"
-            value={spec.pages}
-            onValueChange={(pages) => patch({ pages })}
-            readOnly={pagesFromFile}
-            className={cn('w-[84px]', pagesFromFile && 'bg-line-soft')}
-          />
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <Chip selected={spec.scope === 'all'} onClick={() => patch({ scope: 'all' })}>
-            همه صفحات
-          </Chip>
-          <Chip selected={spec.scope === 'range'} onClick={() => patch({ scope: 'range', ink: 'mixed' })}>
-            بازه صفحات
-          </Chip>
-        </div>
-        {spec.scope === 'range' && (
-          <div className="mt-[11px] rounded-[18px] bg-cyan-soft p-[13px] text-cyan-ink">
-            <div className="flex flex-wrap items-center gap-[9px]">
-              <span className="text-[12.5px] font-bold">از صفحه</span>
-              <NumInput aria-label="از صفحه" value={spec.from} onValueChange={(n) => patch({ from: n })} className={cn('w-[70px] p-[9px]', cyanInput)} />
-              <span className="text-[12.5px] font-bold">تا</span>
-              <NumInput aria-label="تا صفحه" value={spec.to} onValueChange={(n) => patch({ to: n })} className={cn('w-[70px] p-[9px]', cyanInput)} />
-            </div>
-            <div className="mt-[9px] text-[11.5px] opacity-90">
-              از {fa(filePages)} صفحه فایل، {fa(pagesN)} صفحه چاپ می‌شود (صفحه {fa(from)} تا {fa(to)}).
-            </div>
-          </div>
-        )}
+        <PageScopeBlock
+          pages={spec.pages}
+          scope={spec.scope}
+          pagesFromFile={pagesFromFile}
+          // The PDF already gave the page count — nothing to ask.
+          hideCount={pagesFromFile}
+          onChange={patch}
+          onScope={(scope) => patch({ scope })}
+          rangeContent={
+            <RangeListPanel
+              title="کدام صفحات چاپ شوند؟"
+              ranges={pageRanges}
+              onRanges={(r) => patch({ pageRanges: r })}
+              pagesText={pagePages}
+              onPagesText={(t) => patch({ pagePages: t })}
+              inputId="doc-page-pages"
+              fromAria="از صفحه چاپ"
+              toAria="تا صفحه چاپ"
+              note={pageNote}
+              className="mt-[11px]"
+            />
+          }
+        />
       </StepCard>
 
       <StepCard title="۲. مشخصات چاپ">
@@ -179,51 +182,15 @@ export function DocsScreen() {
           </OptionRow>
         </div>
         {spec.ink === 'mixed' && (
-          <div className="mt-3 rounded-[18px] bg-cyan-soft p-[13px] text-cyan-ink">
-            <div className="mb-[9px] text-[12.5px] font-bold">کدام صفحات رنگی چاپ شوند؟</div>
-            <div className="flex flex-col gap-2">
-              {ranges.map((r, ri) => (
-                <div key={ri} className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs font-bold">از صفحه</span>
-                  <NumInput aria-label="از صفحه رنگی" value={r.from} onValueChange={(n) => setRange(ri, { from: n })} className={cn('w-[62px] text-[13.5px]', cyanInput)} />
-                  <span className="text-xs font-bold">تا</span>
-                  <NumInput aria-label="تا صفحه رنگی" value={r.to} onValueChange={(n) => setRange(ri, { to: n })} className={cn('w-[62px] text-[13.5px]', cyanInput)} />
-                  <button
-                    type="button"
-                    aria-label="حذف بازه"
-                    onClick={() => patch({ colorRanges: ranges.filter((_, j) => j !== ri) })}
-                    className="flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-[11px] bg-white hover:bg-pink-soft"
-                  >
-                    <X className="size-3.5 text-pink-dark" strokeWidth={2.8} />
-                  </button>
-                </div>
-              ))}
-            </div>
-            <button
-              type="button"
-              onClick={() => patch({ colorRanges: [...ranges, { from: 1, to: 10 }] })}
-              className="mt-[9px] inline-flex cursor-pointer items-center gap-[7px] rounded-full bg-cyan px-4 py-2.5 text-[12.5px] font-extrabold text-white hover:bg-cyan-dark"
-            >
-              <Plus className="size-3.5" strokeWidth={3} />
-              افزودن بازه
-            </button>
-            <label htmlFor="doc-color-pages" className="mt-3.5 mb-[7px] block text-[12.5px] font-bold">
-              صفحه‌های تک (اختیاری)
-            </label>
-            <Input
-              id="doc-color-pages"
-              value={spec.colorPages ?? ''}
-              onChange={(e) => patch({ colorPages: e.target.value })}
-              placeholder="مثلاً ۴، ۹، ۳۷"
-              className={cn('h-auto px-[15px] py-[11px] text-[13.5px]', cyanInput)}
-            />
-            <div className="mt-[9px] text-[11.5px] leading-[1.7] opacity-90">{colorNote}</div>
-          </div>
+          <MixedColorPanel
+            ranges={spec.colorRanges ?? []}
+            colorPages={spec.colorPages ?? ''}
+            onRanges={(colorRanges) => patch({ colorRanges })}
+            onColorPages={(colorPages) => patch({ colorPages })}
+            inputId="doc-color-pages"
+            printed={printed}
+          />
         )}
-        <div className="mt-3 flex items-center justify-between gap-2.5 rounded-2xl bg-line-soft px-3.5 py-[11px] text-[12.5px] text-muted-1">
-          <span className="font-bold">کاغذ تحریر ۸۰ گرم</span>
-          <span>قطع A4</span>
-        </div>
         <div className="mt-3">
           <label htmlFor="doc-desc" className={subLabel}>
             توضیحات چاپ
@@ -249,7 +216,7 @@ export function DocsScreen() {
             <div className="mb-[9px] text-[12.5px] font-bold text-muted-1">رنگ صحافی</div>
             <div className="flex flex-wrap gap-[9px]">
               {bindColors.map((c) => {
-                const on = spec.bindColor === c.key
+                const on = bind?.key === c.key
                 return (
                   <button
                     key={c.key}
@@ -263,9 +230,12 @@ export function DocsScreen() {
                   >
                     <span
                       className="size-[22px] shrink-0 rounded-full"
-                      style={{ background: c.css, boxShadow: 'inset 0 1.5px 0 rgba(255,255,255,0.35), 0 2px 5px rgba(7,9,15,0.22)' }}
+                      style={{ background: c.css || c.hex, boxShadow: 'inset 0 1.5px 0 rgba(255,255,255,0.35), 0 2px 5px rgba(7,9,15,0.22)' }}
                     />
-                    <span className="text-[12.5px] font-bold">{c.name}</span>
+                    <span className="text-[12.5px] font-bold">
+                      {c.name}
+                      {c.extra > 0 ? ` · +${money(c.extra)}` : ''}
+                    </span>
                   </button>
                 )
               })}
@@ -280,7 +250,8 @@ export function DocsScreen() {
               </Chip>
             </div>
             <div className="mt-2.5 text-[11.5px] leading-[1.7] text-muted-2">
-              صحافی {bindName} با مندرجات {spec.stamp === 'silver' ? 'نقره‌کوب' : 'زرکوب'} روی جلد · کاغذ تحریر ۸۰ گرم، قطع A4
+              صحافی {bind?.name ?? ''}
+              {bind?.extra ? ` (+${money(bind.extra)} هر نسخه)` : ''} با مندرجات {spec.stamp === 'silver' ? 'نقره‌کوب' : 'زرکوب'} روی جلد
             </div>
           </>
         )}
@@ -335,7 +306,7 @@ export function DocsScreen() {
       <TotalsPanel
         className="mt-3.5"
         meta={`${fa(pagesN)} صفحه × ${fa(spec.copies)} سری`}
-        metaEnd={`A4 · ${INK_LABEL[spec.ink]} · ${spec.sides === 'double' ? 'دورو' : 'یک‌رو'} · صحافی`}
+        metaEnd={`${INK_LABEL[spec.ink]} · ${spec.sides === 'double' ? 'دورو' : 'یک‌رو'} · صحافی`}
         label="هزینه چاپ"
         amount={price !== undefined ? money(price) : quote.isError ? '—' : '…'}
       />
@@ -344,7 +315,7 @@ export function DocsScreen() {
         className="mt-3"
         onClick={() => (uploader.busy ? notify('صبر کنید تا بارگذاری فایل تمام شود') : save(normalized))}
       >
-        {isEditing ? 'ذخیره تغییرات چاپ و صحافی' : 'افزودن چاپ و صحافی به سفارش'}
+        {isEditing ? 'ذخیره تغییرات پایان‌نامه' : 'افزودن پایان‌نامه و صحافی به سفارش'}
       </CtaButton>
     </Screen>
   )
