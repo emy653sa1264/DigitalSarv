@@ -1,6 +1,7 @@
-import { HttpException, NotFoundException } from '@nestjs/common';
+import { ConflictException, HttpException, NotFoundException } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { fakeModel, type Doc } from '../../../test/fake-model.js';
+import { FakeRedis, fakeRedisService } from '../../../test/fake-redis.js';
 import { MockPaymentDriver, type PaymentDriver } from './payment-driver.js';
 import { PaymentsService } from './payments.service.js';
 
@@ -35,6 +36,7 @@ function setup(orderDocs: Doc[] = [pendingOrder()], driver: PaymentDriver = new 
   const campaigns = { recordUsage: vi.fn(async () => undefined) };
   const notifications = { dispatch: vi.fn(async (_event: string, _order: unknown) => undefined) };
   const config = { getOrThrow: () => ({ webPublicUrl: WEB, apiPublicUrl: API, payment: { driver: driver.name, timeoutMinutes: 30 } }) };
+  const redis = new FakeRedis();
   const svc = new PaymentsService(
     orders as never,
     users as never,
@@ -43,12 +45,14 @@ function setup(orderDocs: Doc[] = [pendingOrder()], driver: PaymentDriver = new 
     notifications as never,
     driver,
     config as never,
+    fakeRedisService(redis),
   );
-  return { svc, orders, users, rules, campaigns, notifications, order: orders.docs[0], user: users.docs[0] };
+  return { svc, orders, users, rules, campaigns, notifications, redis, order: orders.docs[0], user: users.docs[0] };
 }
 
 const ok = (o: Doc) => `${WEB}/app/pay/return?order=${String(o._id)}&status=ok`;
 const failed = (o: Doc) => `${WEB}/app/pay/return?order=${String(o._id)}&status=failed`;
+const pending = (o: Doc) => `${WEB}/app/pay/return?order=${String(o._id)}&status=pending`;
 
 describe('PaymentsService.handleCallback (verify idempotency)', () => {
   it('10 parallel successful callbacks → one transition, one set of side effects, all redirect ok', async () => {
@@ -126,7 +130,7 @@ describe('PaymentsService.handleCallback (verify idempotency)', () => {
     expect(user.walletBalance).toBe(500000);
   });
 
-  it('a provider rejection marks the attempt failed; an unreachable provider leaves it pending', async () => {
+  it('a provider rejection marks the attempt failed; an unreachable provider records `verifying` -> status=pending', async () => {
     const rejecting: PaymentDriver = { name: 'mock', request: vi.fn(), verify: vi.fn(async () => ({ ok: false as const, message: '-51', retryable: false })) };
     const a = setup([pendingOrder()], rejecting);
     await expect(a.svc.handleCallback('mock', AUTH, 'OK')).resolves.toBe(failed(a.order));
@@ -134,9 +138,82 @@ describe('PaymentsService.handleCallback (verify idempotency)', () => {
 
     const down: PaymentDriver = { name: 'mock', request: vi.fn(), verify: vi.fn(async () => ({ ok: false as const, message: 'timeout', retryable: true })) };
     const b = setup([pendingOrder()], down);
-    await b.svc.handleCallback('mock', AUTH, 'OK');
-    expect(b.order.payment.status).toBe('pending');
+    await expect(b.svc.handleCallback('mock', AUTH, 'OK')).resolves.toBe(pending(b.order));
+    expect(b.order.payment.status).toBe('verifying');
     expect(b.order.status).toBe('pending_payment');
+    expect(b.redis.store.size).toBe(0); // the verify flag is released
+  });
+});
+
+describe('PaymentsService: a payment verified at the provider is never lost', () => {
+  it('a newer /pay replaced the authority while verifying -> the verified attempt still pays the order', async () => {
+    const doc = pendingOrder();
+    const NEWER = 'MOCK' + 'C'.repeat(32);
+    const driver: PaymentDriver = {
+      name: 'mock',
+      request: vi.fn(),
+      verify: vi.fn(async () => {
+        // POST /orders/:id/pay lands while the provider verifies the first attempt
+        doc.payment = { driver: 'mock', authority: NEWER, status: 'pending', amount: 500000, requestedAt: new Date() };
+        return { ok: true as const, refId: '888' };
+      }),
+    };
+    const { svc, user, rules } = setup([doc], driver);
+    await expect(svc.handleCallback('mock', AUTH, 'OK')).resolves.toBe(ok(doc));
+    expect(doc).toMatchObject({ status: 'registered', paid: true, chargedAmount: 500000, paidVia: 'gateway' });
+    expect(doc.payment).toMatchObject({ authority: AUTH, status: 'paid', refId: '888' });
+    expect(doc.timeline.filter((t: Doc) => t.status === 'registered')).toHaveLength(1);
+    expect(rules.recordUsage).toHaveBeenCalledTimes(1);
+    expect(user.walletBalance).toBe(0);
+    // the newer (unpaid) authority no longer matches: it is never verified, the bank reverses it
+    await expect(svc.handleCallback('mock', NEWER, 'OK')).resolves.toBe(`${WEB}/app/pay/return?status=failed`);
+  });
+
+  it('order already paid by another attempt -> the extra capture is credited to the wallet exactly once', async () => {
+    const doc = pendingOrder();
+    const OTHER = 'MOCK' + 'D'.repeat(32);
+    const driver: PaymentDriver = {
+      name: 'mock',
+      request: vi.fn(),
+      verify: vi.fn(async () => {
+        if (doc.status === 'pending_payment') {
+          Object.assign(doc, {
+            status: 'registered', paid: true, chargedAmount: 500000, paidVia: 'gateway',
+            payment: { driver: 'mock', authority: OTHER, status: 'paid', amount: 500000, refId: '1' },
+          });
+        }
+        return { ok: true as const, refId: '999' };
+      }),
+    };
+    const { svc, user, users } = setup([doc], driver);
+    const urls = await Promise.all(Array.from({ length: 5 }, () => svc.handleCallback('mock', AUTH, 'OK')));
+    expect(new Set(urls)).toEqual(new Set([ok(doc)]));
+    expect(user.walletBalance).toBe(500000);
+    expect(users.updateOne.mock.calls.filter(([, u]) => JSON.stringify(u).includes('walletBalance'))).toHaveLength(1);
+    expect(doc.refundedAuthorities).toEqual([AUTH]);
+    expect(doc.payment).toMatchObject({ authority: OTHER, refId: '1' }); // the order's own payment is untouched
+  });
+
+  it('start() answers 409 while the current attempt is being verified or is `verifying`', async () => {
+    const doc = pendingOrder();
+    const driver = new MockPaymentDriver(API);
+    let release: (() => void) | undefined;
+    vi.spyOn(driver, 'verify').mockImplementation(async () => {
+      await new Promise<void>((r) => (release = r));
+      return { ok: true, refId: '1' };
+    });
+    const { svc } = setup([doc], driver);
+    const callback = svc.handleCallback('mock', AUTH, 'OK');
+    await vi.waitFor(() => expect(release).toBeDefined());
+    await expect(svc.start(doc as never)).rejects.toBeInstanceOf(ConflictException);
+    expect(doc.payment.authority).toBe(AUTH);
+    release!();
+    await expect(callback).resolves.toBe(ok(doc));
+
+    const verifying = pendingOrder({ payment: { driver: 'mock', authority: AUTH, status: 'verifying', amount: 500000, requestedAt: new Date() } });
+    const v = setup([verifying]);
+    await expect(v.svc.start(verifying as never)).rejects.toBeInstanceOf(ConflictException);
+    expect(verifying.payment.status).toBe('verifying');
   });
 });
 
@@ -186,6 +263,36 @@ describe('PaymentsService.expireStale', () => {
     expect(registered.status).toBe('registered');
     // idempotent
     await expect(svc.expireStale(now)).resolves.toBe(0);
+  });
+
+  it('re-verifies `verifying` attempts first; cancels only when the provider definitively says unpaid', async () => {
+    const now = new Date();
+    const ago = (m: number) => new Date(now.getTime() - m * MINUTE);
+    const verifying = (authority: string) =>
+      pendingOrder({ createdAt: ago(45), payment: { driver: 'mock', authority, status: 'verifying', amount: 500000, requestedAt: ago(40) } });
+    const paidAtBank = verifying('PAID');
+    const rejected = verifying('NOPE');
+    const stillDown = verifying('DOWN');
+    const driver: PaymentDriver = {
+      name: 'mock',
+      request: vi.fn(),
+      verify: vi.fn(async ({ authority }: { authority: string }) =>
+        authority === 'PAID'
+          ? { ok: true as const, refId: '5' } // Zarinpal 100/101
+          : authority === 'NOPE'
+            ? { ok: false as const, message: '-51', retryable: false }
+            : { ok: false as const, message: 'timeout', retryable: true },
+      ),
+    };
+    const { svc, rules } = setup([paidAtBank, rejected, stillDown], driver);
+
+    await expect(svc.expireStale(now)).resolves.toBe(1);
+    expect(paidAtBank).toMatchObject({ status: 'registered', paid: true, chargedAmount: 500000 });
+    expect(paidAtBank.payment).toMatchObject({ status: 'paid', refId: '5' });
+    expect(rules.recordUsage).toHaveBeenCalledTimes(1);
+    expect(rejected.status).toBe('cancelled');
+    expect(stillDown.status).toBe('pending_payment');
+    expect(stillDown.payment.status).toBe('verifying');
   });
 });
 

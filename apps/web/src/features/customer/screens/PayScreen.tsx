@@ -7,14 +7,15 @@ import { EmptyState, ErrorState, LoadingBlock, Panel, TotalsPanel } from '@/comp
 import { Button } from '@/components/ui/button'
 import { notify } from '@/components/ui/sonner'
 import { fa, money, pct, toEnDigits } from '@/lib/format'
-import { useCatalog } from '@/lib/query'
+import { ApiError } from '@/lib/api'
+import { qk, queryClient, useCatalog } from '@/lib/query'
 import type { PayMethod } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/stores/auth'
 import { isDraftEmpty, selectOrderDraft, useDraft } from '@/stores/draft'
 import { Screen } from '../components/Screen'
 import { CtaButton, QuoteLines } from '../components/parts'
-import { redirectToGateway, useCreateOrder, useDraftQuote } from '../hooks/queries'
+import { customerKeys, redirectToGateway, useCreateOrder, useDraftQuote } from '../hooks/queries'
 
 export function PayScreen() {
   const navigate = useNavigate()
@@ -61,6 +62,18 @@ export function PayScreen() {
           }
           navigate(`/app/done/${order.id}`, { replace: true })
           notify(draft.payMethod === 'cod' ? `سفارش ${fa(order.code)} ثبت شد` : `پرداخت انجام شد — سفارش ${fa(order.code)} ثبت شد`)
+        },
+        onError: (error) => {
+          // 503 + orderId: the gateway was unreachable but the order was created (pending_payment). Resubmitting
+          // the draft would duplicate it — drop the draft and pay from «سفارش‌های من». The Persian message is
+          // already toasted by the global mutation error handler.
+          const orderId =
+            error instanceof ApiError && error.status === 503 ? (error.data as { orderId?: unknown } | undefined)?.orderId : undefined
+          if (typeof orderId !== 'string') return
+          reset()
+          void queryClient.invalidateQueries({ queryKey: customerKeys.orders })
+          void queryClient.invalidateQueries({ queryKey: qk.me })
+          navigate('/app/orders', { replace: true })
         },
       },
     )

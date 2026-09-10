@@ -1,12 +1,13 @@
-import { Module, type ExecutionContext } from '@nestjs/common';
+import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ScheduleModule } from '@nestjs/schedule';
-import { ThrottlerGuard, ThrottlerModule, type ThrottlerOptions } from '@nestjs/throttler';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import type { Connection } from 'mongoose';
 import { SecurityModule } from './common/auth/security.module.js';
 import { toJSONPlugin } from './common/mongo/to-json.plugin.js';
+import { throttlers } from './common/throttle.js';
 import { RedisModule } from './common/redis/redis.module.js';
 import configuration, { type AppConfig } from './config/configuration.js';
 import { DatabaseModule } from './database/database.module.js';
@@ -47,24 +48,6 @@ export const infraImports = [
   DatabaseModule,
   SmsModule,
 ];
-
-const requestPath = (ctx: ExecutionContext) => {
-  const req = ctx.switchToHttp().getRequest<{ originalUrl?: string; url?: string }>();
-  return (req.originalUrl ?? req.url ?? '').split('?')[0];
-};
-const isAuthRoute = (ctx: ExecutionContext) => requestPath(ctx).startsWith('/api/auth/');
-const isHealthRoute = (ctx: ExecutionContext) => requestPath(ctx).startsWith('/api/health');
-
-/**
- * Per-IP rate limits (behind `trust proxy`): a global one and a stricter one for `/api/auth/*`.
- * Limits come from THROTTLE_* (generous defaults outside production); a limit of 0 disables it.
- */
-export function throttlers(t: AppConfig['throttle']): ThrottlerOptions[] {
-  return [
-    { name: 'default', ttl: t.ttl * 1000, limit: t.limit, skipIf: (ctx) => !t.limit || isHealthRoute(ctx) },
-    { name: 'auth', ttl: t.authTtl * 1000, limit: t.authLimit, skipIf: (ctx) => !t.authLimit || !isAuthRoute(ctx) },
-  ];
-}
 
 @Module({
   imports: [

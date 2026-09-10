@@ -35,7 +35,7 @@ The four v2 files share one prototype script (logic/pricing unchanged from v1); 
 - [x] V2-4 Web features: design alignment (production/QC/campaign/CMS/notifications), uploads UI, payment flow, courier photos (agent)
 - [x] V2-5 Ops: Docker, nginx, compose prod, CI, deploy docs (agent)
 - [x] V2-5b Brand: owner logo (vector trace → `logo-path.ts`, app icons, favicon) and owner hero illustration on the landing (WebP srcset + OG cover)
-- [ ] V2-6 Integration: build all, run prod-like stack, Playwright pass on all 4 apps (desktop + phone), review, fix
+- [x] V2-6 Integration: build all, Docker images, Playwright pass on all 4 apps (desktop + phone, mock gateway payment, PDF upload), security review (10 findings fixed), CI green on GitHub
 
 ## Needs from the owner before going live
 

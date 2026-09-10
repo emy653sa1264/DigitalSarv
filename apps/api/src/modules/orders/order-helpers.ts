@@ -39,13 +39,17 @@ export const TERMINAL_STATUSES: OrderStatus[] = ['delivered', 'cancelled'];
 export const CUSTOMER_CANCELLABLE: OrderStatus[] = ['pending_payment', 'registered', 'confirmed'];
 
 /**
- * Wallet amount to give back when the order is cancelled: exactly what was charged, once.
- * Orders placed before `chargedAmount` existed were charged their original `quote.total`.
+ * Amount credited to the customer's wallet when the order is cancelled: exactly what was charged,
+ * once — for orders actually paid by wallet or at the gateway (gateway refunds go to the wallet).
+ * COD is never refunded. Orders placed before `chargedAmount`/`paidVia` existed were wallet orders
+ * charged their original `quote.total`.
  */
 export function refundableAmount(
-  order: Pick<Order, 'payMethod' | 'paid' | 'refunded' | 'chargedAmount'> & { quote?: Pick<Order['quote'], 'total'> },
+  order: Pick<Order, 'payMethod' | 'paid' | 'refunded' | 'chargedAmount' | 'paidVia'> & { quote?: Pick<Order['quote'], 'total'> },
 ): number {
-  if (order.refunded || order.payMethod !== 'wallet' || !order.paid) return 0;
+  if (order.refunded || !order.paid) return 0;
+  const via = order.paidVia ?? (order.payMethod === 'wallet' ? 'wallet' : undefined);
+  if (via !== 'wallet' && via !== 'gateway') return 0;
   return Math.max(0, order.chargedAmount ?? order.quote?.total ?? 0);
 }
 

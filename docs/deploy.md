@@ -106,7 +106,7 @@ Pick one option. The nginx in `web` reads `X-Forwarded-Proto` from the proxy in 
 
 **C. Cloudflare / ArvanCloud CDN proxy.** Keep `HTTP_PORT=80`, or better, install a Cloudflare Origin Certificate via option B or A and use SSL mode **Full (strict)**. Do not use "Flexible". The CDN sets `X-Forwarded-Proto`. To see real client IPs (for rate limiting), set `CF-Connecting-IP` / `set_real_ip_from` on the edge proxy, or trust one more proxy hop in the API.
 
-In every case, the API sits behind **one** reverse proxy (nginx) with no TLS proxy, or **two** with Caddy, host nginx or a CDN. The API's `trust proxy` setting must match that hop count, or client IPs (throttling) will be wrong.
+In every case, the API sits behind **one** reverse proxy (nginx) with no TLS proxy, or **two** with Caddy, host nginx or a CDN. Set `TRUST_PROXY` in `.env.production` to that hop count: `1` (default) = nginx only, `2` = Caddy / host nginx / CDN + nginx, `3` = CDN + Caddy/host nginx + nginx. It must match, or client IPs (throttling) will be wrong: too low and every visitor shares the proxy's IP (one rate-limit bucket for the whole site), too high and clients can spoof their IP via `X-Forwarded-For`. `TRUST_PROXY` also accepts comma-separated trusted CIDRs (e.g. the CDN's published ranges plus `172.16.0.0/12` for the Docker network) instead of a count.
 
 After HTTPS works, check that `curl -sI https://sarv.example.ir | grep -i strict-transport` shows HSTS.
 

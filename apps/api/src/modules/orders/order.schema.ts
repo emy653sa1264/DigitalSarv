@@ -177,6 +177,13 @@ export class Order {
   @Prop({ type: [MongooseSchema.Types.ObjectId], default: undefined })
   pickupPhotoIds?: Types.ObjectId[];
 
+  /**
+   * Internal: gateway authorities whose verified capture was credited to the wallet because the order
+   * could no longer take it (idempotency key of that credit). Never serialized (select: false).
+   */
+  @Prop({ type: [String], default: undefined, select: false })
+  refundedAuthorities?: string[];
+
   /** Internal: effects a gateway order applies once paid. Never serialized (select: false). */
   @Prop({ type: MongooseSchema.Types.Mixed, select: false })
   deferred?: DeferredEffects;

@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { HttpException, ServiceUnavailableException } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { Types } from 'mongoose';
@@ -145,10 +146,39 @@ describe('OrdersService.cancel', () => {
     expect((order.timeline as unknown[]).length).toBe(1);
   });
 
-  it('gateway orders are cancelled without a wallet refund', async () => {
-    const { svc, users } = setup({ payMethod: 'gateway' });
-    await svc.cancel(String(orderId), customer);
-    expect(walletRefunds(users)).toHaveLength(0);
+  it('a paid gateway order refunds chargedAmount to the wallet exactly once (customer and admin cancel); cod never', async () => {
+    const gatewayPaid = { payMethod: 'gateway', paidVia: 'gateway', paid: true, chargedAmount: 500000 };
+    const a = setup(gatewayPaid);
+    const results = await Promise.allSettled(Array.from({ length: 5 }, () => a.svc.cancel(String(orderId), customer)));
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(walletRefunds(a.users)).toHaveLength(1);
+    expect(a.user.walletBalance).toBe(500000);
+    expect(a.order).toMatchObject({ status: 'cancelled', refunded: true, paid: false });
+
+    const b = setup({ ...gatewayPaid, status: 'picked_up' });
+    await b.svc.setStatus(String(orderId), 'cancelled');
+    expect(b.user.walletBalance).toBe(500000);
+
+    const cod = setup({ payMethod: 'cod', paid: false, chargedAmount: undefined });
+    await cod.svc.cancel(String(orderId), customer);
+    expect(walletRefunds(cod.users)).toHaveLength(0);
+  });
+
+  it('a gateway payment landing between the read and the cancel is refunded, not swallowed', async () => {
+    const a = setup({ status: 'pending_payment', payMethod: 'gateway', paid: false, chargedAmount: undefined });
+    const read = a.orders.findById.getMockImplementation()!;
+    let first = true;
+    a.orders.findById.mockImplementation(async (id: unknown) => {
+      const res = await read(id);
+      if (first) {
+        first = false; // the callback verifies the payment right after the cancel read the unpaid order
+        Object.assign(a.order, { status: 'registered', paid: true, chargedAmount: 500000, paidVia: 'gateway' });
+      }
+      return res;
+    });
+    await expect(a.svc.cancel(String(orderId), customer)).resolves.toMatchObject({ status: 'cancelled', refunded: true });
+    expect(a.user.walletBalance).toBe(500000);
+    expect(walletRefunds(a.users)).toHaveLength(1);
   });
 });
 
@@ -265,6 +295,24 @@ describe('OrdersService.create', () => {
     expect(users.updateOne).not.toHaveBeenCalled();
     expect(noop.recordUsage).not.toHaveBeenCalled();
     expect(noop.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('gateway unreachable → 503 naming the already-created order (the client must not resubmit the draft)', async () => {
+    const { svc, orders, payments } = setup();
+    payments.start.mockRejectedValueOnce(new ServiceUnavailableException('اتصال به درگاه پرداخت برقرار نشد'));
+    const err = (await svc.create(customer, draft('gateway')).catch((e: unknown) => e)) as HttpException;
+    expect(err).toBeInstanceOf(ServiceUnavailableException);
+    expect(err.getStatus()).toBe(503);
+    const created = orders.docs.at(-1)!;
+    expect(err.getResponse()).toEqual({
+      statusCode: 503,
+      error: 'Service Unavailable',
+      message: 'اتصال به درگاه پرداخت برقرار نشد',
+      orderId: String(created._id),
+      code: created.code,
+    });
+    expect(created).toMatchObject({ status: 'pending_payment', paid: false });
+    expect(orders.docs).toHaveLength(2); // the seeded order + exactly one new one
   });
 
   it('gateway with nothing to pay (total 0) is registered and paid right away', async () => {

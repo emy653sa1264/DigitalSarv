@@ -186,7 +186,7 @@ interface Order {
 | GET | `/orders/mine` | customer | newest first |
 | GET | `/orders/:id` | owner, admin, assigned courier | |
 | POST | `/orders/:id/reorder` | owner | returns an `OrderDraft` built from the order (user's current plan, pickup date = today) |
-| POST | `/orders/:id/cancel` | owner | only while `registered`/`confirmed` (atomic compare-and-set on `status`, 400 otherwise); wallet payments refund exactly `chargedAmount`, once (`refunded` flag set in the same update) |
+| POST | `/orders/:id/cancel` | owner | only while `registered`/`confirmed` (atomic compare-and-set on `status` **and** `paid`, 400 otherwise); an order actually paid by `wallet` **or** `gateway` (`paid && paidVia ∈ {wallet, gateway}`) refunds exactly `chargedAmount` **to the customer's wallet** (gateway refunds go to the wallet too — no card reversal), once (`refunded` flag set in the same update). `cod` never refunds. |
 
 QC checklist labels (9): superseded by the v2 design labels (see «v2 → Statuses»; also returned as `qcLabels` by `GET /admin/production`).
 Pickup checklist labels (4): تعداد کتاب‌ها با سفارش تطبیق داده شد، وضعیت ظاهری کتاب‌ها سالم است، عکس تحویل‌گیری ثبت شد، تأیید امضای مشتری گرفته شد.
@@ -237,7 +237,7 @@ interface Courier { id: string; userId?: string; name: string; phone: string; co
 `PATCH /admin/orders/:id/status` is a compare-and-set on the current status (409 if it changed meanwhile; 400 for a disallowed transition; same status = no-op):
 
 - `delivered` and `cancelled` are terminal.
-- `cancelled` is allowed from any other status and goes through the same refund path as the customer cancel (wallet → refund `chargedAmount` once).
+- `cancelled` is allowed from any other status and goes through the same refund path as the customer cancel (paid by wallet or gateway → `chargedAmount` credited to the customer's wallet once; cod → nothing).
 - Forward moves along the happy path (`registered → … → delivered`) are allowed, skipping steps included; backward moves only between `picked_up … out_for_delivery`.
 - `awaiting_approval` is set only by the courier recount; from it the admin can move to `confirmed`, `picked_up` or `cancelled` (= re-approval of the re-quoted order).
 - Setting `delivered` on an unpaid `cod` order marks it paid (`chargedAmount = quote.total`, `paidVia = 'cod'`), like the courier's delivered.
@@ -294,19 +294,22 @@ Source design is now four files (`design/v2/{landing,customer,delivery,admin}.dc
 ### Payments (driver via env `PAYMENT_DRIVER=mock|zarinpal`)
 
 - `POST /orders` with `payMethod: 'gateway'` creates the order in `pending_payment` and returns `Order & { paymentUrl: string }`. `wallet` and `cod` behave as v1 (start at `registered`).
-- `POST /orders/:id/pay` (owner, only `pending_payment`) → `{ paymentUrl }` (new authority).
-- `GET /payments/:driver/callback?Authority=&Status=` (public) → verifies with the provider → on success sets `paid`, `chargedAmount`, `paidVia:'gateway'`, `payment.refId`, moves to `registered` (timeline + notification); on failure keeps `pending_payment` and records `payment.status='failed'` → **302** to `${WEB_PUBLIC_URL}/app/pay/return?order=<id>&status=ok|failed`.
+- `POST /orders/:id/pay` (owner, only `pending_payment`) → `{ paymentUrl }` (new authority). **409** «پرداخت قبلی شما در حال بررسی است…» while the current attempt is being verified with the provider (short Redis flag `pay:verifying:<authority>` held during verify) or is `payment.status: 'verifying'` — so "pay again" can never race a verification.
+- `GET /payments/:driver/callback?Authority=&Status=` (public) → verifies with the provider → on success sets `paid`, `chargedAmount`, `paidVia:'gateway'`, `payment.refId`, moves to `registered` (timeline + notification); on a definitive failure keeps `pending_payment` and records `payment.status='failed'`; when `Status=OK` but the provider cannot be reached (timeout/network/5xx) records `payment.status='verifying'` → **302** to `${WEB_PUBLIC_URL}/app/pay/return?order=<id>&status=ok|failed|pending` (`pending` = verifying; the page offers a refresh, not a new payment).
+- A payment verified at the provider is never dropped: if its authority was replaced meanwhile (a newer `/pay`) and the order is still `pending_payment`, that verified attempt pays the order (its authority/refId are recorded); if the order is no longer payable (cancelled, or already paid by another attempt), the verified amount is credited to the customer's wallet exactly once (idempotency key = the authority) and logged.
 - `mock` driver: `paymentUrl = ${API_PUBLIC_URL}/api/payments/mock/pay?authority=…` serves a minimal RTL HTML page with «پرداخت موفق» / «انصراف» buttons that hit the callback. Never enabled when `NODE_ENV=production` unless `PAYMENT_ALLOW_MOCK=1`.
 - `zarinpal` driver: REST v4 (`/pg/v4/payment/request.json`, `verify.json`, StartPay URL), `ZARINPAL_MERCHANT_ID`, `ZARINPAL_SANDBOX=1` for sandbox. Amount sent in **rial** (toman × 10).
-- `Order.payment?: { driver, authority, status: 'pending'|'paid'|'failed', refId?, cardPan?, paidAt? }`. Verification is idempotent (atomic guard on `status:'pending_payment'`).
-- Unpaid `pending_payment` orders older than 30 min are auto-cancelled by a scheduled job.
+- `Order.payment?: { driver, authority, status: 'pending'|'verifying'|'paid'|'failed', amount?, requestedAt?, refId?, cardPan?, paidAt? }`. Verification is idempotent (atomic guard on `status:'pending_payment'`).
+- Unpaid `pending_payment` orders older than 30 min are auto-cancelled by a scheduled job. Before that, the job re-verifies every `verifying` attempt with the provider (Zarinpal `100`/`101` = paid → the order is paid as by the callback); an order is cancelled only once the provider definitively says unpaid — a `verifying` order is never auto-cancelled.
 
 ### Uploads (driver via env `STORAGE_DRIVER=local`, `UPLOAD_DIR`, `UPLOAD_MAX_MB=50`)
 
-- `POST /uploads?purpose=docs|flyer|logo|cartridge|device|pickup` (auth, multipart field `file`) → `Upload { id, name, size, mime, purpose, pages? }` — `pages` for PDFs. Allowed: pdf, doc, docx, jpg, jpeg, png, webp, heic (images only for photo purposes). 
-- `GET /uploads/:id` → streams the file (`Content-Disposition` with original name) to the uploader, any admin, or the courier assigned to an order that references it.
+- `POST /uploads?purpose=docs|flyer|logo|cartridge|device|pickup` (auth, multipart field `file`) → `Upload { id, name, size, mime, purpose, pages? }` — `pages` for PDFs. Allowed: pdf, doc, docx, jpg, jpeg, png, webp, heic (images only for photo purposes `cartridge|device|pickup`; `docs|flyer|logo` accept every type). Throttled **per user** (`THROTTLE_UPLOAD_LIMIT` per `THROTTLE_UPLOAD_TTL` s; production default 20/60 s) → 429.
+- PDF pages are counted in a worker thread with a 5 s budget; a PDF that cannot be counted in time (or at all) is stored without `pages` and the customer enters the page count manually.
+- `GET /uploads/:id` → streams the file (`Content-Disposition` with original name) to the uploader, any admin, or the courier assigned to **any** order that references it.
+- An upload may be referenced by several orders (a reorder copies its file ids): the server tracks every referencing order (`orderIds`, internal).
 - Spec fields: `DocsSpec.fileId?` (server takes `pages` from the upload when present), `FlyerSpec.designFileId?`, `FlyerSpec.logoFileIds?: string[]`, `CartSpec.photoIds?: string[]`, `RepairSpec.photoIds?: string[]`; courier `POST /courier/orders/:id/verify` accepts `photoIds?: string[]` stored as `Order.pickupPhotoIds`.
-- Files are deleted 30 days after the order is delivered/cancelled (terms clause «حریم خصوصی و داده‌ها»).
+- Files are deleted 30 days after the order is delivered/cancelled (terms clause «حریم خصوصی و داده‌ها») — for a file referenced by several orders, only once **all** of them are delivered/cancelled past the retention period.
 
 ### SMS (env `SMS_DRIVER=log|kavenegar`, `SMS_API_KEY`, `SMS_SENDER`, `SMS_OTP_TEMPLATE`)
 
@@ -329,19 +332,19 @@ These refine the v2 section where it was silent; the web app can rely on them.
 **Orders & payments**
 - Gateway side effects are **deferred until the payment is verified**: plan activation (a checkout `planId` different from the user's plan), rule `usedCount`, campaign `stats`, `savedThisYear` and the «registered» notification happen at verification, exactly once. Wallet/COD orders apply them at creation as in v1.
 - A gateway order whose `quote.total` is 0 (e.g. repair-only) has nothing to pay: it is created `registered`, `paid: true`, `chargedAmount: 0`, `paidVia: 'gateway'`, and the response has **no** `paymentUrl`.
-- If the gateway cannot be reached when the order is created, `POST /orders` answers **503** (Persian message); the order already exists as `pending_payment` and the customer retries with `POST /orders/:id/pay`.
-- `Order.payment` also carries `amount` (toman requested for the current attempt) and `requestedAt`. `payment.status` is `failed` after a cancelled (`Status=NOK`) or rejected attempt; the order stays `pending_payment` and payable.
-- The web return URL is `${WEB_PUBLIC_URL}/app/pay/return?order=<id>&status=ok|failed` (`order` omitted when the authority is unknown). A replayed callback of a paid order redirects `ok` again without re-verifying.
-- Auto-cancel: `pending_payment` orders are cancelled when both `createdAt` **and** the last attempt (`payment.requestedAt`) are older than `PAYMENT_TIMEOUT_MIN` (default 30) — a customer who re-opens payment at minute 29 is not cut off. Runs every minute.
-- A callback for an order that is no longer `pending_payment` is never verified (the bank reverses an unverified payment). If the order is cancelled *while* the provider verifies, the captured amount is credited to the customer's wallet once (`refunded: true`, `payment.status: 'paid'`).
+- If the gateway cannot be reached when the order is created, `POST /orders` answers **503** with body `{ statusCode: 503, error, message, orderId, code }` (`message` Persian, `orderId` the created order's id, `code` its human order code); the order already exists as `pending_payment`. The client must **not** resubmit the draft (that would create a duplicate order): it clears the draft and the customer retries from «سفارش‌های من» with `POST /orders/:id/pay`.
+- `Order.payment` also carries `amount` (toman requested for the current attempt) and `requestedAt`. `payment.status` is `failed` after a cancelled (`Status=NOK`) or rejected attempt; the order stays `pending_payment` and payable. `verifying` = callback OK but the provider was unreachable; the order stays `pending_payment`, `/pay` answers 409 and the expiry job re-verifies it every minute.
+- The web return URL is `${WEB_PUBLIC_URL}/app/pay/return?order=<id>&status=ok|failed|pending` (`order` omitted when the authority is unknown). A replayed callback of a paid order redirects `ok` again without re-verifying.
+- Auto-cancel: `pending_payment` orders are cancelled when both `createdAt` **and** the last attempt (`payment.requestedAt`) are older than `PAYMENT_TIMEOUT_MIN` (default 30) — a customer who re-opens payment at minute 29 is not cut off — and the attempt is not `verifying`. Runs every minute.
+- A callback for an order that is no longer `pending_payment` is never verified (the bank reverses an unverified payment). If the order is cancelled *while* the provider verifies, the captured amount is credited to the customer's wallet once (`refunded: true`, `payment.status: 'paid'`). A verified attempt whose authority was replaced by a newer `/pay` still pays a `pending_payment` order; if the order was already paid by another attempt the second capture is credited to the wallet once (internal `refundedAuthorities`, never serialized).
 - The customer may cancel a `pending_payment` order (`POST /orders/:id/cancel`, no refund needed). Admin: from `pending_payment` only `cancelled` is allowed; nothing moves into `pending_payment`; `PATCH /admin/orders/:id/assign` answers 400 on an unpaid order.
 - Production column labels are the design's (`دریافت‌شده`, `آماده‌سازی`, `فنری`, `خدمات اضافی`, `کنترل کیفیت`, `بسته‌بندی`), not the timeline `STATUS_LABELS`. The timeline label of `extras` is «خدمات اضافی», of `pending_payment` «در انتظار پرداخت».
 
 **Uploads**
 - Purposes per spec field: `DocsSpec.fileId` → `docs`; `FlyerSpec.designFileId` / `logoFileIds` → `flyer` or `logo`; `CartSpec.photoIds` → `cartridge`; `RepairSpec.photoIds` → `device`; courier `photoIds` → `pickup` (uploaded by that courier). `POST /orders` answers 400 when a referenced upload is missing, deleted, has the wrong purpose or belongs to someone else. `POST /orders/quote` ignores such ids (and all ids for anonymous callers). Up to 10 ids per list field.
 - The file type is checked by extension **and** content (magic bytes); `logo` accepts the same types as `docs`/`flyer`. `Upload.pages` is the PDF page count, `1` for images, absent for doc/docx. Files over `UPLOAD_MAX_MB` → 413 with a Persian message.
-- `GET /uploads/:id` is also allowed for the **customer who owns the referencing order** (e.g. to see pickup photos). Images are served `inline`, documents as `attachment`. After the retention job removed a file: **410**.
-- Retention also deletes uploads never attached to an order once they are older than `UPLOAD_RETENTION_DAYS` (default 30); runs hourly. The `Upload` record stays (with `deletedAt`) for the order history.
+- `GET /uploads/:id` is also allowed for the **customer who owns a referencing order** (e.g. to see pickup photos). Images are served `inline`, documents as `attachment`. After the retention job removed a file: **410**.
+- Retention deletes a file once **every** order referencing it is delivered/cancelled for more than `UPLOAD_RETENTION_DAYS` (default 30); it also deletes uploads never attached to an order once they are older than that; runs hourly. The `Upload` record stays (with `deletedAt`) for the order history.
 
 **Campaign**
 - `quote.couponValid` is `true` only when the code matches **and** the order contains at least one eligible service (otherwise the coupon line is 0 and stats are not bumped). The cap applies to the eligible part. Campaigns saved before v2 get `['school','docs']`.
@@ -349,6 +352,6 @@ These refine the v2 section where it was silent; the web app can rely on them.
 
 **Auth / SMS / ops**
 - If the SMS provider fails to send the OTP, `POST /auth/otp/request` answers **503** and the code is invalidated. Order SMS read `دیجیتال سرو — سفارش ۱۰۲۵۵: <template text>` and are sent in the background (never block or fail the order flow); `push` templates are logged (no push provider yet).
-- Rate limits (per client IP, behind one trusted proxy): all routes `THROTTLE_LIMIT`/`THROTTLE_TTL` s and `/api/auth/*` `THROTTLE_AUTH_LIMIT`/`THROTTLE_AUTH_TTL` s; exceeding them → **429** «تعداد درخواست‌ها بیش از حد مجاز است…». `/api/health*` is never throttled. Defaults: production 600/60 s and 30/60 s; otherwise 10000 and 1000.
+- Rate limits (per client IP, behind `TRUST_PROXY` trusted proxy hops — default 1 = nginx only, 2 = Caddy/CDN + nginx; also `true`/`false` or comma-separated CIDRs): all routes `THROTTLE_LIMIT`/`THROTTLE_TTL` s and `/api/auth/*` `THROTTLE_AUTH_LIMIT`/`THROTTLE_AUTH_TTL` s; `POST /api/uploads` additionally **per user** `THROTTLE_UPLOAD_LIMIT`/`THROTTLE_UPLOAD_TTL` s; exceeding them → **429** «تعداد درخواست‌ها بیش از حد مجاز است…». `/api/health*` is never throttled. Defaults: production 600/60 s, 30/60 s and 20/60 s; otherwise 10000, 1000 and 1000.
 - `GET /health` keeps the v1 body (always 200); `GET /health/ready` returns the same body with 503 when a dependency is down.
 - Demo seed: order 10240 is in `extras` (the design's «خدمات اضافی · لمینت جلد»), centres are the design's 5, seeded gateway orders carry a paid `mock` payment record. `seed:base` only inserts missing documents (never overwrites admin edits); the campaign is inserted active only if no other campaign is active.

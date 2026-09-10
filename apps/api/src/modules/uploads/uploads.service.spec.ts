@@ -174,6 +174,62 @@ describe('UploadsService.runRetention', () => {
   });
 });
 
+describe('UploadsService: files shared by several orders (reorder)', () => {
+  const now = new Date();
+  const ago = (d: number) => new Date(now.getTime() - d * DAY);
+  const file = (extra: Doc = {}) => ({
+    _id: new Types.ObjectId(), ownerId: customerId, purpose: 'docs', name: 'a.pdf', mime: 'application/pdf', size: 1,
+    path: `k/${String(new Types.ObjectId())}.pdf`, createdAt: ago(90), ...extra,
+  });
+
+  it('attach adds every referencing order once instead of overwriting', async () => {
+    const f = file();
+    const { svc } = setup([f]);
+    const [a, b] = [new Types.ObjectId(), new Types.ObjectId()];
+    await svc.attach([String(f._id)], a);
+    await svc.attach([String(f._id)], b); // the reorder
+    await svc.attach([String(f._id)], b); // idempotent
+    expect((f as Doc).orderIds.map(String)).toEqual([String(a), String(b)]);
+  });
+
+  it('the courier assigned to ANY referencing order may read (incl. a legacy single orderId)', async () => {
+    const first = { _id: new Types.ObjectId(), customerId, courierId: new Types.ObjectId() };
+    const second = { _id: new Types.ObjectId(), customerId, courierId }; // our courier has the reorder
+    const shared = file({ orderIds: [first._id, second._id] });
+    const legacy = file({ orderId: second._id });
+    const other = file({ orderIds: [first._id] });
+    const { svc } = setup([shared, legacy, other], [first, second]);
+    const courier = user(courierUserId, 'courier');
+    await expect(svc.canRead(shared as never, courier)).resolves.toBe(true);
+    await expect(svc.canRead(legacy as never, courier)).resolves.toBe(true);
+    await expect(svc.canRead(other as never, courier)).resolves.toBe(false);
+    await expect(svc.canRead(shared as never, user(otherId))).resolves.toBe(false);
+  });
+
+  it('retention deletes a shared file only when ALL referencing orders expired', async () => {
+    const expired1 = { _id: new Types.ObjectId(), status: 'delivered', timeline: [{ status: 'delivered', at: ago(40) }] };
+    const expired2 = { _id: new Types.ObjectId(), status: 'cancelled', timeline: [{ status: 'cancelled', at: ago(35) }] };
+    const reorder = { _id: new Types.ObjectId(), status: 'binding', timeline: [{ status: 'registered', at: ago(2) }] };
+    const stillNeeded = file({ orderIds: [expired1._id, reorder._id] });
+    const bothExpired = file({ orderIds: [expired1._id, expired2._id] });
+    const legacyExpired = file({ orderId: expired2._id });
+    const legacyPlusActive = file({ orderId: expired2._id, orderIds: [reorder._id] });
+    const all = [stillNeeded, bothExpired, legacyExpired, legacyPlusActive];
+    const { svc, storage } = setup(all, [expired1, expired2, reorder]);
+    for (const u of all) {
+      await mkdir(dirname(storage.resolveKey(u.path)), { recursive: true });
+      await writeFile(storage.resolveKey(u.path), 'x');
+    }
+    await expect(svc.runRetention(now)).resolves.toBe(2);
+    expect(bothExpired).toHaveProperty('deletedAt');
+    expect(legacyExpired).toHaveProperty('deletedAt');
+    for (const u of [stillNeeded, legacyPlusActive]) {
+      expect(u).not.toHaveProperty('deletedAt');
+      expect(await storage.exists(u.path)).toBe(true);
+    }
+  });
+});
+
 describe('LocalStorageDriver', () => {
   it('refuses keys that escape the upload root', () => {
     const storage = new LocalStorageDriver(root);

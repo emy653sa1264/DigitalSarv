@@ -28,7 +28,11 @@ export class Upload {
   @Prop({ type: String, required: true })
   path: string;
 
-  /** The (latest) order that references this file; drives the retention job. */
+  /** Every order that references this file (a reorder copies file ids); drives access and retention. */
+  @Prop({ type: [MongooseSchema.Types.ObjectId], default: undefined, index: true })
+  orderIds?: Types.ObjectId[];
+
+  /** Legacy (before `orderIds`): the latest referencing order — read as a one-element `orderIds`. */
   @Prop({ type: MongooseSchema.Types.ObjectId, index: true })
   orderId?: Types.ObjectId;
 

@@ -13,8 +13,8 @@ async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { bodyParser: false });
   const config = app.get(ConfigService).getOrThrow<AppConfig>('app');
 
-  // one reverse proxy (nginx) in front: req.ip / throttling use the real client address
-  app.set('trust proxy', 1);
+  // TRUST_PROXY hops in front (1 = nginx, 2 = Caddy/CDN + nginx): req.ip / throttling use the real client address
+  app.set('trust proxy', config.trustProxy);
   app.use(
     helmet({
       // uploads (images) may be embedded by the web app on a sibling origin

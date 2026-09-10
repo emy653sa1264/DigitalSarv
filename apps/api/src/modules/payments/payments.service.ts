@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   Inject,
   Injectable,
   Logger,
@@ -9,20 +10,26 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Interval } from '@nestjs/schedule';
-import { Model, Types, type QueryFilter } from 'mongoose';
+import { Model, type QueryFilter } from 'mongoose';
+import { RedisService } from '../../common/redis/redis.service.js';
 import type { AppConfig } from '../../config/configuration.js';
 import { CampaignsService } from '../campaigns/campaigns.service.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { applyPlacementEffects } from '../orders/order-effects.js';
 import { timelineEntry } from '../orders/order-helpers.js';
-import { Order, OrderDocument, type DeferredEffects } from '../orders/order.schema.js';
+import { Order, OrderDocument, type DeferredEffects, type OrderPayment } from '../orders/order.schema.js';
 import { RulesService } from '../rules/rules.service.js';
 import { User } from '../users/user.schema.js';
 import type { PaymentDriver } from './payment-driver.js';
 
 export const PAYMENT_DRIVER = Symbol('PAYMENT_DRIVER');
 
-type Outcome = 'ok' | 'failed';
+/** `pending` = the provider could not be reached to verify yet (`payment.status: 'verifying'`). */
+type Outcome = 'ok' | 'failed' | 'pending';
+
+/** Redis flag held while an attempt is verified with the provider — `start` refuses to replace it meanwhile. */
+export const verifyLockKey = (authority: string) => `pay:verifying:${authority}`;
+const VERIFY_LOCK_TTL_S = 60;
 
 @Injectable()
 export class PaymentsService {
@@ -37,6 +44,7 @@ export class PaymentsService {
     private readonly notifications: NotificationsService,
     @Inject(PAYMENT_DRIVER) readonly driver: PaymentDriver,
     config: ConfigService,
+    private readonly redis: RedisService,
   ) {
     this.app = config.getOrThrow<AppConfig>('app');
   }
@@ -55,10 +63,12 @@ export class PaymentsService {
 
   /**
    * Opens a new payment attempt for a `pending_payment` order and returns the gateway URL. The new
-   * authority replaces any previous one (an old authority's callback then no longer matches).
+   * authority replaces any previous one (an old authority's callback then no longer matches) — except
+   * while the current attempt is being verified (409): the customer may already have paid it.
    */
-  async start(order: Pick<OrderDocument, '_id' | 'code' | 'customerPhone' | 'quote' | 'status'>): Promise<string> {
+  async start(order: Pick<OrderDocument, '_id' | 'code' | 'customerPhone' | 'quote' | 'status' | 'payment'>): Promise<string> {
     if (order.status !== 'pending_payment') throw new BadRequestException('این سفارش در انتظار پرداخت نیست');
+    await this.assertNotVerifying(order.payment);
     const amount = order.quote?.total ?? 0;
     let request: { authority: string; url: string };
     try {
@@ -74,8 +84,10 @@ export class PaymentsService {
       this.logger.error(`payment request failed for order ${order.code}: ${(err as Error).message}`);
       throw new ServiceUnavailableException('اتصال به درگاه پرداخت برقرار نشد؛ چند دقیقه دیگر از «سفارش‌های من» دوباره پرداخت کنید');
     }
+    // a callback may have started verifying the current attempt while we talked to the provider
+    await this.assertNotVerifying(order.payment);
     const updated = await this.orders.findOneAndUpdate(
-      { _id: order._id, status: 'pending_payment' },
+      { _id: order._id, status: 'pending_payment', 'payment.status': { $ne: 'verifying' } },
       {
         $set: {
           payment: { driver: this.driver.name, authority: request.authority, status: 'pending', amount, requestedAt: new Date() },
@@ -84,8 +96,23 @@ export class PaymentsService {
       },
       { returnDocument: 'after' },
     );
-    if (!updated) throw new BadRequestException('این سفارش در انتظار پرداخت نیست');
+    if (!updated) {
+      const current = await this.orders.findById(order._id, { status: 1, payment: 1 });
+      if (current?.status === 'pending_payment') throw PaymentsService.verifying();
+      throw new BadRequestException('این سفارش در انتظار پرداخت نیست');
+    }
     return request.url;
+  }
+
+  private static verifying() {
+    return new ConflictException('پرداخت قبلی شما در حال بررسی است؛ چند لحظه دیگر وضعیت سفارش را بررسی کنید و دوباره پرداخت نکنید');
+  }
+
+  private async assertNotVerifying(payment: Pick<OrderPayment, 'authority' | 'status'> | undefined) {
+    if (payment?.status === 'verifying') throw PaymentsService.verifying();
+    if (payment?.authority && (await this.redis.client.exists(verifyLockKey(payment.authority)).catch(() => 0))) {
+      throw PaymentsService.verifying();
+    }
   }
 
   // ------------------------------------------------------------ callback
@@ -106,47 +133,86 @@ export class PaymentsService {
     // cancelled/expired meanwhile: never capture the money — an unverified payment is reversed by the bank
     if (order.status !== 'pending_payment') return this.returnUrl(id, 'failed');
 
-    const attempt: QueryFilter<Order> = { _id: order._id, status: 'pending_payment', 'payment.authority': authority };
     if (status !== 'OK') {
-      await this.markFailed(attempt);
+      await this.markFailed({ _id: order._id, status: 'pending_payment', 'payment.authority': authority });
       return this.returnUrl(id, 'failed');
     }
+    return this.returnUrl(id, await this.verifyAttempt(order, authority));
+  }
 
+  /**
+   * Verifies one attempt with the provider (under the verify flag) and settles it: paid → the order is
+   * paid; definitively unpaid → `failed`; provider unreachable → `verifying` (re-verified by `expireStale`).
+   */
+  private async verifyAttempt(order: OrderDocument, authority: string): Promise<Outcome> {
     const amount = order.payment?.amount ?? order.quote?.total ?? 0;
-    const result = await this.driver.verify({ authority, amount });
-    if (!result.ok) {
-      this.logger.warn(`payment verify failed for order ${order.code}: ${result.message}`);
-      if (!result.retryable) await this.markFailed(attempt);
-      return this.returnUrl(id, 'failed');
+    const attempt: QueryFilter<Order> = { _id: order._id, status: 'pending_payment', 'payment.authority': authority };
+    const lock = verifyLockKey(authority);
+    await this.redis.client.set(lock, '1', 'EX', VERIFY_LOCK_TTL_S).catch(() => undefined);
+    try {
+      const result = await this.driver.verify({ authority, amount });
+      if (!result.ok) {
+        if (result.retryable) {
+          this.logger.warn(`payment verify for order ${order.code} could not reach the provider (${result.message}); will re-verify`);
+          await this.orders.updateOne({ ...attempt, 'payment.status': { $ne: 'paid' } }, { $set: { 'payment.status': 'verifying' }, $inc: { __v: 1 } });
+          return 'pending';
+        }
+        this.logger.warn(`payment verify failed for order ${order.code}: ${result.message}`);
+        await this.markFailed(attempt);
+        return 'failed';
+      }
+      return await this.settleVerified(order, authority, amount, result.refId, result.cardPan);
+    } finally {
+      await this.redis.client.del(lock).catch(() => undefined);
     }
+  }
 
+  /** The provider confirmed `amount` was captured for `authority`: record it — never drop it. */
+  private async settleVerified(order: OrderDocument, authority: string, amount: number, refId: string, cardPan?: string): Promise<Outcome> {
     const paidAt = new Date();
     const paid = {
+      status: 'registered',
       paid: true,
       chargedAmount: amount,
       paidVia: 'gateway' as const,
       'payment.status': 'paid',
-      'payment.refId': result.refId,
+      'payment.refId': refId,
       'payment.paidAt': paidAt,
-      ...(result.cardPan ? { 'payment.cardPan': result.cardPan } : {}),
+      ...(cardPan ? { 'payment.cardPan': cardPan } : {}),
     };
-    const updated = await this.orders.findOneAndUpdate(
-      attempt,
-      { $set: { status: 'registered', ...paid }, $push: { timeline: timelineEntry('registered', paidAt) }, $inc: { __v: 1 } },
+    const push = { timeline: timelineEntry('registered', paidAt) };
+    let updated = await this.orders.findOneAndUpdate(
+      { _id: order._id, status: 'pending_payment', 'payment.authority': authority },
+      { $set: paid, $push: push, $inc: { __v: 1 } },
       { returnDocument: 'after' },
     );
+    if (!updated) {
+      // a newer `/pay` replaced the authority while this attempt was verified: the money was captured,
+      // so this attempt pays the order (the newer, unpaid authority then no longer matches its callback)
+      updated = await this.orders.findOneAndUpdate(
+        { _id: order._id, status: 'pending_payment' },
+        { $set: { ...paid, 'payment.authority': authority, 'payment.amount': amount }, $push: push, $inc: { __v: 1 } },
+        { returnDocument: 'after' },
+      );
+      if (updated) this.logger.warn(`order ${order.code}: paid by an earlier attempt ${authority} after a newer one was opened`);
+    }
     if (updated) {
       await this.applyDeferred(updated);
-      return this.returnUrl(id, 'ok');
+      return 'ok';
     }
 
-    // lost the compare-and-set: a concurrent callback already applied it, or the order was cancelled
+    // lost both: a concurrent callback applied this same attempt, or the order no longer takes it
+    // (cancelled/expired, or paid by another attempt) — then the captured money goes to the wallet
     const current = await this.orders.findById(order._id);
-    if (current?.payment?.status === 'paid' && current.payment.authority === authority && current.status !== 'cancelled') {
-      return this.returnUrl(id, 'ok');
+    if (!current) {
+      this.logger.error(`order ${order.code} vanished after payment ${authority} (refId ${refId}, ${amount} toman) was verified — settle manually`);
+      return 'failed';
     }
-    if (current?.status === 'cancelled') await this.refundCapturedToWallet(order._id, authority, amount, result.refId, paidAt);
-    return this.returnUrl(id, 'failed');
+    if (current.payment?.authority === authority && current.payment.status === 'paid') {
+      return current.status === 'cancelled' ? 'failed' : 'ok';
+    }
+    await this.creditToWallet(current, authority, amount, refId, paidAt);
+    return current.paid && current.status !== 'cancelled' ? 'ok' : 'failed';
   }
 
   private async markFailed(attempt: QueryFilter<Order>) {
@@ -169,47 +235,68 @@ export class PaymentsService {
   }
 
   /**
-   * The provider captured the money but the order was cancelled in between (customer cancel racing
-   * the callback): record the payment and credit it to the customer's wallet, exactly once.
+   * The provider captured `amount` for `authority` but the order can no longer take it (the customer
+   * cancelled while it was verified, or another attempt already paid it): credit it to the customer's
+   * wallet exactly once — the authority is pushed to `refundedAuthorities` in the same compare-and-set.
+   * When it was the cancelled order's own attempt, the payment is also recorded on the order.
    */
-  private async refundCapturedToWallet(orderId: Types.ObjectId, authority: string, amount: number, refId: string, paidAt: Date) {
-    const refunded = await this.orders.findOneAndUpdate(
-      { _id: orderId, status: 'cancelled', 'payment.authority': authority, 'payment.status': { $ne: 'paid' }, refunded: { $ne: true } },
+  private async creditToWallet(current: OrderDocument, authority: string, amount: number, refId: string, paidAt: Date) {
+    const ownAttempt = current.status === 'cancelled' && current.payment?.authority === authority;
+    const credited = await this.orders.findOneAndUpdate(
       {
-        $set: {
-          'payment.status': 'paid',
-          'payment.refId': refId,
-          'payment.paidAt': paidAt,
-          chargedAmount: amount,
-          paidVia: 'gateway',
-          refunded: true,
-        },
+        _id: current._id,
+        status: { $ne: 'pending_payment' },
+        refundedAuthorities: { $ne: authority },
+        // never the order's own recorded payment
+        $or: [{ 'payment.authority': { $ne: authority } }, { 'payment.status': { $ne: 'paid' } }],
+      },
+      {
+        $push: { refundedAuthorities: authority },
+        ...(ownAttempt
+          ? {
+              $set: {
+                'payment.status': 'paid',
+                'payment.refId': refId,
+                'payment.paidAt': paidAt,
+                chargedAmount: amount,
+                paidVia: 'gateway',
+                refunded: true,
+              },
+            }
+          : {}),
         $inc: { __v: 1 },
       },
       { returnDocument: 'after' },
     );
-    if (!refunded) return;
-    if (amount > 0) await this.users.updateOne({ _id: refunded.customerId }, { $inc: { walletBalance: amount } });
-    this.logger.warn(`order ${refunded.code}: paid after cancellation — ${amount} toman credited to the wallet`);
+    if (!credited) {
+      this.logger.log(`order ${current.code}: payment ${authority} was already credited to the wallet`);
+      return;
+    }
+    if (amount > 0) await this.users.updateOne({ _id: credited.customerId }, { $inc: { walletBalance: amount } });
+    const why = ownAttempt ? 'the order was cancelled while it was verified' : 'the order no longer accepted it';
+    this.logger.warn(`order ${credited.code}: payment ${authority} (refId ${refId}) captured but ${why} — ${amount} toman credited to the wallet`);
   }
 
   // ------------------------------------------------------------ expiry
 
   /**
-   * Cancels gateway orders still unpaid `timeoutMinutes` after creation and after their last payment
-   * attempt. Each cancel is a compare-and-set on `pending_payment`, so a concurrent verification and
-   * several API instances running this job at once are safe.
+   * First re-verifies attempts left `verifying` (callback OK, provider unreachable); then cancels
+   * gateway orders still unpaid `timeoutMinutes` after creation and after their last payment attempt —
+   * never one still `verifying`. Each cancel is a compare-and-set on `pending_payment`, so a concurrent
+   * verification and several API instances running this job at once are safe.
    */
   @Interval('payments-expire', 60_000)
   async expireStale(now: Date = new Date()): Promise<number> {
     const cutoff = new Date(now.getTime() - this.app.payment.timeoutMinutes * 60_000);
-    const stale: QueryFilter<Order> = {
-      status: 'pending_payment',
-      createdAt: { $lt: cutoff },
-      $or: [{ 'payment.requestedAt': { $lt: cutoff } }, { 'payment.requestedAt': { $exists: false } }],
-    };
     let cancelled = 0;
     try {
+      await this.reverify();
+      const stale: QueryFilter<Order> = {
+        status: 'pending_payment',
+        'payment.status': { $ne: 'verifying' },
+        createdAt: { $lt: cutoff },
+        $or: [{ 'payment.requestedAt': { $lt: cutoff } }, { 'payment.requestedAt': { $exists: false } }],
+      };
       const candidates = await this.orders.find(stale, { _id: 1 }).limit(500);
       for (const { _id } of candidates) {
         const res = await this.orders.updateOne(
@@ -223,6 +310,21 @@ export class PaymentsService {
       this.logger.warn(`payment expiry failed: ${(err as Error).message}`);
     }
     return cancelled;
+  }
+
+  /** Asks the provider again about every `verifying` attempt (skipping ones a callback is verifying right now). */
+  private async reverify(): Promise<void> {
+    const waiting = await this.orders.find({ status: 'pending_payment', 'payment.status': 'verifying' }).limit(100);
+    for (const order of waiting) {
+      const authority = order.payment?.authority;
+      if (!authority || (await this.redis.client.exists(verifyLockKey(authority)).catch(() => 0))) continue;
+      try {
+        const outcome = await this.verifyAttempt(order, authority);
+        this.logger.log(`re-verified payment of order ${order.code}: ${outcome}`);
+      } catch (err) {
+        this.logger.warn(`re-verify of order ${order.code} failed: ${(err as Error).message}`);
+      }
+    }
   }
 
   // ------------------------------------------------------------ mock gateway page

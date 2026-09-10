@@ -77,6 +77,11 @@ export function applyUpdate(doc: Doc, update: Doc) {
     const items = (v as { $each?: unknown[] })?.$each ?? [v];
     setPath(doc, k, [...((get(doc, k) as unknown[]) ?? []), ...items]);
   }
+  for (const [k, v] of Object.entries((update.$addToSet as Doc) ?? {})) {
+    const current = [...((get(doc, k) as unknown[]) ?? [])];
+    for (const item of (v as { $each?: unknown[] })?.$each ?? [v]) if (!current.some((x) => eq(x, item))) current.push(item);
+    setPath(doc, k, current);
+  }
 }
 
 /** Deep copy of plain objects/arrays; ObjectIds, Dates and Buffers are kept as-is. */
@@ -120,7 +125,8 @@ export function fakeModel(docs: Doc[] = []) {
     exists: vi.fn(async (filter: Doc) => (first(filter) ? { _id: first(filter)!._id } : null)),
     countDocuments: vi.fn(async (filter: Doc = {}) => docs.filter((d) => matches(d, filter)).length),
     distinct: vi.fn(async (field: string, filter: Doc = {}) => {
-      const values = docs.filter((d) => matches(d, filter)).map((d) => get(d, field)).filter((v) => v !== undefined);
+      // like Mongo, an array field contributes each of its elements
+      const values = docs.filter((d) => matches(d, filter)).flatMap((d) => [get(d, field)].flat()).filter((v) => v !== undefined);
       return [...new Map(values.map((v) => [String(norm(v)), v])).values()];
     }),
     findOneAndUpdate: vi.fn(async (filter: Doc, update: Doc) => {

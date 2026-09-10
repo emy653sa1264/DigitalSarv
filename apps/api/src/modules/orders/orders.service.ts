@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types, type QueryFilter } from 'mongoose';
@@ -184,8 +185,21 @@ export class OrdersService {
     await this.uploads.attach(uploadIds, order._id);
 
     if (gateway) {
-      // the order exists even if the gateway is unreachable: the customer retries via POST /orders/:id/pay
-      const paymentUrl = await this.payments.start(order);
+      let paymentUrl: string;
+      try {
+        paymentUrl = await this.payments.start(order);
+      } catch (err) {
+        if (!(err instanceof ServiceUnavailableException)) throw err;
+        // the order exists as pending_payment even if the gateway is unreachable: name it, so the client
+        // drops its draft (a resubmit would duplicate the order) and retries via POST /orders/:id/pay
+        throw new ServiceUnavailableException({
+          statusCode: 503,
+          error: 'Service Unavailable',
+          message: err.message,
+          orderId: String(order._id),
+          code: order.code,
+        });
+      }
       return withPaymentUrl(await this.findById(String(order._id)), paymentUrl);
     }
     // choosing another plan at checkout activates it (membership payment is stubbed) — only once the
@@ -240,31 +254,43 @@ export class OrdersService {
     return {
       ...draft,
       planId: u?.planId ?? draft.planId,
-      pickup: { ...order.pickup, date: tehranYmd() },
+      // explicit fields: spreading the Mongoose subdocument would copy its internals, not the data
+      pickup: {
+        address: order.pickup?.address ?? '',
+        phone: order.pickup?.phone ?? '',
+        slot: order.pickup?.slot ?? '',
+        date: tehranYmd(),
+        ...(order.pickup?.lat != null ? { lat: order.pickup.lat } : {}),
+        ...(order.pickup?.lng != null ? { lng: order.pickup.lng } : {}),
+      },
       payMethod: order.payMethod,
     };
   }
 
   async cancel(id: string, user: AuthUser): Promise<OrderDocument> {
-    const order = await this.ownOrder(id, user);
     const tooLate = () => new BadRequestException('این سفارش دیگر قابل لغو نیست؛ با پشتیبانی تماس بگیرید');
-    if (!CUSTOMER_CANCELLABLE.includes(order.status)) throw tooLate();
-    const cancelled = await this.cancelAndRefund(order, { customerId: order.customerId, status: { $in: CUSTOMER_CANCELLABLE } });
-    if (!cancelled) throw tooLate();
-    return cancelled;
+    // a gateway payment may land between the read and the compare-and-set (pending_payment → registered
+    // stays cancellable but is now refundable): re-read and try again instead of cancelling unrefunded
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const order = await this.ownOrder(id, user);
+      if (!CUSTOMER_CANCELLABLE.includes(order.status)) throw tooLate();
+      const cancelled = await this.cancelAndRefund(order, { customerId: order.customerId, status: { $in: CUSTOMER_CANCELLABLE } });
+      if (cancelled) return cancelled;
+    }
+    throw tooLate();
   }
 
   /**
    * The single cancellation path (customer + admin). The status change is a compare-and-set guarded by
-   * `guard`; for a paid wallet order `refunded: true` is set in the same update, so however many
-   * cancels race, exactly one wins and the wallet is credited `chargedAmount` exactly once.
-   * Returns null when the guard no longer matches (someone else changed the order first).
+   * `guard` and by the `paid` flag read here; for an order paid by wallet or gateway `refunded: true` is
+   * set in the same update, so however many cancels race, exactly one wins and the wallet is credited
+   * `chargedAmount` exactly once. Returns null when the guard no longer matches (the order changed first).
    */
   private async cancelAndRefund(order: OrderDocument, guard: QueryFilter<Order>): Promise<OrderDocument | null> {
-    // payMethod / chargedAmount / paid never change before cancellation, so the pre-read is safe to use
+    // chargedAmount / paidVia are only set together with `paid`, so guarding on `paid` makes the pre-read safe
     const amount = refundableAmount(order);
     const updated = await this.orders.findOneAndUpdate(
-      { ...guard, _id: order._id, refunded: { $ne: true } },
+      { ...guard, _id: order._id, refunded: { $ne: true }, paid: order.paid ? true : { $ne: true } },
       {
         $set: { status: 'cancelled', ...(amount > 0 ? { refunded: true, paid: false } : {}) },
         $push: { timeline: timelineEntry('cancelled') },

@@ -58,6 +58,19 @@ describe('loadAppConfig', () => {
     expect(c.throttle.limit).toBeGreaterThanOrEqual(1000);
   });
 
+  it('TRUST_PROXY: hop count (default 1), true/false or a validated list of IPs/CIDRs', () => {
+    expect(loadAppConfig(PROD).trustProxy).toBe(1);
+    expect(loadAppConfig({ ...PROD, TRUST_PROXY: '2' }).trustProxy).toBe(2); // Caddy/CDN + nginx
+    expect(loadAppConfig({ ...PROD, TRUST_PROXY: 'false' }).trustProxy).toBe(false);
+    expect(loadAppConfig({ ...PROD, TRUST_PROXY: 'true' }).trustProxy).toBe(true);
+    expect(loadAppConfig({ ...PROD, TRUST_PROXY: '172.16.0.0/12, 10.0.0.1, loopback, ::1, fd00::/8, 10.0.0.0/255.0.0.0' }).trustProxy).toEqual([
+      '172.16.0.0/12', '10.0.0.1', 'loopback', '::1', 'fd00::/8', '10.0.0.0/255.0.0.0',
+    ]);
+    for (const bad of ['yes', '10.0.0.0/33', 'example.com', '1.2.3', '-1']) {
+      expect(() => loadAppConfig({ ...PROD, TRUST_PROXY: bad })).toThrow(/TRUST_PROXY/);
+    }
+  });
+
   it('mock payments are rejected in production unless PAYMENT_ALLOW_MOCK=1', () => {
     expect(() => loadAppConfig({ ...PROD, PAYMENT_DRIVER: 'mock' })).toThrow(/PAYMENT_DRIVER=mock/);
     expect(loadAppConfig({ ...PROD, PAYMENT_DRIVER: 'mock', PAYMENT_ALLOW_MOCK: '1' }).payment.driver).toBe('mock');

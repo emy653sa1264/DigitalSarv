@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { PAYMENT_DRIVERS, type PaymentDriverName } from '../common/constants.js';
 import { normalizePhone } from '../common/utils/phone.js';
 
@@ -13,7 +14,13 @@ export interface ThrottleConfig {
   /** Stricter limit for `/api/auth/*`. */
   authTtl: number;
   authLimit: number;
+  /** Per-user limit for `POST /api/uploads` (file writes + PDF parsing are the expensive route). */
+  uploadTtl: number;
+  uploadLimit: number;
 }
+
+/** Express `trust proxy`: hop count, `true`/`false`, or trusted addresses/CIDRs/presets. */
+export type TrustProxy = number | boolean | string[];
 
 export interface AppConfig {
   nodeEnv: string;
@@ -31,6 +38,8 @@ export interface AppConfig {
   /** Public base URL of the API origin (no trailing slash, without `/api`) — payment callbacks, mock gateway. */
   apiPublicUrl: string;
   bodyLimit: string;
+  /** Reverse-proxy hops in front of the API (`TRUST_PROXY`): 1 = nginx only, 2 = Caddy/CDN + nginx. */
+  trustProxy: TrustProxy;
   throttle: ThrottleConfig;
   payment: {
     driver: PaymentDriverName;
@@ -91,6 +100,36 @@ function url(env: NodeJS.ProcessEnv, key: string, fallback: string, required: bo
   return trimSlash(raw);
 }
 
+const TRUST_PRESETS = ['loopback', 'linklocal', 'uniquelocal'];
+
+/** One `trust proxy` list entry as Express/proxy-addr accepts it: an IP, IP/prefix, IP/netmask or preset. */
+function isTrustEntry(entry: string): boolean {
+  if (TRUST_PRESETS.includes(entry)) return true;
+  const [addr, mask, ...rest] = entry.split('/');
+  const family = isIP(addr);
+  if (!family || rest.length) return false;
+  if (mask === undefined) return true;
+  if (/^\d+$/.test(mask)) return Number(mask) <= (family === 4 ? 32 : 128);
+  return family === 4 && isIP(mask) === 4;
+}
+
+/**
+ * `TRUST_PROXY` (Express semantics): a hop count (default 1 = the bundled nginx; 2 = Caddy/host proxy/
+ * CDN + nginx), `true`/`false`, or comma-separated trusted IPs/CIDRs/presets.
+ */
+function trustProxy(env: NodeJS.ProcessEnv, errors: string[]): TrustProxy {
+  const raw = (env.TRUST_PROXY ?? '').trim();
+  if (!raw) return 1;
+  if (/^\d+$/.test(raw)) return Number(raw);
+  if (raw === 'true' || raw === 'false') return raw === 'true';
+  const list = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  if (!list.length || !list.every(isTrustEntry)) {
+    errors.push(`TRUST_PROXY must be a hop count (1 = nginx only, 2 = Caddy/CDN + nginx), true/false, or comma-separated IPs/CIDRs (got "${raw}")`);
+    return 1;
+  }
+  return list;
+}
+
 /**
  * Reads and validates the environment. Throws one error listing every problem, so a misconfigured
  * deployment fails fast at boot instead of at the first payment/SMS.
@@ -136,6 +175,8 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     limit: num(env, 'THROTTLE_LIMIT', isProduction ? 600 : 10_000, errors),
     authTtl: num(env, 'THROTTLE_AUTH_TTL', 60, errors, 1),
     authLimit: num(env, 'THROTTLE_AUTH_LIMIT', isProduction ? 30 : 1_000, errors),
+    uploadTtl: num(env, 'THROTTLE_UPLOAD_TTL', 60, errors, 1),
+    uploadLimit: num(env, 'THROTTLE_UPLOAD_LIMIT', isProduction ? 20 : 1_000, errors),
   };
 
   const bodyLimit = (env.BODY_LIMIT ?? '').trim() || '1mb';
@@ -158,6 +199,7 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     webPublicUrl,
     apiPublicUrl,
     bodyLimit,
+    trustProxy: trustProxy(env, errors),
     throttle,
     payment: {
       driver: paymentDriver,

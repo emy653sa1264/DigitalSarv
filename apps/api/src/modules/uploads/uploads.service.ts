@@ -9,7 +9,7 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Cron, CronExpression } from '@nestjs/schedule';
-import { open, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { open, readdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Model, Types } from 'mongoose';
 import type { AuthUser } from '../../common/auth/auth-user.js';
@@ -19,12 +19,12 @@ import { assertObjectId } from '../../common/utils/object-id.js';
 import { Courier } from '../courier/courier.schema.js';
 import { Order } from '../orders/order.schema.js';
 import type { OrderDraft } from '../pricing/pricing.types.js';
+import { countPdfPages } from './pdf-pages.js';
 import {
   cleanFileName,
   draftFileRefs,
   isImageKind,
   isObjectIdString,
-  pdfPageCount,
   validateUpload,
 } from './upload-rules.js';
 import { Upload, UploadDocument, uploadJson } from './upload.schema.js';
@@ -37,6 +37,12 @@ export interface IncomingFile {
   path: string;
   originalname: string;
   size: number;
+}
+
+/** Every order referencing an upload; the legacy single `orderId` reads as a one-element list. */
+export function uploadOrderIds(u: Pick<Upload, 'orderIds' | 'orderId'>): Types.ObjectId[] {
+  const all = [...(u.orderIds ?? []), ...(u.orderId ? [u.orderId] : [])];
+  return [...new Map(all.map((id) => [String(id), id])).values()];
 }
 
 @Injectable()
@@ -64,7 +70,8 @@ export class UploadsService {
       if (!check.ok) throw new BadRequestException(check.message);
 
       let pages: number | undefined;
-      if (check.kind === 'pdf') pages = await pdfPageCount(await readFile(file.path));
+      // parsed in a worker with a time budget; unknown (the customer enters it) when it cannot be counted
+      if (check.kind === 'pdf') pages = await countPdfPages(file.path);
       else if (isImageKind(check.kind)) pages = 1;
 
       const id = new Types.ObjectId();
@@ -91,7 +98,7 @@ export class UploadsService {
 
   // ------------------------------------------------------------ download
 
-  /** The uploader, any admin, the order's customer, or the courier assigned to the referencing order. */
+  /** The uploader, any admin, a referencing order's customer, or the courier assigned to any referencing order. */
   async openForUser(id: string, user: AuthUser) {
     assertObjectId(id, 'فایل');
     const upload = await this.uploads.findById(id);
@@ -103,15 +110,15 @@ export class UploadsService {
     return { upload, stream: this.storage.open(upload.path) };
   }
 
-  async canRead(upload: Pick<UploadDocument, 'ownerId' | 'orderId'>, user: AuthUser): Promise<boolean> {
+  async canRead(upload: Pick<UploadDocument, 'ownerId' | 'orderId' | 'orderIds'>, user: AuthUser): Promise<boolean> {
     if (user.role === 'admin' || String(upload.ownerId) === user.id) return true;
-    if (!upload.orderId) return false;
-    const order = await this.orders.findById(upload.orderId, { customerId: 1, courierId: 1 });
-    if (!order) return false;
-    if (user.role === 'customer') return String(order.customerId) === user.id;
-    if (user.role === 'courier' && order.courierId) {
+    const orderIds = uploadOrderIds(upload);
+    if (!orderIds.length) return false;
+    const orders = await this.orders.find({ _id: { $in: orderIds } }, { customerId: 1, courierId: 1 });
+    if (user.role === 'customer') return orders.some((o) => String(o.customerId) === user.id);
+    if (user.role === 'courier' && orders.some((o) => o.courierId)) {
       const courier = await this.couriers.findOne({ userId: new Types.ObjectId(user.id) }, { _id: 1 });
-      return !!courier && String(courier._id) === String(order.courierId);
+      return !!courier && orders.some((o) => o.courierId && String(o.courierId) === String(courier._id));
     }
     return false;
   }
@@ -168,37 +175,45 @@ export class UploadsService {
     return { draft: { ...draft, services }, uploadIds: [...byId.keys()] };
   }
 
-  /** Links uploads to the (latest) order that references them — drives access and retention. */
+  /** Adds `orderId` to the uploads' referencing orders (a reorder reuses files) — drives access and retention. */
   async attach(ids: string[], orderId: Types.ObjectId): Promise<void> {
-    if (ids.length) await this.uploads.updateMany({ _id: { $in: ids } }, { $set: { orderId } });
+    if (ids.length) await this.uploads.updateMany({ _id: { $in: ids } }, { $addToSet: { orderIds: orderId } });
   }
 
   // ------------------------------------------------------------ retention («حریم خصوصی و داده‌ها»)
 
   /**
-   * Deletes files whose order was delivered/cancelled more than `retentionDays` ago, plus uploads
-   * never attached to an order within that time, and stale temp files. Idempotent — safe to run on
-   * several instances at once.
+   * Deletes files once every order referencing them was delivered/cancelled more than `retentionDays`
+   * ago, plus uploads never attached to an order within that time, and stale temp files. Idempotent —
+   * safe to run on several instances at once.
    */
   @Cron(CronExpression.EVERY_HOUR, { name: 'uploads-retention' })
   async runRetention(now: Date = new Date()): Promise<number> {
     const cutoff = addDays(now, -this.retentionDays);
     let removed = 0;
     try {
-      const orderIds = await this.uploads.distinct('orderId', { deletedAt: { $exists: false }, orderId: { $exists: true } });
-      const expiredOrders = orderIds.length
+      const live = { deletedAt: { $exists: false } };
+      const referenced = [
+        ...(await this.uploads.distinct('orderIds', { ...live, orderIds: { $exists: true } })),
+        ...(await this.uploads.distinct('orderId', { ...live, orderId: { $exists: true } })),
+      ];
+      const expiredOrders = referenced.length
         ? await this.orders.find(
-            { _id: { $in: orderIds }, status: { $in: TERMINAL }, timeline: { $elemMatch: { status: { $in: TERMINAL }, at: { $lt: cutoff } } } },
+            { _id: { $in: referenced }, status: { $in: TERMINAL }, timeline: { $elemMatch: { status: { $in: TERMINAL }, at: { $lt: cutoff } } } },
             { _id: 1 },
           )
         : [];
-      const expired = await this.uploads.find({
-        deletedAt: { $exists: false },
+      const expiredIds = expiredOrders.map((o) => o._id);
+      const expiredSet = new Set(expiredIds.map(String));
+      const candidates = await this.uploads.find({
+        ...live,
         $or: [
-          ...(expiredOrders.length ? [{ orderId: { $in: expiredOrders.map((o) => o._id) } }] : []),
-          { orderId: { $exists: false }, createdAt: { $lt: cutoff } },
+          ...(expiredIds.length ? [{ orderIds: { $in: expiredIds } }, { orderId: { $in: expiredIds } }] : []),
+          { orderIds: { $exists: false }, orderId: { $exists: false }, createdAt: { $lt: cutoff } },
         ],
       });
+      // a file shared by several orders (reorder) stays until all of them expired
+      const expired = candidates.filter((u) => uploadOrderIds(u).every((id) => expiredSet.has(String(id))));
       for (const u of expired) {
         await this.storage.remove(u.path);
         const res = await this.uploads.updateOne({ _id: u._id, deletedAt: { $exists: false } }, { $set: { deletedAt: now } });

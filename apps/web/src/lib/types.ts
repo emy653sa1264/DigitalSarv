@@ -272,7 +272,11 @@ export interface Order {
 export interface OrderPayment {
   driver: string
   authority: string
-  status: 'pending' | 'paid' | 'failed'
+  /** `verifying`: the bank said OK but the provider could not be reached yet — re-verified by the server. */
+  status: 'pending' | 'verifying' | 'paid' | 'failed'
+  /** Toman requested for the current attempt. */
+  amount?: number
+  requestedAt?: string
   refId?: string
   cardPan?: string
   paidAt?: string

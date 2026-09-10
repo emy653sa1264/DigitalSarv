@@ -8,9 +8,17 @@ describe('refundableAmount', () => {
     expect(refundableAmount(base)).toBe(500000);
   });
 
-  it('nothing for non-wallet, unpaid or already refunded orders', () => {
-    expect(refundableAmount({ ...base, payMethod: 'gateway' })).toBe(0);
+  it('a paid gateway order refunds chargedAmount (to the wallet) like a wallet order', () => {
+    const gateway = { ...base, payMethod: 'gateway' as const, paidVia: 'gateway' as const };
+    expect(refundableAmount(gateway)).toBe(500000);
+    // not paid yet (pending_payment) or nothing charged (repair-only) → nothing
+    expect(refundableAmount({ ...gateway, paid: false, chargedAmount: undefined })).toBe(0);
+    expect(refundableAmount({ ...gateway, chargedAmount: 0 })).toBe(0);
+  });
+
+  it('nothing for cod, unpaid or already refunded orders', () => {
     expect(refundableAmount({ ...base, payMethod: 'cod' })).toBe(0);
+    expect(refundableAmount({ ...base, payMethod: 'cod', paidVia: 'cod' })).toBe(0); // delivered cod is paid but never refunded
     expect(refundableAmount({ ...base, paid: false })).toBe(0);
     expect(refundableAmount({ ...base, refunded: true })).toBe(0);
   });

@@ -1,5 +1,4 @@
-import { PDFDocument } from 'pdf-lib';
-import { cleanFileName, draftFileRefs, pdfPageCount, sniffKind, validateUpload } from './upload-rules.js';
+import { cleanFileName, draftFileRefs, sniffKind, validateUpload } from './upload-rules.js';
 
 const bytes = (...b: number[]) => Uint8Array.from(b);
 const ascii = (s: string, pad = 16) => Uint8Array.from(Buffer.from(s.padEnd(pad, '\0'), 'latin1'));
@@ -65,20 +64,6 @@ describe('cleanFileName', () => {
     expect(long.length).toBe(150);
     expect(long.endsWith('.pdf')).toBe(true);
     expect(cleanFileName('')).toBe('file');
-  });
-});
-
-describe('pdfPageCount', () => {
-  it('counts the pages of a real PDF', async () => {
-    const doc = await PDFDocument.create();
-    for (let i = 0; i < 3; i++) doc.addPage();
-    expect(await pdfPageCount(await doc.save())).toBe(3);
-  });
-
-  it('falls back to counting page objects, undefined when there are none', async () => {
-    const broken = Buffer.from('%PDF-1.4\n1 0 obj <</Type /Pages /Count 2>>\n2 0 obj <</Type /Page>>\n3 0 obj <</Type/Page>>\ntrailer', 'latin1');
-    expect(await pdfPageCount(broken)).toBe(2);
-    expect(await pdfPageCount(Buffer.from('not a pdf'))).toBeUndefined();
   });
 });
 

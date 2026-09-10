@@ -69,7 +69,7 @@ async function networkFirst(request, shell) {
       await cache.put(shell, response.clone())
     }
     return response
-  } catch (error) {
+  } catch {
     const cached = (await cache.match(shell)) || (await cache.match('/index.html'))
     return cached || new Response(OFFLINE_HTML, { status: 503, headers: { 'Content-Type': 'text/html; charset=utf-8' } })
   }

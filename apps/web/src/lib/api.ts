@@ -161,8 +161,8 @@ const UPLOAD_MAX_MB_FA = '۵۰'
 const IMAGE_EXT = ['jpg', 'jpeg', 'png', 'webp', 'heic']
 const DOC_EXT = ['pdf', 'doc', 'docx', ...IMAGE_EXT]
 
-/** Photo purposes accept images only. */
-const PHOTO_PURPOSES: UploadPurpose[] = ['logo', 'cartridge', 'device', 'pickup']
+/** Photo purposes accept images only (`logo` accepts document types too, like `docs`/`flyer`). */
+const PHOTO_PURPOSES: UploadPurpose[] = ['cartridge', 'device', 'pickup']
 
 const extensionsFor = (purpose: UploadPurpose) => (PHOTO_PURPOSES.includes(purpose) ? IMAGE_EXT : DOC_EXT)
 
