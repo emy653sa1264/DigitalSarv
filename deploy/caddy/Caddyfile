@@ -1,0 +1,16 @@
+# Optional TLS terminator for docker-compose.prod.yml (see the commented `caddy` service there).
+# Caddy obtains and renews Let's Encrypt certificates for {$DOMAIN} automatically.
+{
+	# email ops@example.ir
+}
+
+{$DOMAIN} {
+	encode zstd gzip
+	# nginx (web) serves the apps and proxies /api/; Caddy adds X-Forwarded-For/Proto/Host.
+	reverse_proxy web:80
+}
+
+# Redirect www to the apex domain
+www.{$DOMAIN} {
+	redir https://{$DOMAIN}{uri} permanent
+}

@@ -1,0 +1,46 @@
+# Build context is the repo root for both images (apps/api/Dockerfile, apps/web/Dockerfile).
+# Keep it small and never ship secrets or local build output into an image.
+
+# VCS / tooling
+.git
+.github
+.claude
+.vscode
+.idea
+*.log
+.DS_Store
+
+# Dependencies and build output (rebuilt inside the image)
+**/node_modules
+**/dist
+/build
+**/coverage
+**/.vite
+# stale incremental info makes `nest build` (deleteOutDir) emit an empty dist
+**/*.tsbuildinfo
+
+# Secrets / env (the api gets its env from compose env_file at runtime, never baked in)
+.env
+.env.*
+**/.env
+**/.env.*
+
+# Runtime data
+uploads
+**/uploads
+backups
+
+# Reference material & docs not needed to build
+design
+docs
+*.md
+*.txt
+
+# Test output
+**/test-results
+**/playwright-report
+**/blob-report
+
+# Compose files are not part of any image (deploy/nginx is copied into the web image)
+docker-compose*.yml
+deploy/caddy

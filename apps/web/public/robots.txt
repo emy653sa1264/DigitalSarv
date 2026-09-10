@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+Disallow: /app
+Disallow: /courier
+Disallow: /admin
+Disallow: /api
+
+Sitemap: %VITE_PUBLIC_URL%/sitemap.xml

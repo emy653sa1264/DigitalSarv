@@ -1,0 +1,78 @@
+import { ClipboardList, FileText, Newspaper, Printer, Truck, Wrench, type LucideIcon } from 'lucide-react'
+import type { BrandTone } from '@/components/brand'
+import type { Prices } from '@/lib/types'
+
+/** Landing section keys managed from the admin CMS (`GET /cms`). */
+export type CmsKey =
+  | 'hero'
+  | 'school'
+  | 'docs'
+  | 'flyer'
+  | 'cartridge'
+  | 'repair'
+  | 'pickup'
+  | 'how'
+  | 'prices'
+  | 'plans'
+  | 'campaign'
+  | 'reviews'
+  | 'faq'
+  | 'cta'
+  | 'footer'
+
+/** Sections that ship switched off — kept hidden while the CMS request is in flight to avoid a flash. */
+export const DEFAULT_OFF: CmsKey[] = ['prices', 'reviews']
+
+export const START_ORDER = '/app/family'
+
+export const HERO_STATS = [
+  { value: '۱۸٬۴۰۰', label: 'کتاب فنری‌شده', tile: 'bg-blue-soft', valueClass: 'text-blue-dark', labelClass: 'text-muted-1' },
+  { value: '۲۴ ساعت', label: 'میانگین آماده‌سازی', tile: 'bg-green-soft', valueClass: 'text-green-dark', labelClass: 'text-muted-1' },
+  { value: '۴٫۸', label: 'رضایت مشتری از ۵', tile: 'bg-night', valueClass: 'text-white', labelClass: 'text-[#9aa2b8]' },
+]
+
+export interface ServiceCard {
+  key: CmsKey
+  title: string
+  body: string
+  cta: string
+  icon: LucideIcon
+  tone: BrandTone
+  to: string
+}
+
+export const SERVICE_CARDS: ServiceCard[] = [
+  { key: 'docs', title: 'چاپ اسناد', body: 'فایل را بفرستید، چاپ‌شده تحویل بگیرید — بدون انتخاب گرماژ.', cta: 'سفارش چاپ', icon: FileText, tone: 'cyan', to: '/app/docs' },
+  { key: 'docs', title: 'پایان‌نامه و صحافی', body: 'دانشجو، اداره و شرکت: فایل را بفرستید، چاپ و صحافی‌شده تحویل بگیرید.', cta: 'چاپ و صحافی', icon: ClipboardList, tone: 'blue', to: '/app/docs' },
+  { key: 'flyer', title: 'طراحی و چاپ تراکت', body: 'طراحی دارید یا نه، هر دو مسیر هست.', cta: 'شروع کنید', icon: Newspaper, tone: 'violet', to: '/app/flyer' },
+  { key: 'cartridge', title: 'شارژ کارتریج', body: 'کارتریج را می‌گیریم، پر می‌کنیم، برمی‌گردانیم.', cta: 'درخواست سرویس', icon: Printer, tone: 'amber', to: '/app/cart' },
+  { key: 'repair', title: 'تعمیر پرینتر', body: 'دستگاه را می‌بریم؛ پیش‌فاکتور را تأیید کنید.', cta: 'درخواست تعمیر', icon: Wrench, tone: 'green', to: '/app/repair' },
+  { key: 'pickup', title: 'تحویل‌گیری و تحویل درب منزل', body: 'ما می‌آییم؛ شما فقط سفارش دهید.', cta: 'ثبت سفارش', icon: Truck, tone: 'pink', to: START_ORDER },
+]
+
+export const HOW_STEPS = [
+  { n: '۱', title: 'انتخاب پایه', body: 'برای هر فرزند فقط پایه تحصیلی' },
+  { n: '۲', title: 'محاسبه قیمت', body: 'قیمت هر فرزند جداگانه' },
+  { n: '۳', title: 'تحویل‌گیری', body: 'پیک درب منزل، شمارش و تطبیق' },
+  { n: '۴', title: 'کنترل کیفیت', body: 'بازبینی نهایی هر کتاب' },
+  { n: '۵', title: 'تحویل', body: 'بسته خانوادگی، یک تحویل' },
+]
+
+export const FAQ = [
+  { q: 'کتاب‌ها را چطور انتخاب کنم؟', a: 'لازم نیست. فقط پایه تحصیلی را از اول ابتدایی تا سوم دبیرستان انتخاب کنید؛ کتاب‌های همان پایه خودکار در نظر گرفته می‌شود.' },
+  { q: 'چند فرزند می‌توانم اضافه کنم؟', a: 'محدودیتی نیست؛ هر فرزند پایه، رنگ فنری و خدمات اضافی مستقل خودش را دارد.' },
+  { q: 'می‌توانم چاپ اسناد را هم به همین سفارش اضافه کنم؟', a: 'بله. چاپ اسناد، تراکت، کارتریج و تعمیر پرینتر همه در همان سفارش خانوادگی و همان تحویل‌گیری جمع می‌شوند.' },
+  { q: 'اگر تعداد کتاب‌ها با ثبت سفارش فرق داشت؟', a: 'پیک در محل شمارش می‌کند؛ مغایرت ثبت و مبلغ بازمحاسبه و برای تأیید شما ارسال می‌شود.' },
+]
+
+/** Unit prices shown by the optional "قیمت‌ها" section (labels from the admin price groups). */
+export const PRICE_ITEMS: { key: keyof Prices; label: string; group: string; tone: BrandTone }[] = [
+  { key: 'bindPerBook', label: 'فنری هر کتاب', group: 'فنری کتاب مدرسه', tone: 'blue' },
+  { key: 'linedSheet', label: 'هر برگ کاغذ خط‌دار', group: 'فنری کتاب مدرسه', tone: 'blue' },
+  { key: 'docBw', label: 'هر صفحه سیاه‌وسفید', group: 'چاپ و صحافی اسناد', tone: 'cyan' },
+  { key: 'docColor', label: 'هر صفحه رنگی', group: 'چاپ و صحافی اسناد', tone: 'cyan' },
+  { key: 'docBind', label: 'صحافی هر جلد', group: 'چاپ و صحافی اسناد', tone: 'cyan' },
+  { key: 'flyerA5', label: 'هر برگ A5', group: 'تراکت', tone: 'violet' },
+  { key: 'cartridge', label: 'شارژ کارتریج (پیش‌فرض)', group: 'کارتریج و حمل', tone: 'amber' },
+  { key: 'pickupFee', label: 'هزینه تحویل‌گیری', group: 'کارتریج و حمل', tone: 'pink' },
+]

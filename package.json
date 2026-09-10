@@ -1,0 +1,24 @@
+{
+  "name": "digital-sarv",
+  "private": true,
+  "version": "0.1.0",
+  "description": "دیجیتال سرو — printing, school-book binding and home pickup/delivery platform",
+  "packageManager": "pnpm@10.15.0",
+  "scripts": {
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "dev": "pnpm -r --parallel --filter ./apps/* dev",
+    "dev:web": "pnpm --filter web dev",
+    "dev:api": "pnpm --filter api start:dev",
+    "seed": "pnpm --filter api seed",
+    "seed:base": "pnpm --filter api seed:base",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "docker:build": "docker compose -f docker-compose.prod.yml --env-file .env.production build",
+    "docker:up": "docker compose -f docker-compose.prod.yml --env-file .env.production up -d",
+    "docker:down": "docker compose -f docker-compose.prod.yml --env-file .env.production down",
+    "docker:logs": "docker compose -f docker-compose.prod.yml --env-file .env.production logs -f --tail=200"
+  }
+}

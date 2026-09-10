@@ -1,0 +1,188 @@
+@import "tailwindcss";
+@import "@fontsource/vazirmatn/400.css";
+@import "@fontsource/vazirmatn/500.css";
+@import "@fontsource/vazirmatn/700.css";
+@import "@fontsource/vazirmatn/800.css";
+@import "@fontsource/vazirmatn/900.css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ───────────────────────────── Design tokens (see .claude/skills/digital-sarv-design) ── */
+:root {
+  --ink: #0f1320;
+  --night: #07090f;
+  --night-2: #1c2233;
+  --muted-1: #4a5268;
+  --muted-2: #6b7488;
+  --muted-3: #8c93a8;
+  --line: #dfe5f2;
+  --line-soft: #eef2fb;
+  --line-input: #cfd8ec;
+  --field: #fbfcff;
+
+  --blue: #2f6df6; --blue-dark: #1b45b8; --blue-soft: #e3ecff; --blue-ink: #1b45b8;
+  --green: #1fa968; --green-dark: #14764a; --green-soft: #d7f4e6; --green-ink: #0d5334;
+  --violet: #7c5cf5; --violet-dark: #4c31b8; --violet-soft: #ebe5ff; --violet-ink: #4c31b8;
+  --cyan: #0fa9bd; --cyan-dark: #0b7686; --cyan-soft: #d6f4f8; --cyan-ink: #0b5a66;
+  --amber: #ef9d0c; --amber-dark: #a86a05; --amber-soft: #fdeecd; --amber-ink: #5c4306;
+  --pink: #ea5399; --pink-dark: #a82c69; --pink-soft: #ffe1ef; --pink-ink: #7c1f4d;
+
+  /* role theme — default = customer/landing (blue) */
+  --accent: var(--blue);
+  --accent-dark: var(--blue-dark);
+  --accent-soft: var(--blue-soft);
+  --accent-soft-ink: var(--blue-ink);
+  --shell: #eef2fb;
+  --glow: rgba(47, 109, 246, 0.35);
+
+  /* shadcn semantic tokens mapped onto the design */
+  --radius: 1.375rem;
+  --background: var(--shell);
+  --foreground: var(--ink);
+  --card: #ffffff;
+  --card-foreground: var(--ink);
+  --popover: #ffffff;
+  --popover-foreground: var(--ink);
+  --primary: var(--accent);
+  --primary-foreground: #ffffff;
+  --secondary: var(--accent-soft);
+  --secondary-foreground: var(--accent-soft-ink);
+  --muted: var(--line-soft);
+  --muted-foreground: var(--muted-2);
+  --destructive: var(--pink-dark);
+  --destructive-foreground: #ffffff;
+  --border: var(--line);
+  --input: var(--line-input);
+  --ring: var(--accent);
+  --sidebar: var(--night);
+  --sidebar-foreground: #c6cbdc;
+  --sidebar-primary: var(--accent);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: var(--night-2);
+  --sidebar-accent-foreground: #ffffff;
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+  --sidebar-ring: var(--accent);
+  --chart-1: var(--violet);
+  --chart-2: var(--cyan);
+  --chart-3: var(--blue);
+  --chart-4: var(--green);
+  --chart-5: var(--pink);
+}
+
+[data-role="courier"] {
+  --accent: var(--green);
+  --accent-dark: var(--green-dark);
+  --accent-soft: var(--green-soft);
+  --accent-soft-ink: var(--green-ink);
+  --shell: #ecf6f0;
+  --glow: rgba(31, 169, 104, 0.35);
+}
+
+[data-role="admin"] {
+  --accent: var(--violet);
+  --accent-dark: var(--violet-dark);
+  --accent-soft: var(--violet-soft);
+  --accent-soft-ink: var(--violet-ink);
+  --shell: #f2effc;
+  --glow: rgba(124, 92, 245, 0.35);
+}
+
+@theme inline {
+  --font-sans: "Vazirmatn", system-ui, sans-serif;
+
+  --color-ink: var(--ink);
+  --color-night: var(--night);
+  --color-night-2: var(--night-2);
+  --color-muted-1: var(--muted-1);
+  --color-muted-2: var(--muted-2);
+  --color-muted-3: var(--muted-3);
+  --color-line: var(--line);
+  --color-line-soft: var(--line-soft);
+  --color-line-input: var(--line-input);
+  --color-field: var(--field);
+  --color-shell: var(--shell);
+
+  --color-accent: var(--accent);
+  --color-accent-dark: var(--accent-dark);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-soft-ink: var(--accent-soft-ink);
+
+  --color-blue: var(--blue); --color-blue-dark: var(--blue-dark); --color-blue-soft: var(--blue-soft); --color-blue-ink: var(--blue-ink);
+  --color-green: var(--green); --color-green-dark: var(--green-dark); --color-green-soft: var(--green-soft); --color-green-ink: var(--green-ink);
+  --color-violet: var(--violet); --color-violet-dark: var(--violet-dark); --color-violet-soft: var(--violet-soft); --color-violet-ink: var(--violet-ink);
+  --color-cyan: var(--cyan); --color-cyan-dark: var(--cyan-dark); --color-cyan-soft: var(--cyan-soft); --color-cyan-ink: var(--cyan-ink);
+  --color-amber: var(--amber); --color-amber-dark: var(--amber-dark); --color-amber-soft: var(--amber-soft); --color-amber-ink: var(--amber-ink);
+  --color-pink: var(--pink); --color-pink-dark: var(--pink-dark); --color-pink-soft: var(--pink-soft); --color-pink-ink: var(--pink-ink);
+
+  --shadow-glow: 0 10px 22px var(--glow);
+  --shadow-glow-sm: 0 6px 14px var(--glow);
+
+  --radius-sm: calc(var(--radius) - 8px);
+  --radius-md: calc(var(--radius) - 4px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    font-family: var(--font-sans);
+  }
+  body {
+    @apply bg-background text-foreground antialiased;
+    margin: 0;
+  }
+  h1, h2, h3 {
+    font-weight: 900;
+    letter-spacing: -0.02em;
+  }
+  button, input, select, textarea {
+    font-family: inherit;
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  ::selection {
+    background: rgba(47, 109, 246, 0.22);
+  }
+}
+
+@utility no-scrollbar {
+  scrollbar-width: none;
+  &::-webkit-scrollbar { display: none; }
+}

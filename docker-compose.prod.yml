@@ -1,0 +1,156 @@
+# Digital Sarv — production stack.
+#
+#   cp .env.production.example .env.production   # fill in every CHANGE_ME
+#   docker compose -f docker-compose.prod.yml --env-file .env.production up -d --build
+#
+# .env.production is used twice: for ${...} interpolation below (--env-file) and as the api's env_file.
+# Only `web` (nginx) publishes a port; mongo and redis live on an internal network with no host ports.
+# See docs/deploy.md.
+
+name: digital-sarv-prod
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  mongo:
+    image: mongo:8
+    restart: unless-stopped
+    environment:
+      # Only applied when the mongo-data volume is created for the first time.
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_INITDB_ROOT_USERNAME:?set in .env.production and pass --env-file .env.production}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_INITDB_ROOT_PASSWORD:?set in .env.production and pass --env-file .env.production}
+    volumes:
+      - mongo-data:/data/db
+      - mongo-config:/data/configdb
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    logging: *logging
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?set in .env.production and pass --env-file .env.production}
+    # AOF persistence (fsync every second) + password auth
+    command:
+      - sh
+      - -c
+      - exec redis-server --appendonly yes --appendfsync everysec --requirepass "$$REDIS_PASSWORD"
+    volumes:
+      - redis-data:/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+    logging: *logging
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: digital-sarv/api:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    init: true
+    env_file:
+      # Keep this the same file you pass to --env-file. Override with ENV_FILE=... (e.g. staging / CI config checks).
+      # Not `required` so `config` works with only the example file; the api refuses to boot without its env anyway.
+      - path: ${ENV_FILE:-.env.production}
+        required: false
+    environment:
+      # Pinned regardless of .env.production: nginx proxies to api:3000 and the uploads volume is mounted here.
+      NODE_ENV: production
+      PORT: "3000"
+      UPLOAD_DIR: /data/uploads
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - uploads:/data/uploads
+    networks:
+      - backend  # mongo, redis
+      - frontend # nginx + outbound internet (Zarinpal, Kavenegar)
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    stop_grace_period: 20s
+    logging: *logging
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args:
+        VITE_PUBLIC_URL: ${WEB_PUBLIC_URL:-}
+    image: digital-sarv/web:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    ports:
+      # The only published port. Behind Caddy/host TLS use HTTP_PORT=127.0.0.1:8080.
+      - "${HTTP_PORT:-80}:80"
+    depends_on:
+      api:
+        condition: service_started # nginx resolves `api` lazily; the landing page stays up while api restarts
+    networks:
+      - frontend
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/healthz || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging: *logging
+
+  # --- Optional: automatic HTTPS with Caddy (Let's Encrypt) ------------------------------------
+  # 1. Point the domain's A/AAAA record at this server; open 80 + 443.
+  # 2. In .env.production set DOMAIN=sarv.example.ir and HTTP_PORT=127.0.0.1:8080 (frees :80 for Caddy).
+  # 3. Uncomment this service and the caddy-* volumes below, then `up -d`.
+  # Caddy sends X-Forwarded-Proto: https, so nginx turns HSTS on automatically.
+  # caddy:
+  #   image: caddy:2-alpine
+  #   restart: unless-stopped
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #     - "443:443/udp"
+  #   environment:
+  #     DOMAIN: ${DOMAIN:?set DOMAIN in .env.production}
+  #   volumes:
+  #     - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+  #     - caddy-data:/data
+  #     - caddy-config:/config
+  #   depends_on:
+  #     - web
+  #   networks:
+  #     - frontend
+  #   logging: *logging
+
+networks:
+  # No route to the outside world: databases are reachable only by the api.
+  backend:
+    internal: true
+  frontend: {}
+
+volumes:
+  mongo-data:
+  mongo-config:
+  redis-data:
+  uploads:
+  # caddy-data:
+  # caddy-config:
