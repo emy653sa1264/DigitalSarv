@@ -26,8 +26,8 @@
 **/.env.*
 
 # Runtime data
-uploads
-**/uploads
+/uploads
+/apps/api/uploads
 backups
 
 # Reference material & docs not needed to build

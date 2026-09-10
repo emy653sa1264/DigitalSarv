@@ -16,3 +16,5 @@ apps/web/test-results/
 /apps/api/uploads/
 apps/web/playwright-report/
 *.tsbuildinfo
+.env.*
+!.env*.example
