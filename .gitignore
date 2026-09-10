@@ -12,6 +12,7 @@ backups/
 .vite/
 apps/web/test-results/
 # user uploads (UPLOAD_DIR)
-uploads/
+/uploads/
+/apps/api/uploads/
 apps/web/playwright-report/
 *.tsbuildinfo
