@@ -105,4 +105,17 @@ describe('CourierService admin (v3.2)', () => {
     c.findById.mockReturnValue(doc as never);
     await expect(svc.update(String(id), { phone: '09122222222' })).rejects.toThrow('این شماره متعلق به یک مجری است');
   });
+  it('a refused new phone leaves the current login untouched', async () => {
+    const id = new Types.ObjectId();
+    const oldUser = new Types.ObjectId();
+    const doc: Doc = { _id: id, code: '1', name: 'a', phone: '09121111111', userId: oldUser };
+    Object.assign(doc, { set: vi.fn(), save: vi.fn(async () => doc), toJSON: () => ({ id: String(id) }) });
+    const { svc, c, u } = setup([], [], [
+      { _id: oldUser, phone: '09121111111', role: 'courier', courierId: id },
+      { _id: new Types.ObjectId(), phone: '09120000000', role: 'admin' },
+    ]);
+    c.findById.mockReturnValue(doc as never);
+    await expect(svc.update(String(id), { phone: '09120000000' })).rejects.toThrow('مدیر سیستم');
+    expect(u.docs[0]).toMatchObject({ role: 'courier' });
+  });
 });

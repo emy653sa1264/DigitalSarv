@@ -19,6 +19,8 @@ import { providerAdminJson, providerSelfJson, type CenterRow, type ProviderAdmin
 import { providerDefaults, providerProblem, type ProviderProfile } from './provider-model.js';
 
 const NOT_FOUND = 'مجری یافت نشد';
+const CHANGED = 'وضعیت این حساب تغییر کرده است؛ دوباره تلاش کنید';
+const isDuplicateKey = (e: unknown) => (e as { code?: number })?.code === 11000;
 
 @Injectable()
 export class ProvidersService {
@@ -61,7 +63,7 @@ export class ProvidersService {
     return this.get(id);
   }
 
-  /** 409 while open orders reference it or it has price history (deactivate instead); unlinks the login. */
+  /** 409 while open orders reference it or it has price history (deactivate instead); deletes, then unlinks the login. */
   async remove(id: string): Promise<{ ok: true }> {
     const c = await this.find(id);
     const open = await this.orders.countDocuments({ centerId: c._id, status: { $nin: TERMINAL_STATUSES } });
@@ -69,12 +71,15 @@ export class ProvidersService {
     if (await this.versions.exists({ $or: [{ layer: 'provider', providerId: c._id }, { baseProviderId: c._id }] })) {
       throw new ConflictException('این مجری قیمت ثبت‌شده دارد؛ به‌جای حذف آن را غیرفعال کنید');
     }
-    if (c.userId) await this.detach(c.userId);
     await this.centers.deleteOne({ _id: c._id });
+    if (c.userId) await this.detach(c.userId, c._id);
     return { ok: true };
   }
 
-  /** Links (or creates) the provider's login; a customer account is converted, its old sessions revoked. */
+  /**
+   * Links (or creates) the provider's login. Every write is conditional on what was read (user role/link, centre's
+   * previous login) so concurrent links answer 409 instead of overwriting; the previous login is detached last.
+   */
   async linkLogin(id: string, rawPhone: string): Promise<ProviderAdmin> {
     const center = await this.find(id);
     const phone = normalizePhone(rawPhone);
@@ -83,27 +88,55 @@ export class ProvidersService {
     if (existing?.role === 'admin') throw new ConflictException('این شماره متعلق به مدیر سیستم است');
     if (existing?.role === 'courier') throw new ConflictException('این شماره متعلق به یک پیک است');
     if (existing?.role === 'provider' && existing.providerId && String(existing.providerId) !== id) throw new ConflictException('این شماره به مجری دیگری متصل است');
-    if (center.userId && (!existing || String(center.userId) !== String(existing._id))) await this.detach(center.userId);
+    const changed = () => new ConflictException(CHANGED);
+
     let userId: Types.ObjectId;
+    let claimed = false; // whether this call changed the user
     if (!existing) {
-      const created = await this.users.create({ phone, name: center.contactName || center.name, role: 'provider', planId: 'bronze', referralCode: makeReferralCode(), providerId: center._id });
-      userId = created._id as Types.ObjectId;
+      try {
+        const created = await this.users.create({ phone, name: center.contactName || center.name, role: 'provider', planId: 'bronze', referralCode: makeReferralCode(), providerId: center._id });
+        userId = created._id as Types.ObjectId;
+      } catch (e) {
+        throw isDuplicateKey(e) ? changed() : e;
+      }
+      claimed = true;
     } else {
       userId = existing._id as Types.ObjectId;
       if (existing.role !== 'provider' || String(existing.providerId) !== id) {
-        await this.users.updateOne({ _id: userId }, { $set: { role: 'provider', providerId: center._id } });
-        await this.sessions.revokeUser(String(userId));
+        const updated = await this.users.findOneAndUpdate(
+          { _id: userId, role: existing.role, providerId: existing.providerId ?? null },
+          { $set: { role: 'provider', providerId: center._id } },
+          { returnDocument: 'after' },
+        );
+        if (!updated) throw changed();
+        claimed = true;
       }
     }
-    await this.centers.updateOne({ _id: center._id }, { $set: { userId } });
+
+    let ok = false;
+    try {
+      const res = await this.centers.updateOne({ _id: center._id, userId: center.userId ?? { $exists: false } }, { $set: { userId } });
+      ok = res.matchedCount > 0;
+    } catch (e) {
+      if (!isDuplicateKey(e)) {
+        if (claimed) await this.detach(userId, center._id);
+        throw e;
+      }
+    }
+    if (!ok) {
+      if (claimed) await this.detach(userId, center._id);
+      throw changed();
+    }
+    if (claimed) await this.sessions.revokeUser(String(userId));
+    if (center.userId && String(center.userId) !== String(userId)) await this.detach(center.userId, center._id);
     return this.get(id);
   }
 
   async unlinkLogin(id: string): Promise<ProviderAdmin> {
     const c = await this.find(id);
     if (c.userId) {
-      await this.detach(c.userId);
-      await this.centers.updateOne({ _id: c._id }, { $unset: { userId: 1 } });
+      await this.centers.updateOne({ _id: c._id, userId: c.userId }, { $unset: { userId: 1 } });
+      await this.detach(c.userId, c._id);
     }
     return this.get(id);
   }
@@ -118,8 +151,8 @@ export class ProvidersService {
   }
 
   /** The login goes back to a plain customer account; its tokens (role `provider`) stop working. */
-  private async detach(userId: Types.ObjectId | string) {
-    await this.users.updateOne({ _id: userId, role: 'provider' }, { $set: { role: 'customer' }, $unset: { providerId: 1 } });
+  private async detach(userId: Types.ObjectId | string, providerId: Types.ObjectId) {
+    await this.users.updateOne({ _id: userId, role: 'provider', providerId }, { $set: { role: 'customer' }, $unset: { providerId: 1 } });
     await this.sessions.revokeUser(String(userId));
   }
 
@@ -155,8 +188,13 @@ export class ProvidersService {
   private async adminJson(docs: CenterRow[]): Promise<ProviderAdmin[]> {
     const zoneNames = await this.zoneNames(docs);
     const userIds = docs.map((d) => d.userId).filter((u): u is Types.ObjectId => !!u);
-    const users = userIds.length ? await this.users.find({ _id: { $in: userIds } }, { phone: 1, name: 1 }).lean() : [];
+    const users = userIds.length ? await this.users.find({ _id: { $in: userIds } }, { phone: 1, name: 1, role: 1, providerId: 1 }).lean() : [];
     const byId = new Map(users.map((u) => [String(u._id), u]));
-    return docs.map((d) => providerAdminJson(d, zoneNames, (d.userId && byId.get(String(d.userId))) || null));
+    return docs.map((d) => {
+      const u = d.userId ? byId.get(String(d.userId)) : undefined;
+      // a stale link (role changed / moved) is not shown as a login
+      const live = u && u.role === 'provider' && String(u.providerId) === String(d._id);
+      return providerAdminJson(d, zoneNames, live ? u : null);
+    });
   }
 }

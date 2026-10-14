@@ -310,9 +310,12 @@ export class CourierService {
       const phone = normalizePhone(rawPhone);
       if (!phone) throw new BadRequestException('شماره موبایل پیک معتبر نیست');
       if (phone !== courier.phone) {
-        if (courier.userId) await this.users.updateOne({ _id: courier.userId }, { $set: { role: 'customer' }, $unset: { courierId: 1 } });
+        const oldUserId = courier.userId;
+        // validate/claim the new login first: a refused phone must not lock the current one out
+        const newUserId = await this.linkUser(courier._id, phone, courier.name);
+        if (oldUserId) await this.users.updateOne({ _id: oldUserId }, { $set: { role: 'customer' }, $unset: { courierId: 1 } });
         courier.phone = phone;
-        courier.userId = await this.linkUser(courier._id, phone, courier.name);
+        courier.userId = newUserId;
       }
     }
     const [json] = await this.withZoneNames([await courier.save()]);

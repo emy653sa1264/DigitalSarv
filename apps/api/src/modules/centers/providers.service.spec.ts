@@ -68,6 +68,36 @@ describe('ProvidersService', () => {
     expect(p.login).toBeNull();
     expect(users.docs.find((u) => u.phone === '09123456789')!.role).toBe('customer');
   });
+  it('a stale read of the user is a 409 and changes nothing', async () => {
+    const { svc, users, centers, sessions, id } = setup();
+    users.findOneAndUpdate.mockImplementationOnce(async () => null);
+    await expect(svc.linkLogin(id, '09123456789')).rejects.toThrow('وضعیت این حساب تغییر کرده است؛ دوباره تلاش کنید');
+    expect(users.docs.find((u) => u.phone === '09123456789')).toMatchObject({ role: 'customer' });
+    expect(centers.docs[0].userId).toBeUndefined();
+    expect(sessions.revokeUser).not.toHaveBeenCalled();
+  });
+  it('a failed centre claim rolls the user back and answers 409; the previous login is kept', async () => {
+    const { svc, users, centers, sessions, id } = setup();
+    await svc.linkLogin(id, '09122222222');
+    centers.updateOne.mockImplementationOnce(async () => ({ matchedCount: 0, modifiedCount: 0, upsertedCount: 0 }));
+    await expect(svc.linkLogin(id, '09123456789')).rejects.toBeInstanceOf(ConflictException);
+    const u = users.docs.find((x) => x.phone === '09123456789')!;
+    expect(u.role).toBe('customer');
+    expect(u.providerId).toBeUndefined();
+    expect(sessions.revokeUser).toHaveBeenCalledWith(String(u._id));
+    expect(users.docs.find((x) => x.phone === '09122222222')!.role).toBe('provider');
+  });
+  it('a duplicate-key error creating the user is a 409', async () => {
+    const { svc, users, id } = setup();
+    users.create.mockImplementationOnce(async () => { throw Object.assign(new Error('dup'), { code: 11000 }); });
+    await expect(svc.linkLogin(id, '09122222222')).rejects.toBeInstanceOf(ConflictException);
+  });
+  it('a stale login (role changed) is not shown as the provider login', async () => {
+    const { svc, users, id } = setup();
+    await svc.linkLogin(id, '09122222222');
+    users.docs.find((u) => u.phone === '09122222222')!.role = 'customer';
+    expect((await svc.get(id)).login).toBeNull();
+  });
   it('refuses to delete a provider with open orders or price history; otherwise deletes and unlinks', async () => {
     const { svc, orders, versions, users, id } = setup();
     orders.docs.push({ _id: new Types.ObjectId(), centerId: new Types.ObjectId(id), status: 'qc' });
