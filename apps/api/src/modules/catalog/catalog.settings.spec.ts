@@ -19,7 +19,7 @@ function setup({ settings = [] as Doc[], campaign = null as Doc | null, colors =
   };
   const svc = new CatalogService(
     m.colors as never, m.extras as never, m.grades as never, m.papers as never, m.bindColors as never,
-    m.plans as never, m.settings as never, m.campaigns as never, fakeRedisService(new FakeRedis()),
+    m.plans as never, m.settings as never, m.campaigns as never, fakeModel() as never, fakeModel() as never, fakeRedisService(new FakeRedis()),
   );
   return { svc, ...m };
 }

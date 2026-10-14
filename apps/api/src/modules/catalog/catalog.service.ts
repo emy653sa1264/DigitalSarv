@@ -7,6 +7,11 @@ import { tehranYmd } from '../../common/utils/dates.js';
 import { defined } from '../../common/utils/defined.js';
 import { assertObjectId } from '../../common/utils/object-id.js';
 import { campaignBlock } from '../campaigns/campaign-window.js';
+import { BindingRange } from '../price-book/schemas/binding-range.schema.js';
+import { PriceVersion } from '../price-book/schemas/price-version.schema.js';
+import { PRINT_SIZES, singleSideKey } from '../price-book/combo.js';
+import { unitPrice } from '../price-book/resolve.js';
+import { loadCustomerSnapshot } from '../price-book/snapshot.js';
 import { Campaign, campaignJson } from '../campaigns/campaign.schema.js';
 import {
   DEFAULT_PRICES,
@@ -44,6 +49,7 @@ import { Extra } from './schemas/extra.schema.js';
 import { Grade } from './schemas/grade.schema.js';
 import { Paper } from './schemas/paper.schema.js';
 import { Plan } from './schemas/plan.schema.js';
+import type { PriceBookSnapshot } from '../price-book/snapshot.js';
 import { Settings, SETTINGS_ID } from './schemas/settings.schema.js';
 
 const CATALOG_TTL = 3600;
@@ -71,6 +77,8 @@ export class CatalogService {
     @InjectModel(Plan.name) private readonly plans: Model<Plan>,
     @InjectModel(Settings.name) private readonly settings: Model<Settings>,
     @InjectModel(Campaign.name) private readonly campaigns: Model<Campaign>,
+    @InjectModel(PriceVersion.name) private readonly versions: Model<PriceVersion>,
+    @InjectModel(BindingRange.name) private readonly ranges: Model<BindingRange>,
     private readonly redis: RedisService,
   ) {}
 
@@ -96,7 +104,7 @@ export class CatalogService {
     const key = REDIS_KEYS.catalog((await this.redis.client.get(REDIS_KEYS.catalogVer)) ?? '0');
     const cached = await this.redis.getJson<Record<string, unknown>>(key);
     if (cached) return cached;
-    const [colors, extras, grades, papers, bindColors, plans, settings, campaign] = await Promise.all([
+    const [colors, extras, grades, papers, bindColors, plans, settings, campaign, snapshot] = await Promise.all([
       this.colors.find({ on: true }).sort({ sort: 1, _id: 1 }),
       this.extras.find({ on: true }).sort({ sort: 1, _id: 1 }),
       this.grades.find({ on: true }).sort({ sort: 1, _id: 1 }),
@@ -105,7 +113,9 @@ export class CatalogService {
       this.listPlans(),
       this.getSettings(),
       this.campaigns.findOne({ active: true }),
+      loadCustomerSnapshot(this.versions, this.ranges),
     ]);
+    const printing = this.printingBlock(papers as unknown as { key: string; paperCost?: number }[], settings, snapshot);
     const catalog = JSON.parse(
       JSON.stringify({
         colors,
@@ -117,11 +127,46 @@ export class CatalogService {
         prices: settings.prices,
         urgentEnabled: settings.urgentEnabled,
         ops: settings.ops,
+        printing,
         campaign: campaign ? campaignJson(campaign) : null,
       }),
     ) as Record<string, unknown>;
-    await this.redis.setJson(key, catalog, CATALOG_TTL);
+    // a scheduled price change must show on time: never cache past the next change
+    const ttl = snapshot.nextChangeAt
+      ? Math.max(1, Math.min(CATALOG_TTL, Math.ceil((Date.parse(snapshot.nextChangeAt) - Date.now()) / 1000)))
+      : CATALOG_TTL;
+    await this.redis.setJson(key, catalog, ttl);
     return catalog;
+  }
+
+  /** Effective customer unit prices only (no version/author data); combos whose formula inputs are missing are absent. */
+  private printingBlock(papers: { key: string; paperCost?: number }[], settings: ResolvedSettings, snapshot: PriceBookSnapshot) {
+    const paperCost = new Map(papers.filter((p) => typeof p.paperCost === 'number').map((p) => [p.key, p.paperCost!]));
+    const prices: Record<string, number> = {};
+    const evalKey = (key: string): number | null => {
+      const e = snapshot.customer[key];
+      if (!e) return null;
+      const o = key.split('|');
+      const vars: Record<string, number> = { quantity: 1 };
+      if (o[0] === 'color' && paperCost.has(o[3])) vars.paper_cost = paperCost.get(o[3])!;
+      const sib = singleSideKey(key);
+      const base = sib ? evalKey(sib) : null;
+      if (base !== null) vars.base_price = base;
+      return unitPrice(
+        { id: e.versionId, version: e.version, state: 'published', effectiveFrom: new Date(0), mode: e.mode, price: e.price, formula: e.formula, markup: e.markup, discount: e.discount, rounding: e.rounding },
+        vars,
+      );
+    };
+    for (const key of Object.keys(snapshot.customer)) {
+      const v = evalKey(key);
+      if (v !== null) prices[key] = v;
+    }
+    return {
+      sizes: [...PRINT_SIZES],
+      addons: settings.printAddons,
+      prices,
+      spiralRanges: snapshot.ranges.filter((r) => prices[`spiral|${r.id}`] !== undefined).map((r) => ({ ...r, price: prices[`spiral|${r.id}`] })),
+    };
   }
 
   /** Bumps the catalog version; entries of older versions are never read again and expire by TTL. */
