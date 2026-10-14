@@ -1,30 +1,33 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types, type QueryFilter } from 'mongoose';
-import type { DeliveryMethod, JobStatus } from '../../common/constants.js';
+import type { DeliveryMethod, JobStatus, PickupAt } from '../../common/constants.js';
 import { addDays, tehranDayStart, tehranYmd } from '../../common/utils/dates.js';
 import { escapeRegex, pageParams } from '../../common/utils/pagination.js';
 import { normalizePhone, toAsciiDigits } from '../../common/utils/phone.js';
-import { canViewProviderPrices } from '../../common/permissions.js';
+import { canViewProviderPrices, type Permission } from '../../common/permissions.js';
+import { faDigits } from '../../common/utils/fa.js';
+import { assertObjectId } from '../../common/utils/object-id.js';
+import { deliveryOf } from '../orders/delivery-rules.js';
 import { CatalogService } from '../catalog/catalog.service.js';
 import { Paper } from '../catalog/schemas/paper.schema.js';
 import { Center } from '../centers/center.schema.js';
 import type { ProviderService, ProviderStatus } from '../centers/provider-model.js';
 import { orderSummary } from '../orders/order-helpers.js';
-import { Order } from '../orders/order.schema.js';
+import { Order, type OrderDelivery } from '../orders/order.schema.js';
 import { BindingRange } from '../price-book/schemas/binding-range.schema.js';
 import { PriceVersion } from '../price-book/schemas/price-version.schema.js';
 import { effectiveProviderEntries, type ProviderEntry, type SnapshotRow } from '../price-book/snapshot.js';
 import { User } from '../users/user.schema.js';
 import { Zone } from '../zones/zone.schema.js';
 import { DispatchNotifier } from './dispatch-notifier.js';
-import type { DispatchQueryDto } from './dto/dispatch.dto.js';
+import type { AdminJobStatusDto, AssignJobDto, DeliveryChangeDto, DispatchQueryDto, RespondDto, UpdateJobDto } from './dto/dispatch.dto.js';
 import { checkProvider, jobRequirements, type CheckResult, type ProviderCheck, type ProviderFacts, type Usage } from './eligibility.js';
 import { dispatchDetail, dispatchRow, type DispatchJobDetail, type DispatchJobRow, type JobRow, type Names } from './job-json.js';
-import { DISPATCH_TABS, HELD, deliveryStatusFilter, dispatchTabFilter, type DispatchTab, type ProviderQuote } from './job-model.js';
+import { DISPATCH_TABS, HELD, LIVE, cancelStage, deliveryStatusFilter, dispatchTabFilter, type DispatchTab, type ProviderQuote } from './job-model.js';
 import { Job, type JobDocument } from './job.schema.js';
-import { JobsService } from './jobs.service.js';
-import { providerLineLabel, providerQuote } from './provider-pricing.js';
+import { JobsService, raced } from './jobs.service.js';
+import { pricingSnapshot, providerLineLabel, providerQuote } from './provider-pricing.js';
 
 export interface EligibilityRow {
   providerId: string; name: string; businessName: string; status: ProviderStatus; current: boolean;
@@ -41,6 +44,8 @@ export interface Eligibility {
 }
 export type CenterRow = Center & { _id: Types.ObjectId };
 type OrderRow = Order & { _id: Types.ObjectId };
+interface ResolvedJobDelivery { method: DeliveryMethod; deliveryProviderId?: Types.ObjectId; pickupAt?: PickupAt; fee: number; orderDelivery: OrderDelivery }
+const NOT_CHANGEABLE = 'این سفارش در وضعیتی نیست که بتوان مجری آن را تغییر داد';
 
 const EMPTY_USAGE: Usage = { sheets: 0, jobs: 0, units: {} };
 const ACTIVE: JobStatus[] = [...HELD, 'ready', 'ready_for_pickup', 'out_for_delivery'];
@@ -57,6 +62,8 @@ export function factsOf(p: CenterRow): ProviderFacts {
 /** «مرکز تخصیص سفارش» (§55): the admin's view of every job, eligibility (§51–54) and — Task 10 — assignment. */
 @Injectable()
 export class DispatchService {
+  private readonly logger = new Logger('Dispatch');
+
   constructor(
     @InjectModel(Job.name) private readonly jobModel: Model<Job>,
     @InjectModel(Order.name) private readonly orders: Model<Order>,
@@ -249,5 +256,220 @@ export class DispatchService {
         return { id: String(p._id), name: p.name, deliveryFee: canSeeProviderPrices ? (p.deliveryFee ?? 0) : null, zoneOk: !zones.length || !zoneId || zones.includes(zoneId), status, ...(status === 'busy' ? { reason: 'مجری فعلاً مشغول است' } : {}) };
       }),
     };
+  }
+
+  // ------------------------------------------------------------ writes (§54, §60, §61, §71)
+
+  async requirePermission(userId: string, permission: Permission): Promise<void> {
+    const u = Types.ObjectId.isValid(userId) ? await this.users.findById(userId, { role: 1, permissions: 1 }).lean() : null;
+    if (!u || u.role !== 'admin' || (u.permissions && !u.permissions.includes(permission))) throw new ForbiddenException('به این بخش دسترسی ندارید');
+  }
+
+  /** Every write answers with the detail, redacted for the caller (Q18). */
+  private async result(id: unknown, by: string): Promise<DispatchJobDetail> {
+    return this.detail(String(id), await this.canSeeProviderPrices(by));
+  }
+
+  private async liveOrder(orderId: unknown): Promise<OrderRow> {
+    const order = (await this.orders.findById(orderId).lean()) as OrderRow | null;
+    if (!order) throw new NotFoundException('سفارش یافت نشد');
+    if (order.status === 'cancelled' || order.status === 'delivered') throw new BadRequestException('این سفارش لغو یا تحویل شده است');
+    if (order.status === 'pending_payment') throw new BadRequestException('این سفارش هنوز پرداخت نشده است');
+    return order;
+  }
+
+  private async providerById(id: string): Promise<CenterRow> {
+    assertObjectId(id, 'مجری');
+    const p = (await this.centers.findById(id).lean()) as CenterRow | null;
+    if (!p) throw new NotFoundException('مجری یافت نشد');
+    return p;
+  }
+
+  /** Contract «Delivery»: courier ↔ provider for a home delivery, point ↔ provider shop for a pickup; never flips the customer's choice. */
+  private async resolveJobDelivery(order: OrderRow, p: CenterRow | null, dto: { deliveryMethod?: DeliveryMethod; deliveryProviderId?: string; pickupAt?: PickupAt }): Promise<ResolvedJobDelivery> {
+    const current = deliveryOf(order);
+    const pickup = current.method === 'customer_pickup';
+    const method: DeliveryMethod = dto.deliveryMethod ?? (pickup ? 'customer_pickup' : 'courier');
+    if ((method === 'customer_pickup') !== pickup) throw new BadRequestException('روش تحویل انتخابی مشتری (ارسال یا تحویل حضوری) تغییر نمی‌کند');
+    if (method === 'provider') {
+      const dp = dto.deliveryProviderId ? await this.providerById(dto.deliveryProviderId) : p;
+      if (!dp || !dp.canDeliver || (dp.status ?? 'active') !== 'active') throw new BadRequestException('مجری تحویل باید فعال باشد و امکان ارسال داشته باشد');
+      return { method, deliveryProviderId: dp._id, fee: dp.deliveryFee ?? 0, orderDelivery: { ...current, method } };
+    }
+    const { providerShop: _shop, pickupAt: _at, ...rest } = current;
+    if (method === 'customer_pickup') {
+      const pickupAt: PickupAt = dto.pickupAt ?? 'point';
+      if (pickupAt === 'provider') {
+        if (!p) throw new BadRequestException('ابتدا مجری سفارش را تعیین کنید');
+        if (!p.allowCustomerPickup) throw new BadRequestException('تحویل حضوری در محل این مجری مجاز نیست');
+        const h = p.workingHours?.[0];
+        const providerShop = { id: String(p._id), name: p.businessName || p.name, address: p.address ?? '', phone: p.phone ?? '', hours: h ? faDigits(`${h.from} تا ${h.to}`) : '', kind: 'provider' as const };
+        return { method, pickupAt, fee: 0, orderDelivery: { ...rest, method, pickupAt, providerShop } };
+      }
+      return { method, pickupAt, fee: 0, orderDelivery: { ...rest, method, pickupAt } };
+    }
+    return { method: 'courier', fee: 0, orderDelivery: { ...rest, method: 'courier' } };
+  }
+
+  async assign(id: string, dto: AssignJobDto, by: string): Promise<DispatchJobDetail> {
+    const job = await this.jobs.byId(id);
+    if (job.status !== 'unassigned') throw new ConflictException('این سفارش قبلاً تخصیص داده شده است؛ برای تغییر مجری از «تغییر مجری» استفاده کنید');
+    return this.give(job, dto, by, 'assigned');
+  }
+
+  async reassign(id: string, dto: AssignJobDto, by: string): Promise<DispatchJobDetail> {
+    const job = await this.jobs.byId(id);
+    if (!HELD.includes(job.status)) throw new BadRequestException(NOT_CHANGEABLE);
+    if (!dto.reason?.trim()) throw new BadRequestException('دلیل را بنویسید');
+    if (String(job.providerId) === dto.providerId) throw new BadRequestException('این سفارش هم‌اکنون به همین مجری سپرده شده است');
+    return this.give(job, dto, by, 'reassigned');
+  }
+
+  /** Assign / reassign: hard checks never pass (§86), soft ones need override + reason (§71), a missing price needs confirmation (§53). */
+  private async give(job: JobDocument, dto: AssignJobDto, by: string, action: 'assigned' | 'reassigned'): Promise<DispatchJobDetail> {
+    const order = await this.liveOrder(job.orderId);
+    const p = await this.providerById(dto.providerId);
+    const delivery = await this.resolveJobDelivery(order, p, dto);
+    const { check, quote } = await this.evaluate(job, order, p, { needsDelivery: false });
+    if (!check.assignable) throw new BadRequestException({ statusCode: 400, code: 'NOT_CAPABLE', message: 'این مجری توانایی انجام این سفارش را ندارد', problems: check.hardProblems });
+    const overriding = !check.eligible;
+    if (overriding && !dto.override) {
+      throw new ConflictException({ statusCode: 409, code: 'PROVIDER_NOT_ELIGIBLE', message: 'این مجری شرایط دریافت سفارش را ندارد؛ برای تخصیص با وجود این شرایط دلیل را بنویسید', problems: check.problems });
+    }
+    if (overriding && !dto.reason?.trim()) throw new BadRequestException('دلیل نادیده‌گرفتن شرایط را بنویسید');
+    if (quote.subtotal === null && !dto.confirmMissingPrice) {
+      throw new ConflictException({ statusCode: 409, code: 'PROVIDER_PRICE_MISSING', message: 'قیمت مجری تنظیم نشده', missing: quote.missing.map((m) => m.label) });
+    }
+    const now = new Date();
+    const { dispatch } = await this.catalog.getSettings();
+    const snapshot = pricingSnapshot({
+      providerId: String(p._id), quote, at: now, confirmedMissing: quote.subtotal === null,
+      delivery: delivery.deliveryProviderId ? { providerId: String(delivery.deliveryProviderId), fee: delivery.fee } : null,
+    });
+    const assignment = {
+      id: new Types.ObjectId(), providerId: p._id, assignedBy: new Types.ObjectId(by), assignedAt: now,
+      respondBy: new Date(now.getTime() + dispatch.responseTimeoutMinutes * 60_000),
+      ...(overriding ? { override: { reason: dto.reason!.trim(), problems: check.problems } } : {}),
+    };
+    const prev = job.providerId;
+    const oldDp = job.deliveryProviderId;
+    const history = this.jobs.entry({ providerId: p._id, deliveryProviderId: delivery.deliveryProviderId }, action, 'assigned', { byRole: 'admin', by, reason: dto.reason }, now, {
+      ...(prev ? { previousProviderId: prev, stage: cancelStage(job.status) } : {}), ...(overriding ? { override: true } : {}),
+    });
+    const updated = await this.jobs.cas(job, 'assigned', {
+      extraGuard: prev ? { providerId: prev } : { providerId: { $exists: false } },
+      set: {
+        providerId: p._id, assignment, providerPricing: snapshot, deliveryMethod: delivery.method,
+        ...(delivery.deliveryProviderId ? { deliveryProviderId: delivery.deliveryProviderId } : {}), ...(delivery.pickupAt ? { pickupAt: delivery.pickupAt } : {}),
+      },
+      ...(delivery.deliveryProviderId ? {} : { unset: { deliveryProviderId: 1 } }),
+      ...(prev ? { addToSet: { releasedProviderIds: prev } } : {}),
+      inc: { attempts: 1 }, push: { pricingHistory: snapshot }, history,
+    });
+    if (!updated) throw raced();
+    // the order follows the job: guarded so a late write never replaces a newer provider's snapshot or touches a closed order
+    const res = await this.orders.updateOne(
+      { _id: order._id, status: { $nin: ['cancelled', 'delivered'] }, $or: [{ centerId: { $exists: false } }, ...(prev ? [{ centerId: prev }] : [])] },
+      { $set: { centerId: p._id, providerPricing: snapshot, delivery: delivery.orderDelivery }, $inc: { __v: 1 } },
+    );
+    if (!res.matchedCount) this.logger.warn(`order ${order.code}: provider snapshot not written (the order changed meanwhile)`);
+    if (prev) await this.notifier.provider('job_withdrawn', prev, updated);
+    if (oldDp && String(oldDp) !== String(prev) && String(oldDp) !== String(delivery.deliveryProviderId)) await this.notifier.provider('job_withdrawn', oldDp, updated);
+    await this.notifier.provider('job_assigned', p._id, updated);
+    if (delivery.deliveryProviderId && String(delivery.deliveryProviderId) !== String(p._id)) await this.notifier.provider('job_delivery_assigned', delivery.deliveryProviderId, updated);
+    return this.result(updated._id, by);
+  }
+
+  async unassign(id: string, reason: string, by: string): Promise<DispatchJobDetail> {
+    const job = await this.jobs.byId(id);
+    if (!HELD.includes(job.status)) throw new BadRequestException(NOT_CHANGEABLE);
+    await this.jobs.giveBack(job, 'unassigned', { byRole: 'admin', by, reason });
+    return this.result(job._id, by);
+  }
+
+  async updateDelivery(id: string, dto: DeliveryChangeDto, by: string): Promise<DispatchJobDetail> {
+    const job = await this.jobs.byId(id);
+    if (!(['unassigned', ...HELD, 'ready'] as JobStatus[]).includes(job.status)) throw new BadRequestException('روش تحویل این سفارش دیگر قابل تغییر نیست');
+    const order = await this.liveOrder(job.orderId);
+    const p = job.providerId ? await this.providerById(String(job.providerId)) : null;
+    const d = await this.resolveJobDelivery(order, p, dto);
+    const now = new Date();
+    const pp = job.providerPricing;
+    const pricing = pp
+      ? { ...pp, delivery: d.deliveryProviderId ? { providerId: String(d.deliveryProviderId), fee: d.fee } : null,
+          payoutBasis: pp.providerSubtotal === null ? null : pp.providerSubtotal + (d.deliveryProviderId && String(d.deliveryProviderId) === pp.providerId ? d.fee : 0) }
+      : undefined;
+    const oldDp = job.deliveryProviderId;
+    const updated = await this.jobs.cas(job, job.status, {
+      set: { deliveryMethod: d.method, ...(d.pickupAt ? { pickupAt: d.pickupAt } : {}), ...(d.deliveryProviderId ? { deliveryProviderId: d.deliveryProviderId } : {}), ...(pricing ? { providerPricing: pricing } : {}) },
+      ...(d.deliveryProviderId ? {} : { unset: { deliveryProviderId: 1 } }),
+      history: this.jobs.entry({ providerId: job.providerId, deliveryProviderId: d.deliveryProviderId }, 'delivery_changed', job.status, { byRole: 'admin', by, reason: dto.reason }, now),
+    });
+    if (!updated) throw raced();
+    const res = await this.orders.updateOne(
+      { _id: order._id, status: { $nin: ['cancelled', 'delivered'] }, ...(job.providerId ? { centerId: job.providerId } : {}) },
+      { $set: { delivery: d.orderDelivery, ...(pricing ? { providerPricing: pricing } : {}) }, $inc: { __v: 1 } },
+    );
+    if (!res.matchedCount) this.logger.warn(`order ${order.code}: delivery change not written to the order (it changed meanwhile)`);
+    if (job.providerId) await this.notifier.provider('job_changed', job.providerId, updated);
+    if (oldDp && String(oldDp) !== String(job.providerId) && String(oldDp) !== String(d.deliveryProviderId)) await this.notifier.provider('job_withdrawn', oldDp, updated);
+    if (d.deliveryProviderId && String(d.deliveryProviderId) !== String(job.providerId) && String(d.deliveryProviderId) !== String(oldDp)) await this.notifier.provider('job_delivery_assigned', d.deliveryProviderId, updated);
+    return this.result(job._id, by);
+  }
+
+  async update(id: string, dto: UpdateJobDto, by: string): Promise<DispatchJobDetail> {
+    const job = await this.jobs.byId(id);
+    if (!LIVE.includes(job.status)) throw new BadRequestException('این سفارش لغو یا تحویل شده است');
+    const deadline = dto.deadline ? new Date(dto.deadline) : undefined;
+    if (!dto.priority && !deadline) return this.result(job._id, by);
+    const updated = await this.jobs.cas(job, job.status, {
+      set: { ...(dto.priority ? { priority: dto.priority } : {}), ...(deadline ? { deadline } : {}) },
+      ...(deadline ? { unset: { deadlineNotifiedAt: 1, lateAlertedAt: 1 } } : {}),
+      history: this.jobs.entry(job, 'updated', job.status, { byRole: 'admin', by }, new Date()),
+    });
+    if (!updated) throw raced();
+    if (deadline && job.providerId) await this.notifier.provider('job_changed', job.providerId, updated);
+    return this.result(job._id, by);
+  }
+
+  /** On behalf of the provider (`provider_order_accept`), e.g. after a phone call. */
+  async respond(id: string, dto: RespondDto, by: string): Promise<DispatchJobDetail> {
+    if (!dto.reason?.trim()) throw new BadRequestException('دلیل را بنویسید');
+    const job = await this.jobs.byId(id);
+    if (dto.accept) await this.jobs.move(String(job._id), 'accepted', { actor: 'admin', byRole: 'admin', by, reason: dto.reason });
+    else await this.jobs.giveBack(job, 'rejected', { byRole: 'admin', by, reason: dto.reason, reasonCode: dto.reasonCode ?? 'other', ...(job.assignment ? { assignmentId: String(job.assignment.id) } : {}) });
+    return this.result(job._id, by);
+  }
+
+  /** On behalf of the provider/courier (`provider_order_status`), incl. «تکمیل» and pickups at a Digital Sarv point. */
+  async setStatus(id: string, dto: AdminJobStatusDto, by: string): Promise<DispatchJobDetail> {
+    if (!dto.reason?.trim()) throw new BadRequestException('دلیل را بنویسید');
+    const job = await this.jobs.byId(id);
+    await this.jobs.move(String(job._id), dto.status, { actor: 'admin', byRole: 'admin', by, reason: dto.reason, reasonCode: dto.reasonCode });
+    return this.result(job._id, by);
+  }
+
+  /** v1 `PATCH /admin/orders/:id/assign { centerId }` — delegated with the dispatch permissions (the v1 route has none). */
+  async assignFromOrder(orderId: string, centerId: string | null, by: string): Promise<void> {
+    assertObjectId(orderId, 'سفارش');
+    let job = await this.jobs.forOrder(new Types.ObjectId(orderId));
+    if (!job) {
+      const order = await this.liveOrder(new Types.ObjectId(orderId));
+      job = await this.jobs.ensureJob(order as never);
+      if (!job) throw new NotFoundException('سفارش یافت نشد');
+    }
+    if (centerId === null) {
+      if (!HELD.includes(job.status)) return;
+      await this.requirePermission(by, 'dispatch_reassign');
+      await this.unassign(String(job._id), 'لغو از صفحه سفارش', by);
+      return;
+    }
+    if (job.status === 'unassigned') {
+      await this.requirePermission(by, 'dispatch_assign');
+      await this.assign(String(job._id), { providerId: centerId } as AssignJobDto, by);
+      return;
+    }
+    await this.requirePermission(by, 'dispatch_reassign');
+    await this.reassign(String(job._id), { providerId: centerId, reason: 'تغییر از صفحه سفارش' } as AssignJobDto, by);
   }
 }

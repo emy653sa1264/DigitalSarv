@@ -21,7 +21,7 @@ export interface GiveBackOptions { byRole: ByRole; by?: string; reason?: string;
 /** What `cas` needs: who acts (selects the holder guard), extra guards, the field changes and the history entry. */
 export interface CasSpec {
   actor?: Actor; extraGuard?: Record<string, unknown>; set?: Record<string, unknown>; unset?: Record<string, 1>;
-  addToSet?: Record<string, unknown>; history: JobHistoryEntry;
+  addToSet?: Record<string, unknown>; inc?: Record<string, number>; push?: Record<string, unknown>; history: JobHistoryEntry;
 }
 type GiveBackKind = 'rejected' | 'timeout' | 'failed' | 'unassigned';
 
@@ -159,7 +159,8 @@ export class JobsService {
         $set: { status: to, ...spec.set },
         ...(spec.unset ? { $unset: spec.unset } : {}),
         ...(spec.addToSet ? { $addToSet: spec.addToSet } : {}),
-        $push: { history: spec.history },
+        ...(spec.inc ? { $inc: spec.inc } : {}),
+        $push: { history: spec.history, ...spec.push },
       },
       { returnDocument: 'after' },
     );

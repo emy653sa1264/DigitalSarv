@@ -175,3 +175,164 @@ describe('dispatch query validation (I2)', () => {
     expect((await s.svc.list({ tab: 'unassigned', q: 'كيان' } as never)).total).toBe(1);
   });
 });
+
+describe('DispatchService.assign (§54, §88)', () => {
+  it('assigns the capable provider: snapshot of its prices on the order, response deadline, history, notification', async () => {
+    const s = setup();
+    const id = await withJob(s);
+    const before = Date.now();
+    const d = await s.svc.assign(id, { providerId: String(C) } as never, String(ADMIN));
+    expect(d).toMatchObject({ status: 'assigned', attempts: 1, provider: { id: String(C), name: 'آزمون C' } });
+    const job = s.jobsModel.docs[0];
+    expect(job.assignment.respondBy.getTime() - before).toBeGreaterThanOrEqual(120 * 60_000 - 1000);
+    expect(job.providerPricing).toMatchObject({ providerId: String(C), providerSubtotal: 1_600_000, payoutBasis: 1_600_000, confirmedMissing: false });
+    expect(job.providerPricing.lines[0]).toMatchObject({ comboKey: 'color|A4|full|glossy200|single', unitPrice: 8000, quantity: 200, version: 1 });
+    const order = s.orders.docs[0];
+    expect(String(order.centerId)).toBe(String(C));
+    expect(order.providerPricing).toEqual(job.providerPricing);
+    expect(order.services[0].pricing.lines[0].unitPrice).toBe(9500); // the customer snapshot is never touched
+    expect(d.assignments[0]).toMatchObject({ providerName: 'آزمون C', assignedByName: 'مدیر سیستم', outcome: 'pending' });
+    expect(s.notifier.provider).toHaveBeenCalledWith('job_assigned', C, expect.anything());
+  });
+  it('a provider that cannot fulfil the order is refused even with override (§86)', async () => {
+    const s = setup();
+    const id = await withJob(s);
+    await expect(s.svc.assign(id, { providerId: String(A), override: true, reason: 'فوری' } as never, String(ADMIN))).rejects.toMatchObject({
+      status: 400, response: expect.objectContaining({ code: 'NOT_CAPABLE' }),
+    });
+    expect(s.jobsModel.docs[0].status).toBe('unassigned');
+  });
+  it('a soft failure needs override + a reason; the override is recorded', async () => {
+    const s = setup();
+    const id = await withJob(s);
+    s.centers.docs[2].status = 'busy';
+    await expect(s.svc.assign(id, { providerId: String(C) } as never, String(ADMIN))).rejects.toMatchObject({ status: 409, response: expect.objectContaining({ code: 'PROVIDER_NOT_ELIGIBLE', problems: ['مجری مشغول است'] }) });
+    await expect(s.svc.assign(id, { providerId: String(C), override: true } as never, String(ADMIN))).rejects.toThrow('دلیل نادیده‌گرفتن شرایط را بنویسید');
+    await s.svc.assign(id, { providerId: String(C), override: true, reason: 'هماهنگ شد' } as never, String(ADMIN));
+    expect(s.jobsModel.docs[0].assignment.override).toEqual({ reason: 'هماهنگ شد', problems: ['مجری مشغول است'] });
+    expect(s.jobsModel.docs[0].history.at(-1)).toMatchObject({ action: 'assigned', override: true, reason: 'هماهنگ شد' });
+  });
+  it('a missing provider price needs explicit confirmation; the snapshot then has no subtotal (§53)', async () => {
+    const s = setup();
+    const id = await withJob(s);
+    s.versions.docs.length = 0;
+    await expect(s.svc.assign(id, { providerId: String(C) } as never, String(ADMIN))).rejects.toMatchObject({
+      status: 409, response: expect.objectContaining({ code: 'PROVIDER_PRICE_MISSING', message: 'قیمت مجری تنظیم نشده', missing: [expect.stringContaining('چاپ رنگی')] }),
+    });
+    await s.svc.assign(id, { providerId: String(C), confirmMissingPrice: true } as never, String(ADMIN));
+    expect(s.jobsModel.docs[0].providerPricing).toMatchObject({ providerSubtotal: null, payoutBasis: null, confirmedMissing: true });
+  });
+  it('concurrent assigns: one wins, the other gets 409, one notification', async () => {
+    const s = setup();
+    const id = await withJob(s);
+    const r = await Promise.allSettled([1, 2].map(() => s.svc.assign(id, { providerId: String(C) } as never, String(ADMIN))));
+    expect(r.filter((x) => x.status === 'fulfilled')).toHaveLength(1);
+    expect((r.find((x) => x.status === 'rejected') as PromiseRejectedResult).reason.status).toBe(409);
+    expect(s.notifier.provider.mock.calls.filter(([e]) => e === 'job_assigned')).toHaveLength(1);
+    expect(s.jobsModel.docs[0].attempts).toBe(1);
+  });
+  it('assigning an assigned job is 409; a cancelled order is 400', async () => {
+    const s = setup();
+    const id = await withJob(s);
+    await s.svc.assign(id, { providerId: String(C) } as never, String(ADMIN));
+    await expect(s.svc.assign(id, { providerId: String(C) } as never, String(ADMIN))).rejects.toThrow(/قبلاً تخصیص داده شده/);
+    const t = setup();
+    const tid = await withJob(t);
+    t.orders.docs[0].status = 'cancelled';
+    await expect(t.svc.assign(tid, { providerId: String(C) } as never, String(ADMIN))).rejects.toThrow('این سفارش لغو یا تحویل شده است');
+  });
+});
+
+describe('DispatchService reassign / unassign / delivery (§60, §61, §71)', () => {
+  const G = new Types.ObjectId();
+  const withG = (s: ReturnType<typeof setup>) => s.centers.docs.push({ ...s.centers.docs[2], _id: G, name: 'آزمون G', userId: new Types.ObjectId(), allowCustomerPickup: false, canDeliver: false });
+  it('reassign needs a reason, keeps the previous provider in the history with its stage, and tells both providers', async () => {
+    const s = setup();
+    withG(s);
+    const id = await withJob(s);
+    await s.svc.assign(id, { providerId: String(C) } as never, String(ADMIN));
+    await expect(s.svc.reassign(id, { providerId: String(G) } as never, String(ADMIN))).rejects.toThrow('دلیل را بنویسید');
+    await expect(s.svc.reassign(id, { providerId: String(C), reason: 'x' } as never, String(ADMIN))).rejects.toThrow('هم‌اکنون به همین مجری');
+    const d = await s.svc.reassign(id, { providerId: String(G), reason: 'ظرفیت C پر شد', confirmMissingPrice: true } as never, String(ADMIN));
+    expect(d).toMatchObject({ status: 'assigned', attempts: 2, provider: { name: 'آزمون G' } });
+    expect(s.jobsModel.docs[0].history.at(-1)).toMatchObject({ action: 'reassigned', previousProviderId: C, stage: 'before_production', reason: 'ظرفیت C پر شد' });
+    expect(s.jobsModel.docs[0].releasedProviderIds.map(String)).toEqual([String(C)]);
+    expect(d.assignments.map((a) => [a.providerName, a.outcome])).toEqual([['آزمون C', 'withdrawn'], ['آزمون G', 'pending']]);
+    expect(s.notifier.provider).toHaveBeenCalledWith('job_withdrawn', C, expect.anything());
+    expect(s.notifier.provider).toHaveBeenCalledWith('job_assigned', G, expect.anything());
+    expect(String(s.orders.docs[0].centerId)).toBe(String(G));
+  });
+  it('unassign returns the job to the queue and tells the provider', async () => {
+    const s = setup();
+    const id = await withJob(s);
+    await s.svc.assign(id, { providerId: String(C) } as never, String(ADMIN));
+    const d = await s.svc.unassign(id, 'مشتری درخواست تغییر داد', String(ADMIN));
+    expect(d).toMatchObject({ status: 'unassigned', provider: null, lastException: { kind: 'unassigned', reason: 'مشتری درخواست تغییر داد' } });
+    expect(s.notifier.provider).toHaveBeenCalledWith('job_withdrawn', C, expect.anything());
+    expect(s.orders.docs[0].centerId).toBeUndefined();
+  });
+  it('provider delivery by a separate delivery-only provider (§61): fee on the snapshot, not in the producer’s payout basis', async () => {
+    const s = setup();
+    const id = await withJob(s);
+    await s.svc.assign(id, { providerId: String(C), deliveryMethod: 'provider', deliveryProviderId: String(F) } as never, String(ADMIN));
+    const job = s.jobsModel.docs[0];
+    expect(job).toMatchObject({ deliveryMethod: 'provider' });
+    expect(String(job.deliveryProviderId)).toBe(String(F));
+    expect(job.providerPricing).toMatchObject({ delivery: { providerId: String(F), fee: 20000 }, payoutBasis: 1_600_000 });
+    expect(s.orders.docs[0].delivery.method).toBe('provider');
+    expect(s.notifier.provider).toHaveBeenCalledWith('job_delivery_assigned', F, expect.anything());
+    await expect(s.svc.updateDelivery(id, { deliveryMethod: 'provider', deliveryProviderId: String(B) } as never, String(ADMIN))).rejects.toThrow('مجری تحویل باید فعال باشد و امکان ارسال داشته باشد');
+    const back = await s.svc.updateDelivery(id, { deliveryMethod: 'courier' } as never, String(ADMIN));
+    expect(back).toMatchObject({ deliveryMethod: 'courier', deliveryProvider: null });
+    expect(s.jobsModel.docs[0].history.at(-1).action).toBe('delivery_changed');
+  });
+  it('customer pickup: may move to the provider shop only when allowed; the customer’s choice never flips', async () => {
+    const s = setup();
+    withG(s);
+    s.orders.docs[0].delivery = { method: 'customer_pickup', homePickup: false, note: '', pickupAt: 'point', pickupPoint: { id: 'pp1', name: 'دفتر مرکزی', address: 'ونک', phone: '0', hours: '', kind: 'point' } };
+    const id = await withJob(s);
+    await expect(s.svc.assign(id, { providerId: String(C), deliveryMethod: 'courier' } as never, String(ADMIN))).rejects.toThrow('روش تحویل انتخابی مشتری');
+    await expect(s.svc.assign(id, { providerId: String(G), pickupAt: 'provider', confirmMissingPrice: true } as never, String(ADMIN))).rejects.toThrow('تحویل حضوری در محل این مجری مجاز نیست');
+    await s.svc.assign(id, { providerId: String(C), pickupAt: 'provider' } as never, String(ADMIN));
+    expect(s.orders.docs[0].delivery).toMatchObject({ method: 'customer_pickup', pickupAt: 'provider', providerShop: { name: 'آزمون C', address: 'تهران، ونک', kind: 'provider' }, pickupPoint: { id: 'pp1' } });
+    expect(s.jobsModel.docs[0].pickupAt).toBe('provider');
+  });
+  it('priority and deadline: a deadline change re-arms the alerts and tells the provider', async () => {
+    const s = setup();
+    const id = await withJob(s);
+    await s.svc.assign(id, { providerId: String(C) } as never, String(ADMIN));
+    Object.assign(s.jobsModel.docs[0], { deadlineNotifiedAt: new Date(), lateAlertedAt: new Date() });
+    const deadline = new Date(Date.now() + 5 * 3_600_000).toISOString();
+    const d = await s.svc.update(id, { priority: 'high', deadline } as never, String(ADMIN));
+    expect(d).toMatchObject({ priority: 'high', deadline });
+    expect(s.jobsModel.docs[0].deadlineNotifiedAt).toBeUndefined();
+    expect(s.jobsModel.docs[0].lateAlertedAt).toBeUndefined();
+    expect(s.notifier.provider).toHaveBeenCalledWith('job_changed', C, expect.anything());
+  });
+});
+
+describe('DispatchService on behalf of the provider and the v1 order-sheet path', () => {
+  it('respond: accept or reject for the provider, with the admin’s reason in the history', async () => {
+    const s = setup();
+    const id = await withJob(s);
+    await s.svc.assign(id, { providerId: String(C) } as never, String(ADMIN));
+    const d = await s.svc.respond(id, { accept: false, reasonCode: 'capacity_full', reason: 'تلفنی اعلام شد' } as never, String(ADMIN));
+    expect(d).toMatchObject({ status: 'unassigned', lastException: { kind: 'rejected', reason: 'تلفنی اعلام شد' } });
+    expect(s.notifier.admins).toHaveBeenCalledWith('job_rejected', expect.anything());
+    await s.svc.assign(id, { providerId: String(C) } as never, String(ADMIN));
+    expect((await s.svc.respond(id, { accept: true, reason: 'تلفنی تأیید شد' } as never, String(ADMIN))).status).toBe('accepted');
+    expect(s.orders.docs[0].status).toBe('confirmed');
+  });
+  it('the v1 centre select delegates with the dispatch permissions', async () => {
+    const s = setup();
+    await withJob(s);
+    const staff = new Types.ObjectId();
+    (s.svc as unknown as { users: { docs: Doc[] } }).users.docs.push({ _id: staff, role: 'admin', permissions: ['dispatch_view'] });
+    await expect(s.svc.assignFromOrder(String(s.order._id), String(C), String(staff))).rejects.toThrow('به این بخش دسترسی ندارید');
+    await s.svc.assignFromOrder(String(s.order._id), String(C), String(ADMIN));
+    expect(s.jobsModel.docs[0].status).toBe('assigned');
+    await s.svc.assignFromOrder(String(s.order._id), null, String(ADMIN));
+    expect(s.jobsModel.docs[0]).toMatchObject({ status: 'unassigned' });
+    expect(s.jobsModel.docs[0].history.at(-1)).toMatchObject({ action: 'unassigned', reason: 'لغو از صفحه سفارش' });
+  });
+});
