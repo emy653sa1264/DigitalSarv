@@ -613,15 +613,21 @@ export function ruleMatches(rule: RuleLike, f: RuleFacts): boolean {
 
 // ---------------------------------------------------------------- quote
 
+/** Stored service lines (index-aligned with `draft.services`) that must keep their price instead of being re-priced. */
+export interface QuoteOptions { fixedServices?: { price: number; label: string; detail: string }[] }
+
 /** Prices `draft` under one plan (no plansCompare). */
-export function computeQuote(draft: OrderDraft, ctx: PricingContext, planId?: string): QuoteResult {
+export function computeQuote(draft: OrderDraft, ctx: PricingContext, planId?: string, opts: QuoteOptions = {}): QuoteResult {
   const p = ctx.prices;
   const plan = findPlan(planId ?? draft.planId, ctx.plans);
   const children = draft.children ?? [];
   const services = draft.services ?? [];
 
   const childRows = children.map((c, index) => ({ index, total: childTotal(c, ctx), books: bookCount(c, ctx) }));
-  const pricedRows = services.map((s) => priceService(s, p, ctx));
+  const pricedRows = services.map((s, i) => {
+    const fixed = opts.fixedServices?.[i];
+    return fixed ? { service: s, price: fixed.price, label: fixed.label, detail: fixed.detail } : priceService(s, p, ctx);
+  });
   const serviceRows = pricedRows.map((priced, index) => ({ index, price: priced.price, label: priced.label, detail: priced.detail, ...(priced.unavailable ? { unavailable: priced.unavailable } : {}) }));
 
   const totalBooks = childRows.reduce((s, c) => s + c.books, 0);
@@ -731,12 +737,12 @@ export function computeQuote(draft: OrderDraft, ctx: PricingContext, planId?: st
 }
 
 /** Full quote: the draft under `planId`, plus the same draft priced under every plan. */
-export function quoteDraft(draft: OrderDraft, ctx: PricingContext, planId?: string): QuoteResult {
-  const result = computeQuote(draft, ctx, planId);
+export function quoteDraft(draft: OrderDraft, ctx: PricingContext, planId?: string, opts: QuoteOptions = {}): QuoteResult {
+  const result = computeQuote(draft, ctx, planId, opts);
   const ordered = [...ctx.plans].sort((a, b) => PLAN_IDS.indexOf(a.id) - PLAN_IDS.indexOf(b.id));
   result.quote.plansCompare = ordered.map((pl) => ({
     planId: pl.id,
-    total: pl.id === result.quote.planId ? result.quote.total : computeQuote(draft, ctx, pl.id).quote.total,
+    total: pl.id === result.quote.planId ? result.quote.total : computeQuote(draft, ctx, pl.id, opts).quote.total,
   }));
   return result;
 }

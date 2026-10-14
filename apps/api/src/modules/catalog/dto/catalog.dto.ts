@@ -115,7 +115,7 @@ export class CreatePaperDto {
   @IsOptional() @IsInt() @Min(0) @Max(2000) weight?: number;
   @IsOptional() @IsInt() @Min(0) @Max(100_000_000) paperCost?: number;
   @IsOptional() @IsBoolean() colorPrint?: boolean;
-  @IsOptional() @IsArray() @ArrayMaxSize(4) @IsIn(['A3', 'A4', 'A5', 'A6'], { each: true }) supportedSizes?: string[];
+  @IsOptional() @IsArray() @ArrayMinSize(1) @ArrayMaxSize(4) @IsIn(['A3', 'A4', 'A5', 'A6'], { each: true }) supportedSizes?: string[];
   @IsOptional() @IsBoolean() supportsSingle?: boolean;
   @IsOptional() @IsBoolean() supportsDouble?: boolean;
 }
@@ -137,7 +137,7 @@ export class UpdatePaperDto {
   @IsOptional() @IsInt() @Min(0) @Max(2000) weight?: number;
   @IsOptional() @IsInt() @Min(0) @Max(100_000_000) paperCost?: number;
   @IsOptional() @IsBoolean() colorPrint?: boolean;
-  @IsOptional() @IsArray() @ArrayMaxSize(4) @IsIn(['A3', 'A4', 'A5', 'A6'], { each: true }) supportedSizes?: string[];
+  @IsOptional() @IsArray() @ArrayMinSize(1) @ArrayMaxSize(4) @IsIn(['A3', 'A4', 'A5', 'A6'], { each: true }) supportedSizes?: string[];
   @IsOptional() @IsBoolean() supportsSingle?: boolean;
   @IsOptional() @IsBoolean() supportsDouble?: boolean;
 }

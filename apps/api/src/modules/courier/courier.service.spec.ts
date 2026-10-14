@@ -39,6 +39,8 @@ describe('CourierService.verify recount', () => {
     const drafted = pricing.quote.mock.calls[0][0] as { services: { kind: string }[] };
     expect(drafted.services.map((s) => s.kind)).toEqual(['print']);
     expect(res.status).toBe('awaiting_approval');
+    // every service line keeps its stored price/label/detail (a v4 combo may be unavailable by now)
+    expect(pricing.quote.mock.calls[0][3]).toEqual({ fixedServices: [{ price: 1, label: 'چاپ اسناد', detail: '' }] });
   });
 });
 

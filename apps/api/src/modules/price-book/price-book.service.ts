@@ -30,7 +30,7 @@ export interface VersionView {
   effectiveFrom: string; effectiveUntil?: string; state: VersionLike['state']; status: DisplayStatus;
   reason: string; createdBy?: { id: string; name: string }; createdAt: string; unitPrice: number | null;
 }
-export interface MatrixRow { comboKey: string; service: ComboService; options: ComboOptions; label: string; current: VersionView | null; next: VersionView | null }
+export interface MatrixRow { comboKey: string; service: ComboService; options: ComboOptions; label: string; current: VersionView | null; next: VersionView | null; hasVersions: boolean }
 
 export interface BulkInput {
   layer: 'customer';
@@ -44,6 +44,8 @@ export interface BulkPreview {
 
 type Row = PriceVersion & { _id: Types.ObjectId };
 const MAX_PRICE = 1_000_000_000;
+const PAST_GRACE_MS = 60_000;
+const PAST_MSG = 'زمان اعمال نمی‌تواند در گذشته باشد';
 
 @Injectable()
 export class PriceBookService {
@@ -101,7 +103,7 @@ export class PriceBookService {
         const r = id ? list.find((x) => String(x._id) === id) : undefined;
         return r ? this.view(r, eff?.id ?? null, at, users, vars(key)) : null;
       };
-      out.push({ comboKey: key, service: options.service, options, label: comboLabel(options, names), current: view(eff?.id), next: view(future?.id) });
+      out.push({ comboKey: key, service: options.service, options, label: comboLabel(options, names), current: view(eff?.id), next: view(future?.id), hasVersions: list.length > 0 });
     }
     return out;
   }
@@ -143,6 +145,7 @@ export class PriceBookService {
     const effectiveUntil = input.effectiveUntil ? new Date(input.effectiveUntil) : undefined;
     if (Number.isNaN(effectiveFrom.getTime()) || (effectiveUntil && Number.isNaN(effectiveUntil.getTime()))) throw new BadRequestException('تاریخ معتبر نیست');
     if (effectiveUntil && effectiveUntil.getTime() <= effectiveFrom.getTime()) throw new BadRequestException('تاریخ پایان باید بعد از تاریخ شروع باشد');
+    if (input.publish && input.effectiveFrom && effectiveFrom.getTime() < Date.now() - PAST_GRACE_MS) throw new BadRequestException(PAST_MSG);
     if (input.publish && input.effectiveFrom && (await this.versions.exists({ layer: 'customer', providerId: null, comboKey: input.comboKey, state: 'published', effectiveFrom }))) {
       throw new ConflictException('قیمت دیگری با همین زمان شروع (هم‌زمان) منتشر شده است');
     }
@@ -231,6 +234,7 @@ export class PriceBookService {
     const bulkId = randomUUID();
     const effectiveFrom = input.effectiveFrom ? new Date(input.effectiveFrom) : new Date();
     if (Number.isNaN(effectiveFrom.getTime())) throw new BadRequestException('تاریخ معتبر نیست');
+    if (input.effectiveFrom && effectiveFrom.getTime() < Date.now() - PAST_GRACE_MS) throw new BadRequestException(PAST_MSG);
     const docs: Awaited<ReturnType<PriceBookService['insertVersion']>>[] = [];
     const skipped = [...preview.skipped];
     const future = effectiveFrom.getTime() > Date.now();
@@ -326,9 +330,14 @@ export class PriceBookService {
     if (to === 'published' && future && (await this.versions.exists({ _id: { $ne: before._id }, layer: before.layer, providerId: before.providerId, comboKey: before.comboKey, state: 'published', effectiveFrom: before.effectiveFrom }))) {
       throw new ConflictException('قیمت دیگری با همین زمان شروع (هم‌زمان) منتشر شده است');
     }
+    if (to === 'published' && before.effectiveUntil && new Date(before.effectiveUntil).getTime() <= now.getTime()) {
+      throw new BadRequestException('این پیش‌نویس منقضی شده است');
+    }
+    // Disabling a version that has not started yet cancels it (zero-length window); an active one stops selling now.
+    const cancel = to === 'disabled' && future;
     const doc = await this.versions.findOneAndUpdate(
       { _id: before._id, state: from },
-      { $set: { state: to, updatedBy: new Types.ObjectId(by), ...(to === 'published' && !future ? { effectiveFrom: now } : {}) } },
+      { $set: { state: to, updatedBy: new Types.ObjectId(by), ...(to === 'published' && !future ? { effectiveFrom: now } : {}), ...(cancel ? { effectiveUntil: before.effectiveFrom } : {}) } },
       { returnDocument: 'after' },
     );
     if (!doc) throw new ConflictException('وضعیت این نسخه تغییر کرده است؛ صفحه را تازه کنید');

@@ -63,6 +63,26 @@ describe('PriceBookService', () => {
     expect(back).toMatchObject({ version: 3, price: 3500, status: 'active' });
     expect((await svc.history('customer', 'bw|A4|single'))).toHaveLength(3);
   });
+  it('disabling a scheduled version cancels it: the previous price keeps applying at its start', async () => {
+    const { svc, by } = setup();
+    await svc.create(base, by);
+    const start = new Date(Date.now() + 3_600_000);
+    const later = await svc.create({ ...base, price: 9000, effectiveFrom: start.toISOString() }, by);
+    const off = await svc.disable(later.id, 'لغو', by);
+    expect(off.status).toBe('disabled');
+    expect(off.effectiveUntil).toBe(start.toISOString());
+    const row = (await svc.matrix('customer', 'bw', new Date(start.getTime() + 1000))).find((r) => r.comboKey === 'bw|A4|single')!;
+    expect(row.current?.price).toBe(3500);
+  });
+  it('rejects a published create or bulk starting in the past, and publishing an expired draft', async () => {
+    const { svc, by } = setup();
+    const past = new Date(Date.now() - 3_600_000).toISOString();
+    await expect(svc.create({ ...base, effectiveFrom: past }, by)).rejects.toThrow(/گذشته/);
+    await svc.create(base, by);
+    await expect(svc.bulkApply({ layer: 'customer', filter: { comboKeys: ['bw|A4|single'] }, op: 'replace', value: 1, effectiveFrom: past, reason: 'x' }, by)).rejects.toThrow(/گذشته/);
+    const draft = await svc.create({ ...base, publish: false, effectiveFrom: past, effectiveUntil: new Date(Date.now() - 1000).toISOString() }, by);
+    await expect(svc.publish(draft.id, 'x', by)).rejects.toThrow(/منقضی/);
+  });
   it('previews formulas with paper cost and base price', async () => {
     const { svc, by } = setup();
     await svc.create({ ...base, comboKey: 'color|A4|full|card160|single', price: 35000 }, by);

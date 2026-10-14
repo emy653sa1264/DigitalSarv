@@ -17,7 +17,7 @@ import { BindingRange } from '../price-book/schemas/binding-range.schema.js';
 import { PriceVersion } from '../price-book/schemas/price-version.schema.js';
 import { loadCustomerSnapshot } from '../price-book/snapshot.js';
 import { PricingRule } from '../rules/rule.schema.js';
-import { pricedServices, quoteDraft } from './pricing.js';
+import { pricedServices, quoteDraft, type QuoteOptions } from './pricing.js';
 import type { CampaignBlock, OrderDraft, PricingContext, QuoteResult } from './pricing.types.js';
 
 /** Loads the pricing context from MongoDB and delegates the maths to the pure functions in `pricing.ts`. */
@@ -118,8 +118,8 @@ export class PricingService {
     return campaignBlock(c, today, usedToday);
   }
 
-  async quote(draft: OrderDraft, planId?: PlanId, ctx?: PricingContext): Promise<QuoteResult> {
-    return quoteDraft(draft, ctx ?? (await this.context()), planId);
+  async quote(draft: OrderDraft, planId?: PlanId, ctx?: PricingContext, opts?: QuoteOptions): Promise<QuoteResult> {
+    return quoteDraft(draft, ctx ?? (await this.context()), planId, opts);
   }
 
   pricedServices(draft: OrderDraft, ctx: PricingContext) {

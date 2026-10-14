@@ -208,7 +208,10 @@ export class CourierService {
       // nothing counted at all -> keep the registered children/quote and let the admin decide (e.g. cancel)
       if (kept.length) {
         const ctx = await this.pricing.context();
-        const { quote } = await this.pricing.quote({ ...draft, children: kept }, order.planId, ctx);
+        const { quote } = await this.pricing.quote({ ...draft, children: kept }, order.planId, ctx, {
+          // service lines keep what the customer was quoted; only the books are re-priced
+          fixedServices: (order.services ?? []).map((s) => ({ price: s.price, label: s.label, detail: s.detail })),
+        });
         order.children = orderChildren(kept, quote.children.map((c) => c.total), ctx);
         order.quote = quote;
         order.markModified('children');

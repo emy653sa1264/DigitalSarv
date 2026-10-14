@@ -26,6 +26,12 @@ describe('pickEffective', () => {
     const back = v({ id: 'back', version: 3, effectiveFrom: d('2026-04-01T00:00:00Z') });
     expect(pickEffective([old, off, back], at)?.id).toBe('back');
   });
+  it('disabled scheduled version (zero-length window) -> previous price still applies at its start time', () => {
+    const old = v({ id: 'old', version: 1 });
+    const start = d('2026-07-01T00:00:00Z');
+    const cancelled = v({ id: 'c', version: 2, state: 'disabled', effectiveFrom: start, effectiveUntil: start });
+    expect(pickEffective([old, cancelled], new Date(start.getTime() + 1000))?.id).toBe('old');
+  });
   it('a temporary price ends and the previous applies again', () => {
     const base = v({ id: 'base', version: 1 });
     const promo = v({ id: 'promo', version: 2, effectiveFrom: d('2026-05-01T00:00:00Z'), effectiveUntil: d('2026-05-15T00:00:00Z') });

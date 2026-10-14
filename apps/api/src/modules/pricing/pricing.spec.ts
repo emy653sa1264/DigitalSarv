@@ -738,3 +738,16 @@ describe('v3.3 pricing additions', () => {
     expect(computeQuote(withBooks('SCHOOL1405'), makeCtx({ campaign: null }), 'bronze').quote.couponReason).toBe('invalid');
   });
 });
+
+describe('computeQuote fixedServices (courier recount)', () => {
+  it('keeps stored service prices while children and totals are recomputed', () => {
+    const ctx = makeCtx();
+    const draft: OrderDraft = { children: [SARA], services: [cart(1)] };
+    const fresh = computeQuote(draft, ctx, 'bronze').quote;
+    const fixed = computeQuote(draft, ctx, 'bronze', { fixedServices: [{ price: 77_000, label: 'ذخیره‌شده', detail: 'جزئیات' }] }).quote;
+    expect(fixed.services[0]).toMatchObject({ price: 77_000, label: 'ذخیره‌شده', detail: 'جزئیات' });
+    expect(fixed.bindingTotal).toBe(fresh.bindingTotal);
+    expect(fixed.servicesTotal).toBe(77_000);
+    expect(fixed.total).toBe(fresh.total - fresh.servicesTotal + 77_000);
+  });
+});
