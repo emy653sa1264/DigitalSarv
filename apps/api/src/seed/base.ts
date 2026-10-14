@@ -15,6 +15,7 @@ import { Paper } from '../modules/catalog/schemas/paper.schema.js';
 import { Plan } from '../modules/catalog/schemas/plan.schema.js';
 import { Settings, SETTINGS_ID } from '../modules/catalog/schemas/settings.schema.js';
 import { Center } from '../modules/centers/center.schema.js';
+import { providerBackfill } from '../modules/centers/provider-model.js';
 import { CmsSection } from '../modules/cms/cms-section.schema.js';
 import { NotificationTemplate } from '../modules/notifications/notification-template.schema.js';
 import { BindingRange } from '../modules/price-book/schemas/binding-range.schema.js';
@@ -115,6 +116,13 @@ export async function seedBase(app: INestApplicationContext, log = new Logger('S
     (await Extras.updateMany({ services: { $exists: false } }, { $set: { services: [...EXTRA_SERVICES] } })).modifiedCount;
   await Extras.updateMany({ key: { $in: TEXT_EXTRAS }, needsText: { $exists: false } }, { $set: { needsText: true } });
   await Extras.updateMany({ needsText: { $exists: false } }, { $set: { needsText: false } });
+
+  // v4.1 providers (D1): centres saved before v4.1 get the provider fields once — only while `status` is missing,
+  // so admin edits always win and the v1 fields (name, zone, capacity, commission, rating, address) stay as they are
+  const backfill = providerBackfill();
+  counts.providersBackfilled = (
+    await model<Center>(Center.name).updateMany(backfill.filter, { $set: backfill.set }, { timestamps: false })
+  ).modifiedCount;
 
   // v4 papers: backfill the old ones once (only while `colorPrint` is missing), then insert the new ones
   const Papers = model<Paper>(Paper.name);
