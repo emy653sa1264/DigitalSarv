@@ -45,4 +45,9 @@ describe('UpdateSettingsDto (PUT /admin/settings)', () => {
     expect((await check({ courier: { perTaskFee: -1 } })).errors.length).toBeGreaterThan(0);
     expect((await check({ courier: { settlementWeekday: 7 } })).errors.length).toBeGreaterThan(0);
   });
+
+  it('printAddons: booleans only', async () => {
+    expect((await check({ printAddons: { mixed: 'yes' } })).errors.length).toBeGreaterThan(0);
+    expect((await check({ printAddons: { mixed: true } })).errors).toEqual([]);
+  });
 });

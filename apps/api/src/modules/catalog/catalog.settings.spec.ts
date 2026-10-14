@@ -3,7 +3,7 @@ import { Types } from 'mongoose';
 import { fakeModel, type Doc } from '../../../test/fake-model.js';
 import { FakeRedis, fakeRedisService } from '../../../test/fake-redis.js';
 import { addDays } from '../../common/utils/dates.js';
-import { BIND_COLORS, DEFAULT_CHECKLISTS, DEFAULT_OPS } from './catalog.defaults.js';
+import { BIND_COLORS, DEFAULT_CHECKLISTS, DEFAULT_OPS, defaultPrintAddons } from './catalog.defaults.js';
 import { CatalogService } from './catalog.service.js';
 
 function setup({ settings = [] as Doc[], campaign = null as Doc | null, colors = [] as Doc[], bindColors = [] as Doc[] } = {}) {
@@ -44,7 +44,7 @@ describe('«تنظیمات» (v3.3)', () => {
     expect(res.checklists.pickup).toEqual(['y']);
     expect(settings.docs[0].ops.sameDayCutoff).toBe('15:00');
     expect((await svc.getCatalog()).ops).toMatchObject({ sameDayCutoff: '15:00' }); // not the cached one
-    await expect(svc.getAdminSettings()).resolves.toEqual({ ops: res.ops, courier: res.courier, checklists: res.checklists });
+    await expect(svc.getAdminSettings()).resolves.toEqual({ ops: res.ops, courier: res.courier, checklists: res.checklists, printAddons: defaultPrintAddons() });
   });
 });
 

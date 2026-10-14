@@ -22,6 +22,9 @@ import {
 import { PushSubscription, PushSubscriptionSchema } from '../modules/notifications/push-subscription.schema.js';
 import { UserNotification, UserNotificationSchema } from '../modules/notifications/user-notification.schema.js';
 import { Upload, UploadSchema } from '../modules/uploads/upload.schema.js';
+import { PriceVersion, PriceVersionSchema } from '../modules/price-book/schemas/price-version.schema.js';
+import { PriceAudit, PriceAuditSchema } from '../modules/price-book/schemas/price-audit.schema.js';
+import { BindingRange, BindingRangeSchema } from '../modules/price-book/schemas/binding-range.schema.js';
 
 const features = MongooseModule.forFeature([
   { name: User.name, schema: UserSchema },
@@ -43,6 +46,9 @@ const features = MongooseModule.forFeature([
   { name: UserNotification.name, schema: UserNotificationSchema },
   { name: PushSubscription.name, schema: PushSubscriptionSchema },
   { name: Upload.name, schema: UploadSchema },
+  { name: PriceVersion.name, schema: PriceVersionSchema },
+  { name: PriceAudit.name, schema: PriceAuditSchema },
+  { name: BindingRange.name, schema: BindingRangeSchema },
 ]);
 
 /**

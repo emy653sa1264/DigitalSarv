@@ -4,6 +4,7 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsInt,
   IsNotEmpty,
   IsObject,
@@ -104,6 +105,18 @@ export class ChecklistsDto {
   pickup?: string[];
 }
 
+export class PrintAddonsDto {
+  @IsOptional() @IsBoolean() mixed?: boolean;
+  @IsOptional() @IsBoolean() spiral?: boolean;
+  @IsOptional() @IsBoolean() glue?: boolean;
+  @IsOptional() @IsBoolean() hardcover?: boolean;
+  @IsOptional() @IsBoolean() staple?: boolean;
+  @IsOptional() @IsBoolean() lamCover?: boolean;
+  @IsOptional() @IsBoolean() lamAll?: boolean;
+  @IsOptional() @IsBoolean() extras?: boolean;
+  @IsOptional() @IsBoolean() docsSpiral?: boolean;
+}
+
 export class UpdateSettingsDto {
   @IsOptional() @IsObject() @ValidateNested() @Type(() => OpsSettingsDto)
   ops?: OpsSettingsDto;
@@ -113,4 +126,7 @@ export class UpdateSettingsDto {
 
   @IsOptional() @IsObject() @ValidateNested() @Type(() => ChecklistsDto)
   checklists?: ChecklistsDto;
+
+  @IsOptional() @ValidateNested() @Type(() => PrintAddonsDto)
+  printAddons?: PrintAddonsDto;
 }

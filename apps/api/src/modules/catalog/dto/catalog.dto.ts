@@ -110,6 +110,14 @@ export class CreatePaperDto {
 
   @IsOptional() @IsBoolean()
   on?: boolean;
+
+  @IsOptional() @IsIn(['plain', 'glossy', 'cardstock']) type?: 'plain' | 'glossy' | 'cardstock';
+  @IsOptional() @IsInt() @Min(0) @Max(2000) weight?: number;
+  @IsOptional() @IsInt() @Min(0) @Max(100_000_000) paperCost?: number;
+  @IsOptional() @IsBoolean() colorPrint?: boolean;
+  @IsOptional() @IsArray() @ArrayMaxSize(4) @IsIn(['A3', 'A4', 'A5', 'A6'], { each: true }) supportedSizes?: string[];
+  @IsOptional() @IsBoolean() supportsSingle?: boolean;
+  @IsOptional() @IsBoolean() supportsDouble?: boolean;
 }
 
 export class UpdatePaperDto {
@@ -124,6 +132,14 @@ export class UpdatePaperDto {
 
   @IsOptional() @Type(() => Number) @IsInt()
   sort?: number;
+
+  @IsOptional() @IsIn(['plain', 'glossy', 'cardstock']) type?: 'plain' | 'glossy' | 'cardstock';
+  @IsOptional() @IsInt() @Min(0) @Max(2000) weight?: number;
+  @IsOptional() @IsInt() @Min(0) @Max(100_000_000) paperCost?: number;
+  @IsOptional() @IsBoolean() colorPrint?: boolean;
+  @IsOptional() @IsArray() @ArrayMaxSize(4) @IsIn(['A3', 'A4', 'A5', 'A6'], { each: true }) supportedSizes?: string[];
+  @IsOptional() @IsBoolean() supportsSingle?: boolean;
+  @IsOptional() @IsBoolean() supportsDouble?: boolean;
 }
 
 const books = { message: 'تعداد کتاب باید حداقل ۱ باشد' };

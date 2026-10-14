@@ -138,6 +138,16 @@ export const defaultOps = (): OpsSettings => structuredClone(DEFAULT_OPS);
 export const defaultCourierPay = (): CourierPaySettings => ({ ...DEFAULT_COURIER_PAY });
 export const defaultChecklists = (): Checklists => structuredClone(DEFAULT_CHECKLISTS);
 
+/** v4 add-ons of the new print services (and the docs spiral); switched-off ones are normalized away. */
+export interface PrintAddons {
+  mixed: boolean; spiral: boolean; glue: boolean; hardcover: boolean; staple: boolean;
+  lamCover: boolean; lamAll: boolean; extras: boolean; docsSpiral: boolean;
+}
+export const PRINT_ADDON_FLAGS = ['mixed', 'spiral', 'glue', 'hardcover', 'staple', 'lamCover', 'lamAll', 'extras', 'docsSpiral'] as const;
+export const defaultPrintAddons = (): PrintAddons => ({
+  mixed: false, spiral: false, glue: false, hardcover: false, staple: false, lamCover: false, lamAll: false, extras: false, docsSpiral: true,
+});
+
 // ---------------------------------------------------------------- bind colours (v3.3: admin-managed)
 
 export interface BindColorSeed { key: string; name: string; hex: string; css: string; extra: number; on: boolean; sort: number }

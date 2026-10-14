@@ -15,9 +15,11 @@ import {
   defaultChecklists,
   defaultCourierPay,
   defaultOps,
+  defaultPrintAddons,
   type Checklists,
   type CourierPaySettings,
   type OpsSettings,
+  type PrintAddons,
   type Prices,
 } from './catalog.defaults.js';
 import type {
@@ -54,6 +56,7 @@ export interface ResolvedSettings {
   ops: OpsSettings;
   courier: CourierPaySettings;
   checklists: Checklists;
+  printAddons: PrintAddons;
 }
 
 @Injectable()
@@ -141,6 +144,7 @@ export class CatalogService {
         qc: { ...checklists.qc, ...defined(s?.checklists?.qc ?? {}) } as Checklists['qc'],
         pickup: s?.checklists?.pickup?.length ? s.checklists.pickup : checklists.pickup,
       },
+      printAddons: { ...defaultPrintAddons(), ...defined(s?.printAddons ?? {}) } as PrintAddons,
     };
   }
 
@@ -175,8 +179,8 @@ export class CatalogService {
 
   /** «تنظیمات» (v3.3). */
   async getAdminSettings() {
-    const { ops, courier, checklists } = await this.getSettings();
-    return { ops, courier, checklists };
+    const { ops, courier, checklists, printAddons } = await this.getSettings();
+    return { ops, courier, checklists, printAddons };
   }
 
   /** Partial update: given fields replace the current value; lists are replaced as a whole. */
@@ -188,13 +192,14 @@ export class CatalogService {
       qc: { ...current.checklists.qc, ...defined(dto.checklists?.qc ?? {}) } as Checklists['qc'],
       pickup: dto.checklists?.pickup ?? current.checklists.pickup,
     };
+    const printAddons = { ...current.printAddons, ...defined(dto.printAddons ?? {}) } as PrintAddons;
     await this.settings.updateOne(
       { _id: SETTINGS_ID },
-      { $set: { ops, courier, checklists }, $setOnInsert: { prices: { ...DEFAULT_PRICES }, urgentEnabled: true } },
+      { $set: { ops, courier, checklists, printAddons }, $setOnInsert: { prices: { ...DEFAULT_PRICES }, urgentEnabled: true } },
       { upsert: true },
     );
     await this.invalidate();
-    return { ops, courier, checklists };
+    return { ops, courier, checklists, printAddons };
   }
 
   // ------------------------------------------------------------ plans
