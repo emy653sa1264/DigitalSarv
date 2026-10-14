@@ -1,7 +1,7 @@
 import { Types } from 'mongoose';
 import { fakeModel } from '../../../test/fake-model.js';
 import { unitPrice } from './resolve.js';
-import { effectiveProviderPrices, loadCustomerSnapshot, providerVars } from './snapshot.js';
+import { effectiveProviderEntries, effectiveProviderPrices, loadCustomerSnapshot, providerVars } from './snapshot.js';
 
 const id = () => new Types.ObjectId();
 const lean = <T>(rows: T[]) => ({ find: () => ({ lean: async () => rows, sort: () => ({ lean: async () => rows }) }) });
@@ -54,5 +54,13 @@ describe('snapshot — provider prices of base providers', () => {
   it('effectiveProviderPrices skips disabled winners and other layers', () => {
     const rows = [pv(A, 3500), pv(A, 0, { version: 2, state: 'disabled', effectiveFrom: new Date('2026-03-01') }), pv(B, 3700), { ...pv(B, 1), layer: 'customer' }];
     expect(effectiveProviderPrices(rows as never, at)).toEqual({ [String(B)]: { 'bw|A4|single': 3700 } });
+  });
+  it('effectiveProviderEntries carries the version of the effective provider price (provider_price_version)', () => {
+    const v1 = pv(A, 3500);
+    const v2 = pv(A, 3600, { version: 2, effectiveFrom: new Date('2026-05-01') });
+    const future = pv(A, 9000, { version: 3, effectiveFrom: new Date('2026-09-01') });
+    expect(effectiveProviderEntries([v1, v2, future] as never, at)).toEqual({
+      [String(A)]: { 'bw|A4|single': { price: 3600, versionId: String(v2._id), version: 2 } },
+    });
   });
 });

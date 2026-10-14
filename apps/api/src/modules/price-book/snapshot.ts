@@ -29,9 +29,11 @@ export const toVersionLike = (r: SnapshotRow): VersionLike & { comboKey: string 
   baseProviderId: r.baseProviderId ? String(r.baseProviderId) : null,
 });
 
-/** Effective provider-layer prices at `at`, by provider then combo (unavailable combos are absent). */
-export function effectiveProviderPrices(rows: SnapshotRow[], at: Date): Record<string, Record<string, number>> {
-  const groups = new Map<string, { pid: string; key: string; list: VersionLike[] }>();
+export interface ProviderEntry { price: number; versionId: string; version: number }
+
+/** Effective provider-layer entries at `at` (price + the version in force), by provider then combo. */
+export function effectiveProviderEntries(rows: SnapshotRow[], at: Date): Record<string, Record<string, ProviderEntry>> {
+  const groups = new Map<string, { pid: string; key: string; list: (VersionLike & { comboKey: string })[] }>();
   for (const r of rows) {
     if (r.layer !== 'provider' || !r.providerId) continue;
     const pid = String(r.providerId);
@@ -39,11 +41,20 @@ export function effectiveProviderPrices(rows: SnapshotRow[], at: Date): Record<s
     g.list.push(toVersionLike(r));
     groups.set(`${pid}|${r.comboKey}`, g);
   }
-  const out: Record<string, Record<string, number>> = {};
+  const out: Record<string, Record<string, ProviderEntry>> = {};
   for (const { pid, key, list } of groups.values()) {
     const e = pickEffective(list, at);
     const price = e ? unitPrice(e, {}) : null;
-    if (price !== null) (out[pid] ??= {})[key] = price;
+    if (e && price !== null) (out[pid] ??= {})[key] = { price, versionId: e.id, version: e.version };
+  }
+  return out;
+}
+
+/** Effective provider-layer prices at `at`, by provider then combo (unavailable combos are absent). */
+export function effectiveProviderPrices(rows: SnapshotRow[], at: Date): Record<string, Record<string, number>> {
+  const out: Record<string, Record<string, number>> = {};
+  for (const [pid, combos] of Object.entries(effectiveProviderEntries(rows, at))) {
+    out[pid] = Object.fromEntries(Object.entries(combos).map(([k, e]) => [k, e.price]));
   }
   return out;
 }
