@@ -104,20 +104,38 @@ const equalityFields = (filter: Doc): Doc =>
   Object.fromEntries(Object.entries(filter).filter(([k, v]) => !k.startsWith('$') && !isOperatorObject(v)));
 
 /** A thenable query supporting the chain calls the services make. */
-function query<T>(run: (skip: number, limit?: number) => T) {
+function query<T>(run: (skip: number, limit?: number, sort?: Doc) => T) {
   let skip = 0;
   let limit: number | undefined;
+  let sortSpec: Doc | undefined;
   const q = {
-    sort: () => q,
+    sort: (s?: Doc) => ((sortSpec = s), q),
     select: () => q,
     lean: () => q,
     skip: (n: number) => ((skip = n), q),
     limit: (n: number) => ((limit = n), q),
     // intentionally thenable: mimics a Mongoose Query, which services `await` directly
     // oxlint-disable-next-line unicorn/no-thenable
-    then:<R1, R2>(res: (v: T) => R1, rej?: (e: unknown) => R2) => Promise.resolve().then(() => run(skip, limit)).then(res, rej),
+    then:<R1, R2>(res: (v: T) => R1, rej?: (e: unknown) => R2) => Promise.resolve().then(() => run(skip, limit, sortSpec)).then(res, rej),
   };
   return q;
+}
+
+/** Stable sort by a Mongo-style spec (`{ field: 1 | -1 }`); no spec keeps insertion order. */
+function sorted(rows: Doc[], spec?: Doc): Doc[] {
+  const keys = Object.entries(spec ?? {});
+  if (!keys.length) return rows;
+  return [...rows].sort((a, b) => {
+    for (const [k, dir] of keys) {
+      const x = norm(get(a, k)) as number | string;
+      const y = norm(get(b, k)) as number | string;
+      if (x === y) continue;
+      if (x == null) return -Number(dir);
+      if (y == null) return Number(dir);
+      return (x < y ? -1 : 1) * Number(dir);
+    }
+    return 0;
+  });
 }
 
 export function fakeModel(docs: Doc[] = []) {
@@ -148,10 +166,10 @@ export function fakeModel(docs: Doc[] = []) {
   return {
     docs,
     find: vi.fn((filter: Doc = {}) =>
-      query((skip, limit) => docs.filter((d) => matches(d, filter)).slice(skip, limit === undefined ? undefined : skip + limit).map(out)),
+      query((skip, limit, sort) => sorted(docs.filter((d) => matches(d, filter)), sort).slice(skip, limit === undefined ? undefined : skip + limit).map(out)),
     ),
-    findOne: vi.fn((filter: Doc = {}) => query(() => {
-      const d = first(filter);
+    findOne: vi.fn((filter: Doc = {}) => query((_s, _l, sort) => {
+      const d = sorted(docs.filter((x) => matches(x, filter)), sort)[0];
       return d ? out(d) : null;
     })),
     findById: vi.fn((id: unknown) => query(() => {
@@ -199,7 +217,8 @@ export function fakeModel(docs: Doc[] = []) {
     deleteOne: vi.fn(async (filter: Doc) => removeWhere(filter, false)),
     deleteMany: vi.fn(async (filter: Doc = {}) => removeWhere(filter, true)),
     create: vi.fn(async (doc: Doc) => {
-      const d = { _id: new Types.ObjectId(), createdAt: new Date(), ...clone(doc) };
+      const now = new Date();
+      const d = { _id: new Types.ObjectId(), createdAt: now, updatedAt: now, ...clone(doc) };
       docs.push(d);
       return out(d);
     }),
