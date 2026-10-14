@@ -236,12 +236,17 @@ export class PaymentsService {
       this.logger.warn(`order ${order.code}: payment ${authority} amount mismatch was already handled`);
       return 'mismatch';
     }
-    const note = { status: 'pending_payment' as const, label: `مغایرت مبلغ پرداخت (${credit} تومان به کیف پول اعتبار شد)`, at: new Date() };
-    await this.orders.updateOne(
-      { _id: order._id, 'payment.authority': authority, 'payment.status': { $ne: 'paid' } },
-      { $set: { 'payment.status': 'mismatch' }, $push: { timeline: note }, $inc: { __v: 1 } },
-    );
+    // credit first: nothing after the marker may prevent or hide it
     await this.creditWallet(credited, authority, credit, `AMOUNT MISMATCH (${message})`);
+    try {
+      const note = { status: 'pending_payment' as const, label: `مغایرت مبلغ پرداخت (${credit} تومان به کیف پول اعتبار شد)`, at: new Date() };
+      await this.orders.updateOne(
+        { _id: order._id, status: 'pending_payment', 'payment.authority': authority, 'payment.status': { $ne: 'paid' } },
+        { $set: { 'payment.status': 'mismatch' }, $push: { timeline: note }, $inc: { __v: 1 } },
+      );
+    } catch (err) {
+      this.logger.error(`order ${order.code}: mismatch status note for ${authority} failed (wallet already credited ${credit} toman): ${(err as Error).message}`);
+    }
     return 'mismatch';
   }
 

@@ -391,6 +391,13 @@ describe('PaymentsService: provider amount mismatch', () => {
     await (ctx.svc as never as { creditMismatch: (...a: unknown[]) => Promise<unknown> }).creditMismatch(ctx.order, '159', 3_150_005, 'again');
     expect(ctx.user.walletBalance).toBe(315000);
   });
+  it('the status/timeline update throwing does not stop or double the credit', async () => {
+    const ctx = setup([zibalOrder()], mismatchDriver());
+    vi.spyOn(ctx.orders, 'updateOne').mockRejectedValueOnce(new Error('db hiccup'));
+    await expect(ctx.svc.handleCallback('zibal', '159', 'OK')).resolves.toBe(mismatchUrl(ctx.order));
+    expect(ctx.user.walletBalance).toBe(315000);
+    expect(ctx.order.refundedAuthorities).toEqual(['159']);
+  });
   it('wallet $inc failure after the marker: logged «settle manually» and rethrown', async () => {
     const o = zibalOrder();
     const ctx = setup([o], mismatchDriver());

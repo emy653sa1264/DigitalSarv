@@ -37,7 +37,9 @@ export function PricingCenterPage() {
   const [params, setParams] = useSearchParams()
   const canCustomer = useCan('customer_price_view')
   const canProvider = useCan('provider_price_view')
-  const canBulk = useCan('customer_price_bulk_update', 'customer_price_publish') || useCan('provider_price_bulk_update', 'provider_price_publish')
+  const canBulkCustomer = useCan('customer_price_bulk_update', 'customer_price_publish')
+  const canBulkProvider = useCan('provider_price_bulk_update', 'provider_price_publish')
+  const canBulk = canBulkCustomer || canBulkProvider
   const pending = usePendingPrices(1, canProvider)
   const views: { key: View; label: string; show: boolean }[] = [
     { key: 'customer', label: 'قیمت مشتری', show: canCustomer },
