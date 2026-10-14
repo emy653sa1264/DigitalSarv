@@ -196,6 +196,143 @@ describe.skipIf(!servicesUp)('API (e2e)', () => {
     expect(JSON.stringify(res.body.printing)).not.toMatch(/versionId|createdBy|reason|provider/);
   });
 
+  // ---- v4.1 providers, provider prices, staff -----------------------------------------
+  const authH = (t: string) => ({ Authorization: `Bearer ${t}` });
+  const quoteBw = async (size: string, sides: 'single' | 'double', pages = 1) =>
+    (await http().post('/api/orders/quote').send({ children: [], services: [{ kind: 'black_white_printing', spec: bwSpec({ size, sides, pages, copies: 1 }) }] }).expect(200)).body.services[0];
+  const providersByName = async (admin: string) =>
+    new Map(((await http().get('/api/admin/providers').set(authH(admin)).expect(200)).body as { id: string; name: string }[]).map((p) => [p.name, p.id]));
+  const rejectPending = async (admin: string, key: string) => {
+    const pending = (await http().get('/api/admin/price-book/pending?limit=100').set(authH(admin)).expect(200)).body.items as any[];
+    for (const p of pending.filter((i) => i.version.comboKey === key)) {
+      await http().post(`/api/admin/price-book/versions/${p.version.id}/reject`).set(authH(admin)).send({ reason: 'e2e cleanup' }).expect(200);
+    }
+  };
+
+  it('a provider sees only its own profile and prices; customers and the catalog never see provider data (§26, §27, §64)', async () => {
+    const prov = await login('09122222222');
+    const me = await http().get('/api/provider/me').set(authH(prov)).expect(200);
+    expect(me.body.name).toBe('چاپ نگین');
+    expect(JSON.stringify(me.body)).not.toMatch(/adminNotes|commissionPct|userId|login/);
+    const rows = (await http().get('/api/provider/prices?service=bw').set(authH(prov)).expect(200)).body as any[];
+    expect(rows.find((r) => r.comboKey === 'bw|A4|single').current.price).toBe(3500);
+    const json = JSON.stringify(rows);
+    expect(json).not.toMatch(/providerId|baseProviderId|createdBy|reviewedBy|margin|unitPrice|layer/);
+    expect(new Set(json.match(/"price":\d+/g))).not.toContain('"price":3700'); // دیجیتال آرت's price never leaks
+    await http().get('/api/admin/price-book?layer=provider').set(authH(prov)).expect(403);
+    const cust = await login('09123456789');
+    await http().get('/api/provider/prices').set(authH(cust)).expect(403);
+    await http().get('/api/provider/me').expect(401);
+    const cat = await http().get('/api/catalog').expect(200);
+    expect(JSON.stringify(cat.body)).not.toMatch(/providerId|baseProviderId|provider_price/);
+    expect(JSON.stringify(await quoteBw('A4', 'single'))).not.toMatch(/providerId|baseProviderId|provider_price|providerName/);
+  });
+
+  it('submission → approval changes the provider price only, never the customer price (§24, §85)', async () => {
+    const admin = await login('09120000000');
+    const prov = await login('09122222222');
+    const key = 'bw|A6|single';
+    await rejectPending(admin, key); // a leftover pending submission from an aborted run (reruns stay deterministic)
+    const before = await quoteBw('A6', 'single');
+    const sub = await http().post('/api/provider/prices').set(authH(prov)).send({ comboKey: key, price: 2000, reason: 'e2e', providerId: '000000000000000000000000' }).expect(201);
+    expect(sub.body).toMatchObject({ status: 'pending_approval', price: 2000 });
+    await http().post('/api/provider/prices').set(authH(prov)).send({ comboKey: key, price: 2100, reason: 'e2e' }).expect(409);
+    const ok = await http().post(`/api/admin/price-book/versions/${sub.body.id}/approve`).set(authH(admin)).send({ reason: 'e2e approve' }).expect(200);
+    expect(ok.body).toMatchObject({ layer: 'provider', status: 'active', reviewNote: 'e2e approve' });
+    const ids = await providersByName(admin);
+    expect(ok.body.providerId).toBe(ids.get('چاپ نگین')); // the smuggled providerId was ignored
+    expect((await quoteBw('A6', 'single')).price).toBe(before.price);
+  });
+
+  it('a rejected submission shows its reason to the provider', async () => {
+    const admin = await login('09120000000');
+    const prov = await login('09122222222');
+    const key = 'bw|A6|double';
+    await rejectPending(admin, key);
+    const sub = await http().post('/api/provider/prices').set(authH(prov)).send({ comboKey: key, price: 1900, reason: 'e2e' }).expect(201);
+    await http().post(`/api/admin/price-book/versions/${sub.body.id}/reject`).set(authH(admin)).send({ reason: 'قیمت بسیار بالا' }).expect(200);
+    const rows = (await http().get('/api/provider/prices?service=bw').set(authH(prov)).expect(200)).body as any[];
+    expect(JSON.stringify(rows.find((r) => r.comboKey === key))).toContain('قیمت بسیار بالا');
+  });
+
+  it('three provider prices coexist and the compare view shows margins (§23, §87)', async () => {
+    const admin = await login('09120000000');
+    const rows = (await http().get('/api/admin/price-book/compare?service=bw').set(authH(admin)).expect(200)).body as any[];
+    const a4 = rows.filter((r) => r.comboKey === 'bw|A4|single');
+    const byName = new Map(a4.map((r) => [r.providerName, r]));
+    expect(byName.get('چاپ نگین')?.providerPrice).toBe(3500);
+    expect(byName.get('دیجیتال آرت')?.providerPrice).toBe(3700);
+    expect(byName.get('چاپخانه مهر')?.providerPrice).toBe(3400);
+    expect(byName.get('دیجیتال آرت')).toMatchObject({ customerPrice: a4[0].customerPrice, negative: a4[0].customerPrice < 3700 });
+  });
+
+  it('publishing a customer price below a provider price needs explicit confirmation (§25)', async () => {
+    const admin = await login('09120000000');
+    const key = 'bw|A4|single';
+    const m = await http().get('/api/admin/price-book?layer=customer&service=bw').set(authH(admin)).expect(200);
+    const original = m.body.find((r: any) => r.comboKey === key).current as { id: string };
+    const body = { layer: 'customer', comboKey: key, mode: 'manual', price: 3600, publish: true, reason: 'e2e margin' };
+    try {
+      const res = await http().post('/api/admin/price-book/versions').set(authH(admin)).send(body).expect(409);
+      expect(res.body).toMatchObject({ code: 'NEGATIVE_MARGIN' });
+      expect(res.body.conflicts.map((c: any) => c.providerName)).toContain('دیجیتال آرت');
+      await http().post('/api/admin/price-book/versions').set(authH(admin)).send({ ...body, confirmNegativeMargin: true }).expect(201);
+    } finally {
+      await http().post(`/api/admin/price-book/versions/${original.id}/rollback`).set(authH(admin)).send({ reason: 'e2e rollback', confirmNegativeMargin: true }).expect(200);
+    }
+  });
+
+  it('a percent-markup customer price follows its base provider (§21, §24)', async () => {
+    const admin = await login('09120000000');
+    const ids = await providersByName(admin);
+    const mehr = ids.get('چاپخانه مهر')!;
+    const key = 'bw|A5|double';
+    const m = await http().get('/api/admin/price-book?layer=customer&service=bw').set(authH(admin)).expect(200);
+    const original = m.body.find((r: any) => r.comboKey === key).current as { id: string };
+    const provider = (price: number) => http().post('/api/admin/price-book/versions').set(authH(admin))
+      .send({ layer: 'provider', providerId: mehr, comboKey: key, mode: 'manual', price, publish: true, reason: 'e2e provider', confirmNegativeMargin: true }).expect(201);
+    try {
+      await provider(3000);
+      await http().post('/api/admin/price-book/versions').set(authH(admin))
+        .send({ layer: 'customer', comboKey: key, mode: 'percent_markup', markup: 20, baseProviderId: mehr, publish: true, reason: 'e2e markup', confirmNegativeMargin: true }).expect(201);
+      expect((await quoteBw('A5', 'double', 2)).price).toBe(3600); // 2 pages double = 1 sheet × 3000 × 1.2
+      expect((await http().get('/api/catalog').expect(200)).body.printing.prices[key]).toBe(3600);
+      await provider(3500);
+      expect((await quoteBw('A5', 'double', 2)).price).toBe(4200);
+    } finally {
+      await http().post(`/api/admin/price-book/versions/${original.id}/rollback`).set(authH(admin)).send({ reason: 'e2e rollback', confirmNegativeMargin: true }).expect(200);
+    }
+  });
+
+  it('staff: only super-admins manage staff; permissions apply live; demotion revokes the session (§81)', async () => {
+    const admin = await login('09120000000');
+    const phone = '09127777777';
+    const list = (await http().get('/api/admin/staff').set(authH(admin)).expect(200)).body as any[];
+    const existing = list.find((s) => s.phone === phone);
+    const member = existing
+      ? (await http().patch(`/api/admin/staff/${existing.id}`).set(authH(admin)).send({ permissions: ['customer_price_view'] }).expect(200)).body
+      : (await http().post('/api/admin/staff').set(authH(admin)).send({ phone, name: 'e2e staff', permissions: ['customer_price_view'] }).expect(201)).body;
+    await new Promise((r) => setTimeout(r, 1100)); // revocation is per-second: login must land in a later second than the change
+    tokens.delete(phone);
+    const staff = await login(phone);
+    await http().get('/api/admin/staff').set(authH(staff)).expect(403);
+    await http().get('/api/admin/price-book?layer=customer&service=bw').set(authH(staff)).expect(200);
+    const negin = (await providersByName(admin)).get('چاپ نگین');
+    await http().get(`/api/admin/price-book?layer=provider&providerId=${negin}`).set(authH(staff)).expect(403);
+    await http().get('/api/admin/providers').set(authH(staff)).expect(403);
+    await http().get('/api/admin/centers').set(authH(staff)).expect(200); // assignment selects stay open to every admin
+    // the last super-admin cannot be demoted or restricted
+    const supers = ((await http().get('/api/admin/staff').set(authH(admin)).expect(200)).body as any[]).filter((s) => s.superAdmin);
+    if (supers.length === 1) {
+      await http().delete(`/api/admin/staff/${supers[0].id}`).set(authH(admin)).expect(409);
+      await http().patch(`/api/admin/staff/${supers[0].id}`).set(authH(admin)).send({ permissions: ['customer_price_view'] }).expect(409);
+    }
+    await new Promise((r) => setTimeout(r, 1100)); // the demotion must happen in a later second than the login (iat precision)
+    await http().delete(`/api/admin/staff/${member.id}`).set(authH(admin)).expect(200);
+    await http().get('/api/auth/me').set(authH(staff)).expect(401);
+    tokens.delete(phone);
+  });
+
   it('protects admin routes', async () => {
     await request(app.getHttpServer()).get('/api/admin/dashboard').expect(401);
   });

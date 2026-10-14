@@ -1,7 +1,7 @@
 # Digital Sarv (دیجیتال سرو)
 
 Printing, school-book spiral binding and home pickup/delivery platform. Persian, right-to-left UI throughout.
-Four independently installable apps from the Claude Design files in `design/v2/` (`landing`, `customer`, `delivery`, `admin` `.dc.html`; shared prototype script): **landing** `/`, **customer app** `/app/` (mobile PWA), **courier app «سرو پیک»** `/courier/` (mobile PWA), **admin panel** `/admin/`. `design/digital-sarv.dc.html` is the superseded v1 single file.
+Five independently installable apps (four from the Claude Design files in `design/v2/`: `landing`, `customer`, `delivery`, `admin` `.dc.html`; shared prototype script; the provider app follows the same design system): **landing** `/`, **customer app** `/app/` (mobile PWA), **courier app «سرو پیک»** `/courier/` (mobile PWA), **admin panel** `/admin/`, **provider app «سرو مجری»** `/provider/` (mobile PWA). `design/digital-sarv.dc.html` is the superseded v1 single file.
 
 ## Layout
 
@@ -27,13 +27,14 @@ pnpm --filter web build       # tsc -b && vite build
 ```
 
 Dev logins are OTP-by-phone; the OTP request response includes `devCode` only when `OTP_DEV_CODE=1` and `NODE_ENV !== 'production'` (set in `apps/api/.env`). Outside `development`/`test`, `JWT_SECRET` is required at boot.
-Admin `09120000000`, courier `09121111111`, customer `09123456789`.
+Admin `09120000000`, courier `09121111111`, provider `09122222222` (چاپ نگین), customer `09123456789`.
 
 ## Rules that matter
 
 - **Contract first.** `docs/api-contract.md` is authoritative for endpoints, shapes and pricing formulas. Change it before changing either side.
 - **Server-authoritative pricing.** The web app never computes totals itself; it calls `POST /api/orders/quote` (debounced) and renders `Quote.lines`.
 - **v4 price book** (`modules/price-book`, design `docs/v4-design.md`): print prices are per sheet, keyed by combo (`bw|A4|single` …). Never overwrite a price — every change is a new `priceVersions` doc + `priceAudit`. A missing/disabled price is UNAVAILABLE (Persian reason), never 0 or another combo's price. Formulas go through `price-book/formula.ts` only (no `eval`). Orders snapshot `services[i].pricing`; old orders and courier recounts never re-price service lines.
+- **v4.1 providers** (contract «v4.1»): providers are the extended **centres** collection (`modules/centers`; `seed:base` backfills legacy centres once while `status` is missing). A provider has role `provider` + `User.providerId`, logs in by OTP to `/provider/` and only ever sees its own profile and prices (IDOR-safe: the id comes from the token, never the body). Prices have two layers (`customer` / `provider`) in the same version stream; a provider submits a price as `pending_approval` (one pending per combo, 409), an admin approves or rejects with a reason, and a provider price change never alters a customer price unless it is a markup price (`fixed_markup` / `percent_markup` over `baseProviderId`, or the `provider_price` formula). A customer price below a provider price needs `confirmNegativeMargin` (409 `NEGATIVE_MARGIN`). Catalog and quotes never carry provider data. Admin permissions are per layer (`customer_price_*` / `provider_price_*` …); `/admin/staff*` is super-admin only and the last super-admin is protected (409); staff changes revoke that user's older tokens (per-second precision). Zibal: set `PAYMENT_DRIVER=zibal` and `ZIBAL_MERCHANT`; the default driver is the mock (e2e never hits the network).
 - **Nothing hard-coded that admins edit.** Colors, extras, grades, prices, plans, rules, campaigns, CMS sections and notification templates live in MongoDB and are managed from the admin panel. `GET /api/catalog` is cached in Redis under a versioned key (`catalog:v1:<ver>`); every write that affects it must call the catalog invalidation (which `INCR`s `catalog:ver`).
 - **API is ESM** (`"type": "module"`, `nodenext`): relative imports need the `.js` suffix.
 - **RTL everywhere.** `<html dir="rtl" lang="fa">`. Use logical Tailwind utilities (`ms-*`, `me-*`, `ps-*`, `pe-*`, `start-*`, `end-*`, `text-start`) — never `ml/mr/pl/pr/left/right` for layout.
@@ -44,7 +45,7 @@ Admin `09120000000`, courier `09121111111`, customer `09123456789`.
 
 - `shadcn add` may rewrite `cn` imports to a bogus npm package `"cn"` — after adding components, make sure they import `cn` from `@/lib/utils` and that no `cn` / `next-themes` dependency crept into `apps/web/package.json`.
 - Overlays (dialog/sheet/select) render in a portal outside `[data-role]`; each HTML entry sets `data-role` on `<body>` so portals get the right role theme.
-- Multi-page app: never use router `Link`/`navigate` across apps (`/` ↔ `/app` ↔ `/courier` ↔ `/admin`) — use `<a href>` / `window.location.assign`. Routes keep absolute paths (`/app/...`). Dev/preview rewrite and nginx map `/app/*` → `app/index.html` etc.
+- Multi-page app: never use router `Link`/`navigate` across apps (`/` ↔ `/app` ↔ `/courier` ↔ `/provider` ↔ `/admin`) — use `<a href>` / `window.location.assign`. Routes keep absolute paths (`/app/...`). Dev/preview rewrite and nginx map `/app/*` → `app/index.html` etc.
 - Set `VITE_PUBLIC_URL` (or `WEB_PUBLIC_URL`) for production builds so canonical/OG/sitemap URLs are absolute.
 - Money mutations (wallet charge/refund, order status transitions) must be atomic conditional updates (`findOneAndUpdate` with a status guard / `$inc` with a balance guard) — never read-modify-write.
 - Ignore rules (`.gitignore`, `.dockerignore`) must be anchored (`/uploads/`, `/apps/api/uploads/`) — an unanchored `uploads/` also hides `src/modules/uploads` and breaks CI and the Docker build while everything still works locally. After touching ignore rules, verify with a clean `git archive HEAD` build.
