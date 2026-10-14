@@ -11,11 +11,13 @@ import type { DocsSpec } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { AttachmentRow, PendingRow } from '../components/Attachments'
 import { MixedColorPanel, PageScopeBlock, RangeListPanel } from '../components/PageScope'
+import { ColorSwatchPicker } from '../components/ColorSwatchPicker'
 import { Screen } from '../components/Screen'
 import { CtaButton, FilePick, InlineStepper, OptionRow, StepCard } from '../components/parts'
 import { useServiceQuote } from '../hooks/queries'
 import { useServiceEditor } from '../hooks/useServiceEditor'
 import { useUploader, useUploadMeta } from '../hooks/useUploader'
+import { spiralFor } from '../lib/printing'
 import { countPages, pageIntervals, type Interval } from '../lib/pages'
 
 const DEFAULT_DOCS: DocsSpec = {
@@ -26,6 +28,7 @@ const DEFAULT_DOCS: DocsSpec = {
   ink: 'bw',
   sides: 'double',
   copies: 1,
+  binding: 'hardcover',
   bindColor: 'maroon',
   stamp: 'gold',
   colorRanges: [{ from: 10, to: 20 }],
@@ -77,15 +80,25 @@ export function DocsScreen() {
   // v3.3 admin-managed bind colours; an unknown/switched-off key falls back to the first (the server does the same).
   const bindColors = catalog.data?.bindColors ?? []
   const bind = bindColors.find((c) => c.key === spec.bindColor) ?? bindColors[0]
+  // v4 spiral thesis binding: needs the admin add-on and a price for this page count; otherwise hardcover.
+  const printing = catalog.data?.printing
+  const spiralOn = !!printing?.addons.docsSpiral
+  const spiralPrice = spiralFor(printing, pagesN)
+  const colors = catalog.data?.colors ?? []
+  const spiralColor = colors.find((c) => c.key === spec.spiralColor) ?? colors[0]
+  const isSpiral = spiralOn && spec.binding === 'spiral'
   const normalized: DocsSpec = {
     ...spec,
+    binding: isSpiral ? 'spiral' : 'hardcover',
+    spiralColor: isSpiral ? spiralColor?.key : undefined,
     pages: filePages,
     from: undefined,
     to: undefined,
     pageRanges: isRange ? pageRanges : undefined,
     pagePages: isRange ? pagePages : undefined,
     copies: Math.max(1, spec.copies),
-    bindColor: bind?.key ?? spec.bindColor,
+    bindColor: isSpiral ? undefined : (bind?.key ?? spec.bindColor),
+    stamp: isSpiral ? undefined : (spec.stamp ?? 'gold'),
   }
   const pageNote = !picked.length
     ? `بازه‌ای انتخاب نشده؛ همه ${fa(filePages)} صفحه چاپ می‌شود.`
@@ -94,7 +107,8 @@ export function DocsScreen() {
       : `مجموع ${fa(pagesN)} صفحه چاپ می‌شود.`
 
   const quote = useServiceQuote({ kind: 'docs', spec: normalized })
-  const price = quote.data?.services[0]?.price
+  const row = quote.data?.services[0]
+  const price = row?.price
 
   const prices = catalog.data?.prices
 
@@ -213,6 +227,28 @@ export function DocsScreen() {
           <ErrorState error={catalog.error} onRetry={() => void catalog.refetch()} />
         ) : (
           <>
+            {spiralOn && (
+              <div className="mb-3.5">
+                <OptionRow label="نوع صحافی">
+                  <Chip size="sm" selected={!isSpiral} onClick={() => patch({ binding: 'hardcover' })}>
+                    گالینگور
+                  </Chip>
+                  <Chip size="sm" selected={isSpiral} disabled={!spiralPrice} onClick={() => patch({ binding: 'spiral' })}>
+                    فنری{spiralPrice ? ` · ${money(spiralPrice.price)}` : ''}
+                  </Chip>
+                </OptionRow>
+                {!spiralPrice && <div className="mt-[7px] text-[11.5px] text-muted-2">برای این تعداد صفحه موجود نیست</div>}
+              </div>
+            )}
+            {isSpiral ? (
+              colors.length > 0 && (
+                <>
+                  <div className="mb-[9px] text-[12.5px] font-bold text-muted-1">رنگ فنری</div>
+                  <ColorSwatchPicker colors={colors} value={spiralColor?.key} onChange={(c) => patch({ spiralColor: c })} unit="برای هر نسخه" />
+                </>
+              )
+            ) : (
+              <>
             <div className="mb-[9px] text-[12.5px] font-bold text-muted-1">رنگ صحافی</div>
             <div className="flex flex-wrap gap-[9px]">
               {bindColors.map((c) => {
@@ -253,6 +289,8 @@ export function DocsScreen() {
               صحافی {bind?.name ?? ''}
               {bind?.extra ? ` (+${money(bind.extra)} هر نسخه)` : ''} با مندرجات {spec.stamp === 'silver' ? 'نقره‌کوب' : 'زرکوب'} روی جلد
             </div>
+              </>
+            )}
           </>
         )}
       </StepCard>
@@ -303,16 +341,18 @@ export function DocsScreen() {
         />
       </StepCard>
 
+      {row?.unavailable && <div className="mt-3.5 rounded-2xl bg-pink-soft px-3.5 py-3 text-[12.5px] font-bold text-pink-ink">{row.unavailable}</div>}
       <TotalsPanel
         className="mt-3.5"
         meta={`${fa(pagesN)} صفحه × ${fa(spec.copies)} سری`}
-        metaEnd={`${INK_LABEL[spec.ink]} · ${spec.sides === 'double' ? 'دورو' : 'یک‌رو'} · صحافی`}
+        metaEnd={`${INK_LABEL[spec.ink]} · ${spec.sides === 'double' ? 'دورو' : 'یک‌رو'} · ${isSpiral ? 'صحافی فنری' : 'صحافی'}`}
         label="هزینه چاپ"
-        amount={price !== undefined ? money(price) : quote.isError ? '—' : '…'}
+        amount={row?.unavailable ? 'ناموجود' : price !== undefined ? money(price) : quote.isError ? '—' : '…'}
       />
       <CtaButton
         tone="cyan"
         className="mt-3"
+        disabled={!row || !!row.unavailable}
         onClick={() => (uploader.busy ? notify('صبر کنید تا بارگذاری فایل تمام شود') : save(normalized))}
       >
         {isEditing ? 'ذخیره تغییرات پایان‌نامه' : 'افزودن پایان‌نامه و صحافی به سفارش'}

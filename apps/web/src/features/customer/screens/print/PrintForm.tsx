@@ -76,7 +76,7 @@ export function PrintForm({ kind }: { kind: Kind }) {
   // First load only: if the selected size/side/paper has no price, move to the first priced combination.
   const autoPicked = useRef(false)
   useEffect(() => {
-    if (!printing || autoPicked.current) return
+    if (!printing || autoPicked.current || isEditing) return
     autoPicked.current = true
     const priced = (size: PrintSize, side: 'single' | 'double', p: string, ct: 'text' | 'full') =>
       catalogUnit(printing, isColor ? colorKey(size, ct, p, side) : bwKey(size, side)) !== undefined

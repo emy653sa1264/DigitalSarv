@@ -118,8 +118,13 @@ function specRows(s: OrderService, n: CatalogNames): Row[] {
       rows.push(['رنگ چاپ', label(INK, d.ink)])
       if (d.ink === 'mixed') rows.push(['صفحه‌های رنگی', colorPages(d)])
       rows.push(['یک‌رو / دورو', label(SIDES, d.sides)])
-      rows.push(['رنگ جلد', n.bindColor(d.bindColor)])
-      rows.push(['چاپ روی جلد', label(STAMP, d.stamp)])
+      if (d.binding === 'spiral') {
+        rows.push(['صحافی', 'فنری'])
+        rows.push(['رنگ فنری', n.color(d.spiralColor)])
+      } else {
+        rows.push(['رنگ جلد', n.bindColor(d.bindColor)])
+        rows.push(['چاپ روی جلد', label(STAMP, d.stamp)])
+      }
       opt(rows, 'عنوان روی جلد', d.coverTitle)
       opt(rows, 'متن پشت جلد', d.coverBack)
       opt(rows, 'نام و نام خانوادگی', d.fullName)

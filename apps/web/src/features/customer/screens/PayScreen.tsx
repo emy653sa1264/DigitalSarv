@@ -13,6 +13,7 @@ import type { PayMethod } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/stores/auth'
 import { isDraftEmpty, selectOrderDraft, useDraft } from '@/stores/draft'
+import { ConfirmDialog } from '../components/ConfirmDialog'
 import { Screen } from '../components/Screen'
 import { CtaButton, QuoteLines } from '../components/parts'
 import { customerKeys, redirectToGateway, useCreateOrder, useDraftQuote } from '../hooks/queries'
@@ -29,6 +30,7 @@ export function PayScreen() {
   const createOrder = useCreateOrder()
   /** True once we're navigating away to the payment gateway. */
   const [leaving, setLeaving] = useState(false)
+  const [priceChange, setPriceChange] = useState<{ previousTotal: number; newTotal: number } | null>(null)
 
   const q = quote.data
   const plan = catalog.data?.plans.find((p) => p.id === (q?.planId ?? draft.planId ?? user?.planId))
@@ -41,7 +43,10 @@ export function PayScreen() {
     { v: 'cod', label: 'پرداخت در محل تحویل', sub: 'کارت‌خوان همراه پیک' },
   ]
 
-  const submit = () => {
+  // The total the customer is looking at; the server rejects with 409 PRICE_CHANGED if it differs at submit time.
+  const shownTotal = quote.data?.total
+
+  const submit = (expectedTotal: number | undefined = shownTotal) => {
     if (empty) return notify('سفارش شما خالی است')
     const p = pickup
     if (!p.address.trim() || !p.phone || !p.date || !p.slot) {
@@ -50,7 +55,7 @@ export function PayScreen() {
       return
     }
     createOrder.mutate(
-      { ...draft, pickup: { ...p, phone: toEnDigits(p.phone) } },
+      { ...draft, pickup: { ...p, phone: toEnDigits(p.phone) }, expectedTotal },
       {
         onSuccess: (order) => {
           // The order exists server-side now; an unfinished gateway payment is retried from /app/pay/return or the orders list.
@@ -64,6 +69,13 @@ export function PayScreen() {
           notify(draft.payMethod === 'cod' ? `سفارش ${fa(order.code)} ثبت شد` : `پرداخت انجام شد — سفارش ${fa(order.code)} ثبت شد`)
         },
         onError: (error) => {
+          // 409 PRICE_CHANGED: nothing was created — keep the draft, refresh the quote and ask the customer to confirm.
+          if (error instanceof ApiError && error.status === 409 && (error.data as { code?: string } | undefined)?.code === 'PRICE_CHANGED') {
+            const d = error.data as { previousTotal: number; newTotal: number }
+            setPriceChange({ previousTotal: d.previousTotal, newTotal: d.newTotal })
+            void queryClient.invalidateQueries({ queryKey: ['quote'] })
+            return
+          }
           // 503 + orderId: the gateway was unreachable but the order was created (pending_payment). Resubmitting
           // the draft would duplicate it — drop the draft and pay from «سفارش‌های من». The Persian message is
           // already toasted by the global mutation error handler.
@@ -162,7 +174,7 @@ export function PayScreen() {
           />
         </>
       )}
-      <CtaButton className="mt-[13px]" disabled={(empty && !leaving) || createOrder.isPending || leaving} onClick={submit}>
+      <CtaButton className="mt-[13px]" disabled={(empty && !leaving) || createOrder.isPending || leaving} onClick={() => submit()}>
         {leaving
           ? 'در حال انتقال به درگاه پرداخت…'
           : createOrder.isPending
@@ -171,6 +183,19 @@ export function PayScreen() {
               ? 'ثبت سفارش'
               : 'پرداخت و ثبت سفارش'}
       </CtaButton>
+      <ConfirmDialog
+        open={priceChange !== null}
+        onOpenChange={(open) => !open && setPriceChange(null)}
+        title="قیمت سفارش تغییر کرده است"
+        description={priceChange ? `قیمت قبلی: ${money(priceChange.previousTotal)} — قیمت جدید: ${money(priceChange.newTotal)}` : ''}
+        confirmLabel="تأیید و پرداخت"
+        cancelLabel="بازگشت"
+        onConfirm={() => {
+          const newTotal = priceChange?.newTotal
+          setPriceChange(null)
+          submit(newTotal)
+        }}
+      />
     </Screen>
   )
 }

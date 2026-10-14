@@ -7,5 +7,5 @@ export function serviceView(service: ServiceDraft, index: number, quote?: Quote)
   const priced = quote?.services.find((s) => s.index === index)
   const meta = SERVICE_META[service.kind]
   const price = !priced ? '…' : priced.price === 0 && service.kind === 'repair' ? 'پس از عیب‌یابی' : money(priced.price)
-  return { meta, label: priced?.label || meta.label, detail: priced?.detail ?? '', price }
+  return { meta, label: priced?.label || meta.label, detail: priced?.detail ?? '', unavailable: priced?.unavailable, price }
 }

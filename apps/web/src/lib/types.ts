@@ -333,6 +333,8 @@ export interface OrderDraft {
   urgent?: boolean
   pickup?: Pickup
   payMethod?: PayMethod
+  /** v4: the total the customer saw; the server answers 409 PRICE_CHANGED when it no longer matches. */
+  expectedTotal?: number
 }
 export interface QuoteLine { key: string; label: string; amount: number; accent?: boolean }
 export interface Quote {

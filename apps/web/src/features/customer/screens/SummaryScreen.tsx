@@ -41,6 +41,7 @@ export function SummaryScreen() {
 
   const empty = isDraftEmpty({ children, services })
   const q = quote.data
+  const hasUnavailable = !!q?.services.some((s) => s.unavailable)
   const campaign = catalog.data?.campaign
   // v3.3 minimum order: the quote says how much is missing; checkout stays blocked until it is 0.
   const shortfall = q?.minOrderShortfall ?? 0
@@ -141,8 +142,16 @@ export function SummaryScreen() {
                       <div className="text-sm font-extrabold">{v.label}</div>
                       <div className="mt-0.5 text-[11.5px] text-muted-2">{v.detail}</div>
                     </div>
-                    <span className="text-[13.5px] font-extrabold whitespace-nowrap">{v.price}</span>
+                    <span className="text-[13.5px] font-extrabold whitespace-nowrap">{v.unavailable ? 'ناموجود' : v.price}</span>
                   </div>
+                  {v.unavailable && (
+                    <div className="mt-2.5 flex items-center justify-between gap-2.5 rounded-2xl bg-pink-soft px-3.5 py-2.5 text-[12.5px] font-bold text-pink-ink">
+                      <span>{v.unavailable}</span>
+                      <button type="button" onClick={() => navigate(`${v.meta.path}?edit=${i}`)} className="shrink-0 cursor-pointer font-extrabold underline underline-offset-4">
+                        ویرایش
+                      </button>
+                    </div>
+                  )}
                   <EditRemoveRow
                     onEdit={() => navigate(`${v.meta.path}?edit=${i}`)}
                     onRemove={() => {
@@ -218,7 +227,10 @@ export function SummaryScreen() {
           حداقل مبلغ سفارش {money(minOrder)} است؛ {money(shortfall)} دیگر اضافه کنید.
         </InfoBanner>
       )}
-      <CtaButton className="mt-[13px]" disabled={empty || shortfall > 0} onClick={() => navigate('/app/pickup')}>
+      {!empty && hasUnavailable && (
+        <div className="mt-3.5 rounded-2xl bg-pink-soft px-3.5 py-3 text-[12.5px] font-bold text-pink-ink">یک یا چند مورد در حال حاضر قابل سفارش نیست</div>
+      )}
+      <CtaButton className="mt-[13px]" disabled={empty || shortfall > 0 || hasUnavailable} onClick={() => navigate('/app/pickup')}>
         تعیین زمان و آدرس تحویل‌گیری
       </CtaButton>
     </Screen>
