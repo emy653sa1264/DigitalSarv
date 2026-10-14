@@ -531,21 +531,31 @@ interface PrintAddons { mixed: boolean; spiral: boolean; glue: boolean; hardcove
   a `double` combo), `paper_cost` (the paper's `paperCost`), `quantity` (sheets of the line), `markup`, `discount`;
   then `rounding` (nearest multiple; 0 = nearest integer). Missing variable, division by zero, non-finite or
   negative → UNAVAILABLE.
-- Two published versions of one combo may not share the same `effectiveFrom` (409).
+- Two published versions of one combo may not share the same `effectiveFrom` when `effectiveFrom` is given
+  explicitly (scheduled) → 409.
+- **Disable.** Disabling an *active* version (including a temporary one) means "stop selling now": the combo is
+  UNAVAILABLE until a new version is published. Disabling a *scheduled* version (`effectiveFrom` in the future)
+  **cancels** it: the server also sets `effectiveUntil = effectiveFrom` (zero-length window, never effective) so the
+  previous price keeps applying at its start time. Admin UI label for that case: «لغو زمان‌بندی».
+- A published create / bulk apply with an explicit `effectiveFrom` more than 60 s in the past → 400
+  «زمان اعمال نمی‌تواند در گذشته باشد». Publishing a draft whose `effectiveUntil` ≤ now → 400 «این پیش‌نویس منقضی شده است».
+- **Courier recount** re-prices only the children; every service line keeps its stored `price`/`label`/`detail`
+  (plan discount, coupon, rules and totals are recomputed from the new children + the frozen services).
 
 | Method | Path | Permission | Notes |
 |---|---|---|---|
-| GET | `/admin/price-book?layer=customer&service=bw\|color\|spiral\|addon` | `customer_price_view` | `MatrixRow[]` `{ comboKey, service, options, label, current: PriceVersion\|null, next: PriceVersion\|null }` — every known combination (sizes × sides; × colour types × colorPrint papers; ranges; add-ons) plus any combo that has versions |
+| GET | `/admin/price-book?layer=customer&service=bw\|color\|spiral\|addon` | `customer_price_view` | `MatrixRow[]` `{ comboKey, service, options, label, current: PriceVersion\|null, next: PriceVersion\|null, hasVersions: boolean }` (`hasVersions=false` → never priced, «بدون قیمت») — every known combination (sizes × sides; × colour types × colorPrint papers; ranges; add-ons) plus any combo that has versions |
 | GET | `/admin/price-book/history?layer=customer&comboKey=` | `customer_price_view` | `PriceVersion[]` newest first |
 | POST | `/admin/price-book/versions` | `customer_price_edit` (+ `customer_price_publish` when `publish`) | body `{ layer, comboKey, mode, price?, formula?, markup?, discount?, rounding?, effectiveFrom?, effectiveUntil?, publish: boolean, reason }` → `PriceVersion` (`effectiveFrom` default now; future = scheduled) |
 | POST | `/admin/price-book/versions/:id/publish` | `customer_price_publish` | `{ reason }`, draft → published |
 | POST | `/admin/price-book/versions/:id/disable` | `customer_price_publish` | `{ reason }` |
 | POST | `/admin/price-book/versions/:id/rollback` | `customer_price_rollback` | `{ reason }` → new published version copying the values, effective now |
 | POST | `/admin/price-book/preview` | `customer_price_view` | `{ comboKey, mode, price?, formula?, markup?, discount?, rounding? }` → `{ unitPrice: number\|null, error?: string }` |
-| POST | `/admin/price-book/bulk/preview` | `customer_price_bulk_update` | `BulkBody` → `{ rows: { comboKey, label, current, next }[], skipped: { comboKey, label, reason }[] }` |
-| POST | `/admin/price-book/bulk/apply` | `customer_price_bulk_update` + `customer_price_publish` | `BulkBody & { reason }` → `{ bulkId, created, skipped }` (recomputed server-side) |
+| POST | `/admin/price-book/bulk/preview` | `customer_price_bulk_update` | `BulkBody` → `{ rows: { comboKey, label, current, next }[], skipped: { comboKey, label, reason }[] }` (advisory) |
+| POST | `/admin/price-book/bulk/apply` | `customer_price_bulk_update` + `customer_price_publish` | `BulkBody & { reason }` → `{ bulkId, created, skipped }` (recomputed server-side from current prices; the preview is advisory) |
 | GET | `/admin/price-book/audit?page=&limit=` | `customer_price_view` | paged `{ id, action, layer, comboKeys, reason, by?: {id,name}, at, before?, after? }` |
-| GET/POST | `/admin/binding-ranges` · PATCH/DELETE `/admin/binding-ranges/:id` | `customer_price_edit` | `{ id, minPages, maxPages, on, sort }`; integers ≥ 1, `min ≤ max`, active ranges may not overlap (400); DELETE → 409 when the range has price versions (disable it instead) |
+| GET | `/admin/binding-ranges` | `customer_price_view` | list of `{ id, minPages, maxPages, on, sort }` |
+| POST · PATCH/DELETE | `/admin/binding-ranges` · `/admin/binding-ranges/:id` | `customer_price_edit` | `{ id, minPages, maxPages, on, sort }`; integers ≥ 1, `min ≤ max`, active ranges may not overlap (400); DELETE → 409 when the range has price versions (disable it instead) |
 
 ```ts
 interface BulkBody {
@@ -572,7 +582,7 @@ permission → 403 «به این بخش دسترسی ندارید».
 ### Papers
 
 `Paper` gains `type: 'plain'|'glossy'|'cardstock'`, `weight: number` (gsm), `paperCost?: number` (toman per sheet,
-used by formulas), `colorPrint: boolean` (offered in چاپ رنگی), `supportedSizes: PrintSize[]`, `supportsSingle`,
+used by formulas), `colorPrint: boolean` (offered in چاپ رنگی), `supportedSizes: PrintSize[]` (at least one), `supportsSingle`,
 `supportsDouble`. `price` keeps its v3 meaning for kind `print` only. Admin body accepts the new fields.
 
 ### Catalog
