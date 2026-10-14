@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { FileText, Palette, Upload } from 'lucide-react'
-import { Chip, DsSwitch, GradientBadge, TotalsPanel } from '@/components/brand'
+import { Chip, DsSwitch, ErrorState, GradientBadge, LoadingBlock, TotalsPanel } from '@/components/brand'
 import { notify } from '@/components/ui/sonner'
 import { Textarea } from '@/components/ui/textarea'
 import { uploadAccept } from '@/lib/api'
@@ -71,6 +71,26 @@ export function PrintForm({ kind }: { kind: Kind }) {
     catalogUnit(printing, isColor ? colorKey(size, ct, p ?? '', side) : bwKey(size, side))
   const paperFits = (p: typeof paper) => !!p && p.supportedSizes.includes(spec.size) && (spec.sides === 'double' ? p.supportsDouble : p.supportsSingle)
   const spiral = spiralFor(printing, pagesN)
+  const ready = !!printing
+
+  // First load only: if the selected size/side/paper has no price, move to the first priced combination.
+  const autoPicked = useRef(false)
+  useEffect(() => {
+    if (!printing || autoPicked.current) return
+    autoPicked.current = true
+    const priced = (size: PrintSize, side: 'single' | 'double', p: string, ct: 'text' | 'full') =>
+      catalogUnit(printing, isColor ? colorKey(size, ct, p, side) : bwKey(size, side)) !== undefined
+    const sides = ['single', 'double'] as const
+    const paperKeys = isColor ? papers.map((p) => p.key) : ['']
+    const cur = paper?.key ?? ''
+    if (priced(spec.size, spec.sides, cur, spec.colorType)) return
+    for (const size of SIZES) for (const side of sides) for (const pk of paperKeys) {
+      if (!priced(size, side, pk, spec.colorType)) continue
+      setSpec((s) => ({ ...s, size, sides: side, ...(isColor ? { paper: pk } : {}) }))
+      return
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [printing])
 
   // Switched-off add-ons are dropped (the server does the same).
   const glueUnit = catalogUnit(printing, addonKey('glue'))
@@ -166,6 +186,18 @@ export function PrintForm({ kind }: { kind: Kind }) {
           onScope={(scope) => patch(scope === 'range' ? { scope, from: spec.from ?? 1, to: spec.to ?? filePages } : { scope })} />
       </StepCard>
 
+      {catalog.isPending ? (
+        <div className="mt-3">
+          <div className="mb-2 text-center text-[12.5px] font-bold text-muted-1">در حال بارگذاری…</div>
+          <LoadingBlock rows={2} />
+        </div>
+      ) : catalog.isError ? (
+        <ErrorState className="mt-3" error={catalog.error} onRetry={() => void catalog.refetch()} />
+      ) : !printing ? (
+        <div className="mt-3.5 rounded-2xl bg-pink-soft px-3.5 py-3 text-[12.5px] font-bold text-pink-ink">قیمت‌های چاپ در دسترس نیست؛ کمی بعد دوباره تلاش کنید.</div>
+      ) : null}
+
+      {ready && (<>
       <StepCard title="۲. اندازه و چند رو">
         <div className="flex flex-col gap-[13px]">
           <OptionRow label="اندازه">
@@ -190,7 +222,7 @@ export function PrintForm({ kind }: { kind: Kind }) {
         <StepCard title="۳. رنگ و کاغذ">
           <OptionRow label="نوع رنگ">
             {(['text', 'full'] as const).map((v) => (
-              <Chip key={v} size="sm" selected={spec.colorType === v} onClick={() => patch({ colorType: v })}>{COLOR_LABEL[v]}</Chip>
+              <Chip key={v} size="sm" selected={spec.colorType === v} disabled={unitOf(spec.size, spec.sides, paper?.key, v) === undefined} onClick={() => patch({ colorType: v })}>{COLOR_LABEL[v]}</Chip>
             ))}
           </OptionRow>
           <span className={cn(subLabel, 'mt-3.5')}>نوع کاغذ</span>
@@ -315,6 +347,8 @@ export function PrintForm({ kind }: { kind: Kind }) {
         </StepCard>
       )}
 
+      </>)}
+
       <StepCard title={`${fa(copiesStep)}. تعداد نسخه`}>
         <InlineStepper tone={tone} value={fa(normalized.copies)} onDecrement={() => patch({ copies: Math.max(1, spec.copies - 1) })} onIncrement={() => patch({ copies: Math.max(1, spec.copies) + 1 })} />
         {!anyAddon && description}
@@ -324,7 +358,7 @@ export function PrintForm({ kind }: { kind: Kind }) {
       <TotalsPanel className="mt-3.5" meta={`${fa(pagesN)} صفحه · ${fa(sheets)} برگ × ${fa(normalized.copies)} نسخه`}
         metaEnd={[spec.size, SIDES_LABEL[spec.sides], isColor ? COLOR_LABEL[spec.colorType] : '', isColor ? paper?.name : ''].filter(Boolean).join(' · ')}
         label={`هزینه ${title}`} amount={row ? (row.unavailable ? 'ناموجود' : money(row.price)) : quote.isError ? '—' : '…'} />
-      <CtaButton tone={tone} className="mt-3" disabled={!!row?.unavailable}
+      <CtaButton tone={tone} className="mt-3" disabled={!row || !!row.unavailable}
         onClick={() => (uploader.busy ? notify('صبر کنید تا بارگذاری فایل تمام شود') : save((isColor ? normalized : bwSpec) as never))}>
         {isEditing ? `ذخیره تغییرات ${title}` : `افزودن ${title} به سفارش`}
       </CtaButton>

@@ -9,6 +9,7 @@ type OrderService = Order['services'][number]
 type Row = [label: string, value: ReactNode]
 
 const INK: Record<string, string> = { bw: 'سیاه‌وسفید', color: 'همه رنگی', mixed: 'ترکیبی' }
+const COLOR_TYPE: Record<string, string> = { text: 'متن رنگی', full: 'تمام‌رنگی' }
 const SIDES: Record<string, string> = { single: 'یک‌رو', double: 'دورو' }
 const BINDING: Record<string, string> = { none: 'بدون صحافی', spiral: 'فنری', glue: 'ته‌چسب', hardcover: 'گالینگور' }
 const LAMINATE: Record<string, string> = { none: 'بدون لمینت', cover: 'فقط جلد', all: 'همه صفحات' }
@@ -77,6 +78,28 @@ function specRows(s: OrderService, n: CatalogNames): Row[] {
       rows.push(['کاغذ', n.paper(p.paper)])
       rows.push(['رنگ چاپ', label(INK, p.ink)])
       if (p.ink === 'mixed') rows.push(['صفحه‌های رنگی', colorPages(p)])
+      rows.push(['یک‌رو / دورو', label(SIDES, p.sides)])
+      rows.push(['صحافی', label(BINDING, p.binding)])
+      if (p.binding === 'spiral') rows.push(['رنگ فنری', n.color(p.spiralColor)])
+      rows.push(['منگنه', p.staple ? 'دارد' : 'ندارد'])
+      rows.push(['لمینت', label(LAMINATE, p.laminate)])
+      rows.push(['خدمات اضافی', n.extras(p.extras)])
+      rows.push(['تعداد نسخه', fa(p.copies)])
+      opt(rows, 'توضیحات', p.desc)
+      break
+    }
+    case 'black_white_printing':
+    case 'color_printing': {
+      const p = s.spec
+      opt(rows, 'فایل', p.fileName)
+      rows.push(['صفحات', `${fa(p.pages)} صفحه · ${p.scope === 'range' ? `صفحه ${fa(p.from ?? 1)} تا ${fa(p.to ?? p.pages)}` : 'همه صفحات'}`])
+      rows.push(['قطع', p.size || 'A4'])
+      if (s.kind === 'color_printing') {
+        const c = s.spec
+        rows.push(['نوع رنگ', label(COLOR_TYPE, c.colorType)])
+        rows.push(['کاغذ', n.paper(c.paper)])
+        if (c.mixed) rows.push(['صفحه‌های رنگی', colorPages(c)])
+      }
       rows.push(['یک‌رو / دورو', label(SIDES, p.sides)])
       rows.push(['صحافی', label(BINDING, p.binding)])
       if (p.binding === 'spiral') rows.push(['رنگ فنری', n.color(p.spiralColor)])
