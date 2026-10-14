@@ -271,3 +271,30 @@ export interface ProviderPricingSnapshot {
   payoutBasis: number | null;
   confirmedMissing: boolean;
 }
+
+// ---------------------------------------------------------------- job → order provider mirror (Q20)
+
+/** What the order's provider-dependent fields are, derived from the job alone. */
+export interface MirrorSource {
+  providerId?: unknown; providerPricing?: unknown; deliveryMethod?: string; pickupAt?: string; providerShop?: unknown;
+}
+
+/**
+ * The COMPLETE order-side state for the job's provider (one function for the normal mirror and the reconcile repair):
+ * held → `centerId`, `providerPricing`, `delivery.method`, `delivery.pickupAt`, `delivery.providerShop` (only while
+ * `pickupAt = provider`); unassigned → those unset (method / pickupAt still follow the job). The rest of `delivery`
+ * (address, pickup point, note, homePickup) is never touched.
+ */
+export function orderProviderFields(job: MirrorSource): { set: Record<string, unknown>; unset: Record<string, 1> } {
+  const set: Record<string, unknown> = {};
+  const unset: Record<string, 1> = {};
+  if (job.providerId) set.centerId = job.providerId;
+  else unset.centerId = 1;
+  if (job.providerId && job.providerPricing) set.providerPricing = job.providerPricing;
+  else unset.providerPricing = 1;
+  if (job.deliveryMethod) set['delivery.method'] = job.deliveryMethod;
+  if (job.pickupAt) set['delivery.pickupAt'] = job.pickupAt;
+  if (job.providerId && job.pickupAt === 'provider' && job.providerShop) set['delivery.providerShop'] = job.providerShop;
+  else unset['delivery.providerShop'] = 1;
+  return { set, unset };
+}

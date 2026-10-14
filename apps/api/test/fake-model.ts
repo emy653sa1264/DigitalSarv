@@ -47,10 +47,25 @@ function matchCond(v: unknown, cond: unknown): boolean {
   });
 }
 
+/** Minimal `$expr`: `{ $gt | $lt | $ne: ['$a', '$b'] }` over two field paths (missing sorts lowest, like BSON). */
+function exprMatches(doc: Doc, expr: Doc): boolean {
+  const [op, args] = Object.entries(expr)[0] as [string, string[]];
+  const val = (a: string) => {
+    const v = norm(get(doc, a.replace(/^\$/, ''))) as number | undefined | null;
+    return v === undefined || v === null ? -Infinity : v;
+  };
+  const [x, y] = [val(args[0]), val(args[1])];
+  if (op === '$gt') return x > y;
+  if (op === '$lt') return x < y;
+  if (op === '$ne') return x !== y;
+  throw new Error(`fake-model: unsupported $expr operator ${op}`);
+}
+
 export function matches(doc: Doc, filter: Doc = {}): boolean {
   return Object.entries(filter).every(([k, cond]) => {
     if (k === '$or') return (cond as Doc[]).some((f) => matches(doc, f));
     if (k === '$and') return (cond as Doc[]).every((f) => matches(doc, f));
+    if (k === '$expr') return exprMatches(doc, cond as Doc);
     return matchCond(get(doc, k), cond);
   });
 }

@@ -25,4 +25,10 @@ describe('fake-model (v4.2 additions)', () => {
     const both = await orders.aggregate([lookup, { $match: { j: { $not: { $size: 0 } } } }]);
     expect(both.map((x) => [x._id, x.j.length])).toEqual([[1, 1], [2, 2]]);
   });
+  it('$expr compares two field paths of the same document (missing sorts lowest)', async () => {
+    const m = fakeModel([{ _id: 1, rev: 2, m: 2 }, { _id: 2, rev: 3, m: 1 }, { _id: 3, rev: 1 }, { _id: 4, rev: 0 }]);
+    expect((await m.find({ $expr: { $gt: ['$rev', '$m'] } })).map((x) => x._id)).toEqual([2, 3, 4]);
+    expect((await m.find({ $expr: { $lt: ['$m', '$rev'] } })).map((x) => x._id)).toEqual([2, 3, 4]);
+    expect((await m.find({ $expr: { $ne: ['$rev', '$m'] } })).map((x) => x._id)).toEqual([2, 3, 4]);
+  });
 });

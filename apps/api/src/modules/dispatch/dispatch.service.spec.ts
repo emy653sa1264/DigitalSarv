@@ -344,9 +344,9 @@ describe('job→order provider mirror is revision-ordered (C1)', () => {
     const s = setup();
     const id = await withJob(s);
     await s.svc.assign(id, { providerId: String(C) } as never, String(ADMIN));
-    const staleRev = s.jobsModel.docs[0].rev;
+    const staleJob = { ...s.jobsModel.docs[0] }; // the job as it was right after the assign
     await s.svc.unassign(id, 'تغییر', String(ADMIN));
-    await s.jobs.mirrorProvider({ orderId: s.order._id, rev: staleRev } as never, { set: { centerId: C } });
+    await s.jobs.mirrorProvider(staleJob as never);
     expect(s.orders.docs[0].centerId).toBeUndefined();
     expect(s.orders.docs[0].providerRev).toBe(s.jobsModel.docs[0].rev);
   });
@@ -372,29 +372,75 @@ describe('job→order provider mirror is revision-ordered (C1)', () => {
     expect(String(s.orders.docs[0].centerId)).toBe(String(C));
     expect(s.orders.docs[0].providerPricing.providerSubtotal).toBe(1_600_000);
   });
-  it('reconcile repairs a stale order from the job', async () => {
+  it('reconcile repairs an order whose mirror failed, with the complete field set', async () => {
     const s = setup();
     s.jobsModel.joins.orders = s.orders;
     s.orders.joins.jobs = s.jobsModel;
     const id = await withJob(s);
+    s.orders.updateOne.mockRejectedValueOnce(new Error('db down'));
     await s.svc.assign(id, { providerId: String(C) } as never, String(ADMIN));
-    delete s.orders.docs[0].centerId;
-    delete s.orders.docs[0].providerPricing;
-    delete s.orders.docs[0].providerRev;
+    expect(s.orders.docs[0].centerId).toBeUndefined(); // the mirror failed
     expect((await s.jobs.reconcile()).mirrored).toBe(1);
     expect(String(s.orders.docs[0].centerId)).toBe(String(C));
     expect(s.orders.docs[0].providerPricing).toEqual(s.jobsModel.docs[0].providerPricing);
+    expect(s.orders.docs[0].providerRev).toBe(s.jobsModel.docs[0].rev);
     expect((await s.jobs.reconcile()).mirrored).toBe(0);
+    s.orders.updateOne.mockRejectedValueOnce(new Error('db down'));
     await s.svc.unassign(id, 'تغییر', String(ADMIN));
-    s.orders.docs[0].centerId = C; // stale again
-    s.orders.docs[0].providerRev = 0;
+    expect(String(s.orders.docs[0].centerId)).toBe(String(C)); // stale again
     expect((await s.jobs.reconcile()).mirrored).toBe(1);
     expect(s.orders.docs[0].centerId).toBeUndefined();
+    expect(s.orders.docs[0].providerPricing).toBeUndefined();
+  });
+  it('reconcile landing between the cas and its mirror leaves the full, correct fields (give-back with a provider shop)', async () => {
+    const s = setup();
+    s.jobsModel.joins.orders = s.orders;
+    s.orders.docs[0].delivery = { method: 'customer_pickup', homePickup: false, note: 'n', pickupAt: 'point', pickupPoint: { id: 'pp1', name: 'دفتر', address: 'ونک', phone: '0', hours: '', kind: 'point' } };
+    const id = await withJob(s);
+    await s.svc.assign(id, { providerId: String(C), pickupAt: 'provider' } as never, String(ADMIN));
+    expect(s.orders.docs[0].delivery.providerShop).toMatchObject({ kind: 'provider', name: 'آزمون C' });
+    const real = s.orders.updateOne.getMockImplementation()!;
+    s.orders.updateOne.mockImplementationOnce((async (...a: unknown[]) => { await s.jobs.reconcile(); return (real as (...x: unknown[]) => unknown)(...a); }) as never);
+    await s.svc.unassign(id, 'تغییر', String(ADMIN));
+    const d = s.orders.docs[0].delivery;
+    expect(s.orders.docs[0].centerId).toBeUndefined();
+    expect(s.orders.docs[0].providerPricing).toBeUndefined();
+    expect(d).toMatchObject({ method: 'customer_pickup', pickupAt: 'point', note: 'n', pickupPoint: { id: 'pp1' } });
+    expect(d.providerShop).toBeUndefined();
+    expect(s.orders.docs[0].providerRev).toBe(s.jobsModel.docs[0].rev);
+  });
+  it('a reassign with pickupAt provider ends with the new provider shop', async () => {
+    const s = setup();
+    s.orders.docs[0].delivery = { method: 'customer_pickup', homePickup: false, note: '', pickupAt: 'point' };
+    s.centers.docs.push({ ...s.centers.docs[2], _id: G, name: 'آزمون G', address: 'تهران، ولیعصر', userId: new Types.ObjectId() });
+    const id = await withJob(s);
+    await s.svc.assign(id, { providerId: String(C), pickupAt: 'provider' } as never, String(ADMIN));
+    await s.svc.reassign(id, { providerId: String(G), pickupAt: 'provider', reason: 'تغییر', confirmMissingPrice: true } as never, String(ADMIN));
+    expect(s.orders.docs[0].delivery.providerShop).toMatchObject({ name: 'آزمون G', address: 'تهران، ولیعصر', kind: 'provider' });
+    expect(s.jobsModel.docs[0].providerShop).toMatchObject({ name: 'آزمون G' });
+  });
+  it('an accept does not bump the revision, so it never makes the order stale', async () => {
+    const s = setup();
+    s.jobsModel.joins.orders = s.orders;
+    const id = await withJob(s);
+    await s.svc.assign(id, { providerId: String(C) } as never, String(ADMIN));
+    const rev = s.jobsModel.docs[0].rev;
+    await s.jobs.move(id, 'accepted', { actor: 'admin', byRole: 'admin', by: String(ADMIN), reason: 'x' });
+    expect(s.jobsModel.docs[0].rev).toBe(rev);
+    expect((await s.jobs.reconcile()).mirrored).toBe(0);
+  });
+  it('update with no actual change writes nothing', async () => {
+    const s = setup();
+    const id = await withJob(s);
+    const n = s.jobsModel.docs[0].history.length;
+    await s.svc.update(id, { priority: 'normal' } as never, String(ADMIN));
+    expect(s.jobsModel.docs[0].history).toHaveLength(n);
   });
   it('cas refuses a path that appears in two operators', async () => {
     const s = setup();
     const job = await s.jobs.byId(await withJob(s));
     await expect(s.jobs.cas(job, 'assigned', { set: { status: 'x' }, history: {} as never })).rejects.toThrow('appears twice');
+    await expect(s.jobs.cas(job, 'assigned', { set: { assignment: {} }, unset: { 'assignment.id': 1 }, history: {} as never })).rejects.toThrow('appears twice');
   });
 });
 

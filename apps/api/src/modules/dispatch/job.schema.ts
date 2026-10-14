@@ -51,6 +51,10 @@ export class Job {
   @Prop({ type: Number, default: 0 }) attempts: number;
   /** Monotonic revision, +1 on every `cas`; orders the job→order provider mirror (`Order.providerRev`). */
   @Prop({ type: Number, default: 0 }) rev: number;
+  /** The `rev` last mirrored onto the order (bookkeeping for reconcile: `rev > mirroredRev` = stale). */
+  @Prop({ type: Number }) mirroredRev?: number;
+  /** The assigned provider's shop when the customer picks up there (`pickupAt = provider`); mirrored as `delivery.providerShop`. */
+  @Prop({ type: MongooseSchema.Types.Mixed }) providerShop?: Record<string, unknown>;
   /** Providers that held the job and lost it (rejected, timed out, taken away) — their «لغوشده» stubs. */
   @Prop({ type: [MongooseSchema.Types.ObjectId], default: [] }) releasedProviderIds: Types.ObjectId[];
   @Prop({ type: MongooseSchema.Types.Mixed }) providerPricing?: ProviderPricingSnapshot;

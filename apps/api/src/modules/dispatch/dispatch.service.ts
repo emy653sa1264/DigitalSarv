@@ -366,17 +366,19 @@ export class DispatchService {
     });
     const updated = await this.jobs.cas(job, 'assigned', {
       extraGuard: prev ? { providerId: prev } : { providerId: { $exists: false } },
+      mirror: true,
       set: {
         providerId: p._id, assignment, providerPricing: snapshot, deliveryMethod: delivery.method,
+        ...(delivery.orderDelivery.providerShop ? { providerShop: delivery.orderDelivery.providerShop } : {}),
         ...(delivery.deliveryProviderId ? { deliveryProviderId: delivery.deliveryProviderId } : {}), ...(delivery.pickupAt ? { pickupAt: delivery.pickupAt } : {}),
       },
-      ...(delivery.deliveryProviderId ? {} : { unset: { deliveryProviderId: 1 } }),
+      unset: { ...(delivery.deliveryProviderId ? {} : { deliveryProviderId: 1 }), ...(delivery.orderDelivery.providerShop ? {} : { providerShop: 1 }) },
       ...(prev ? { addToSet: { releasedProviderIds: prev } } : {}),
       inc: { attempts: 1 }, push: { pricingHistory: snapshot }, history,
     });
     if (!updated) throw raced();
     // the order follows the job, ordered by the job's revision (a late write never replaces a newer provider's fields)
-    await this.jobs.mirrorProvider(updated, { set: { centerId: p._id, providerPricing: snapshot, delivery: delivery.orderDelivery } });
+    await this.jobs.mirrorProvider(updated);
     if (prev) await this.notifier.provider('job_withdrawn', prev, updated);
     if (oldDp && String(oldDp) !== String(prev) && String(oldDp) !== String(delivery.deliveryProviderId)) await this.notifier.provider('job_withdrawn', oldDp, updated);
     await this.notifier.provider('job_assigned', p._id, updated);
@@ -405,14 +407,15 @@ export class DispatchService {
       : undefined;
     const oldDp = job.deliveryProviderId;
     const updated = await this.jobs.cas(job, job.status, {
-      set: { deliveryMethod: d.method, ...(d.pickupAt ? { pickupAt: d.pickupAt } : {}), ...(d.deliveryProviderId ? { deliveryProviderId: d.deliveryProviderId } : {}), ...(pricing ? { providerPricing: pricing } : {}) },
-      ...(d.deliveryProviderId ? {} : { unset: { deliveryProviderId: 1 } }),
+      mirror: true,
+      set: { deliveryMethod: d.method, ...(d.orderDelivery.providerShop ? { providerShop: d.orderDelivery.providerShop } : {}), ...(d.pickupAt ? { pickupAt: d.pickupAt } : {}), ...(d.deliveryProviderId ? { deliveryProviderId: d.deliveryProviderId } : {}), ...(pricing ? { providerPricing: pricing } : {}) },
+      unset: { ...(d.deliveryProviderId ? {} : { deliveryProviderId: 1 }), ...(d.orderDelivery.providerShop ? {} : { providerShop: 1 }) },
       ...(pricing ? { push: { pricingHistory: pricing } } : {}),
       // a migrated job has no snapshot: the separate delivery fee is recorded only here (for M4)
       history: this.jobs.entry({ providerId: job.providerId, deliveryProviderId: d.deliveryProviderId }, 'delivery_changed', job.status, { byRole: 'admin', by, reason: dto.reason }, now, !pricing && d.deliveryProviderId ? { deliveryFee: d.fee } : {}),
     });
     if (!updated) throw raced();
-    await this.jobs.mirrorProvider(updated, { set: { delivery: d.orderDelivery, ...(pricing ? { providerPricing: pricing } : {}) } });
+    await this.jobs.mirrorProvider(updated);
     if (job.providerId) await this.notifier.provider('job_changed', job.providerId, updated);
     if (oldDp && String(oldDp) !== String(job.providerId) && String(oldDp) !== String(d.deliveryProviderId)) await this.notifier.provider('job_withdrawn', oldDp, updated);
     if (d.deliveryProviderId && String(d.deliveryProviderId) !== String(job.providerId) && String(d.deliveryProviderId) !== String(oldDp)) await this.notifier.provider('job_delivery_assigned', d.deliveryProviderId, updated);
@@ -424,11 +427,11 @@ export class DispatchService {
     if (!LIVE.includes(job.status)) throw new BadRequestException('این سفارش لغو یا تحویل شده است');
     const deadline = dto.deadline ? new Date(dto.deadline) : undefined;
     if (deadline && (Number.isNaN(deadline.getTime()) || deadline.getTime() <= Date.now())) throw new BadRequestException('مهلت باید در آینده باشد');
-    if (!dto.priority && !deadline) return this.result(job._id, by);
     const changes = {
       ...(dto.priority && dto.priority !== job.priority ? { priority: [job.priority, dto.priority] as [string, string] } : {}),
-      ...(deadline ? { deadline: [new Date(job.deadline).toISOString(), deadline.toISOString()] as [string, string] } : {}),
+      ...(deadline && deadline.getTime() !== new Date(job.deadline).getTime() ? { deadline: [new Date(job.deadline).toISOString(), deadline.toISOString()] as [string, string] } : {}),
     };
+    if (!changes.priority && !changes.deadline) return this.result(job._id, by); // nothing changed: no write
     const updated = await this.jobs.cas(job, job.status, {
       set: { ...(dto.priority ? { priority: dto.priority } : {}), ...(deadline ? { deadline } : {}) },
       ...(deadline ? { unset: { deadlineNotifiedAt: 1, lateAlertedAt: 1 } } : {}),

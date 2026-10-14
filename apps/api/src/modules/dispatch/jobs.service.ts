@@ -10,8 +10,8 @@ import { needsQcGuard, qcComplete, qcLabelsOf, timelineEntry, type CustomerFulfi
 import { Order, type OrderDelivery, type OrderDocument } from '../orders/order.schema.js';
 import { DispatchNotifier } from './dispatch-notifier.js';
 import {
-  DELIVERY_VISIBLE, HELD, LIVE, ORDER_MIRROR, canMove, cancelStage, customerFulfillmentLabel, mirrorSources, productionBlocked,
-  type Actor, type ByRole, type FlowCtx, type JobAction, type JobHistoryEntry,
+  DELIVERY_VISIBLE, HELD, LIVE, ORDER_MIRROR, canMove, orderProviderFields, cancelStage, customerFulfillmentLabel, mirrorSources, productionBlocked,
+  type Actor, type ByRole, type FlowCtx, type JobAction, type JobHistoryEntry, type MirrorSource,
 } from './job-model.js';
 import { Job, JobDocument } from './job.schema.js';
 import { jobSeed, orderNeedsJob, type JobSource } from './job-seed.js';
@@ -21,7 +21,9 @@ export interface GiveBackOptions { byRole: ByRole; by?: string; reason?: string;
 /** What `cas` needs: who acts (selects the holder guard), extra guards, the field changes and the history entry. */
 export interface CasSpec {
   actor?: Actor; extraGuard?: Record<string, unknown>; set?: Record<string, unknown>; unset?: Record<string, 1>;
-  addToSet?: Record<string, unknown>; inc?: Record<string, number>; push?: Record<string, unknown>; history: JobHistoryEntry;
+  addToSet?: Record<string, unknown>; inc?: Record<string, number>;
+  /** Provider fields change (assignment, delivery, give-back): bump `rev` so the order mirror is ordered. Other moves never do. */
+  mirror?: boolean; push?: Record<string, unknown>; history: JobHistoryEntry;
 }
 type GiveBackKind = 'rejected' | 'timeout' | 'failed' | 'unassigned';
 
@@ -155,10 +157,11 @@ export class JobsService {
     };
     const paths = [
       'status', ...Object.keys(spec.set ?? {}), ...Object.keys(spec.unset ?? {}), ...Object.keys(spec.addToSet ?? {}),
-      'rev', ...Object.keys(spec.inc ?? {}), 'history', ...Object.keys(spec.push ?? {}),
+      ...(spec.mirror ? ['rev'] : []), ...Object.keys(spec.inc ?? {}), 'history', ...Object.keys(spec.push ?? {}),
     ];
-    // dev assertion: one path in two operators (or twice in one) is a Mongo conflict error at best, a silent drop at worst
-    const dup = paths.find((x, i) => paths.indexOf(x) !== i);
+    // dev assertion: one path in two operators (or twice, or as parent and child: `a` vs `a.b`) is a Mongo conflict error
+    // at best, a silent drop at worst
+    const dup = paths.find((x, i) => paths.some((y, j) => i !== j && (x === y || x.startsWith(`${y}.`) || y.startsWith(`${x}.`))));
     if (dup) throw new Error(`cas: path "${dup}" appears twice in the update`);
     return this.jobs.findOneAndUpdate(
       filter,
@@ -166,7 +169,7 @@ export class JobsService {
         $set: { status: to, ...spec.set },
         ...(spec.unset ? { $unset: spec.unset } : {}),
         ...(spec.addToSet ? { $addToSet: spec.addToSet } : {}),
-        $inc: { ...spec.inc, rev: 1 },
+        ...(spec.mirror || spec.inc ? { $inc: { ...spec.inc, ...(spec.mirror ? { rev: 1 } : {}) } } : {}),
         $push: { ...spec.push, history: spec.history },
       },
       { returnDocument: 'after' },
@@ -174,19 +177,22 @@ export class JobsService {
   }
 
   /**
-   * THE job→order provider mirror (the job is the source of truth). Revision-ordered: it only lands when the order's
-   * `providerRev` is missing or older than the job's `rev` (`repair` also accepts an equal one), so a late write can
-   * never replace a newer provider's fields. Covers `centerId`, `providerPricing` and the provider-dependent parts of
-   * `delivery`. Never throws — the job is already written; reconcile repairs a missed mirror.
+   * THE job→order provider mirror (the job is the source of truth). Writes the complete field set derived from the job
+   * (`orderProviderFields`), ordered by revision: it lands when the order's `providerRev` is missing or not newer than
+   * the job's `rev` (an equal one is the same state: idempotent), so a late write never replaces a newer provider's
+   * fields. Then records `mirroredRev` on the job. Never throws — the job is already written; reconcile repairs it.
    */
-  async mirrorProvider(job: Pick<JobDocument, 'orderId' | 'rev'>, fields: { set?: Record<string, unknown>; unset?: Record<string, 1> }, repair = false): Promise<void> {
+  async mirrorProvider(job: MirrorSource & { _id: unknown; orderId: unknown; rev?: number }): Promise<void> {
     try {
       const rev = job.rev ?? 0;
+      const f = orderProviderFields(job);
       const res = await this.orders.updateOne(
-        { _id: job.orderId, $or: [{ providerRev: { $exists: false } }, { providerRev: repair ? { $lte: rev } : { $lt: rev } }] },
-        { $set: { ...fields.set, providerRev: rev }, ...(fields.unset && Object.keys(fields.unset).length ? { $unset: fields.unset } : {}), $inc: { __v: 1 } },
+        { _id: job.orderId, $or: [{ providerRev: { $exists: false } }, { providerRev: { $lte: rev } }] },
+        { $set: { ...f.set, providerRev: rev }, $unset: f.unset, $inc: { __v: 1 } },
       );
       if (!res.matchedCount) this.logger.debug(`order ${String(job.orderId)}: mirror rev ${rev} skipped (a newer revision landed)`);
+      // bookkeeping only (the mirror is satisfied either way): not a status change, so it does not go through `cas`
+      await this.jobs.updateOne({ _id: job._id, $or: [{ mirroredRev: { $exists: false } }, { mirroredRev: { $lt: rev } }] }, { $set: { mirroredRev: rev } });
     } catch (err) {
       this.logger.error(`order ${String(job.orderId)}: provider mirror failed (reconcile repairs): ${(err as Error).message}`);
     }
@@ -277,15 +283,13 @@ export class JobsService {
       actor: o.byRole === 'provider' ? 'production' : undefined,
       extraGuard: { providerId },
       set: reset,
-      unset: { providerId: 1, assignment: 1, deliveryProviderId: 1, providerPricing: 1 },
+      unset: { providerId: 1, assignment: 1, deliveryProviderId: 1, providerPricing: 1, providerShop: 1 },
       addToSet: { releasedProviderIds: providerId },
+      mirror: true,
       history: this.entry(job, kind, status, o, now, { stage: cancelStage(job.status) }),
     });
     if (!updated) throw raced();
-    await this.mirrorProvider(updated, {
-      set: { ...(reset.deliveryMethod ? { 'delivery.method': 'courier' } : {}), ...(reset.pickupAt ? { 'delivery.pickupAt': 'point' } : {}) },
-      unset: { centerId: 1, providerPricing: 1, ...(reset.pickupAt ? { 'delivery.providerShop': 1 } : {}) },
-    });
+    await this.mirrorProvider(updated);
     if (kind === 'timeout' || kind === 'unassigned') await this.notifier.provider('job_withdrawn', providerId, updated);
     if (job.deliveryProviderId && String(job.deliveryProviderId) !== String(providerId)) await this.notifier.provider('job_withdrawn', job.deliveryProviderId, updated);
     if (kind === 'rejected') await this.notifier.admins('job_rejected', updated);
@@ -368,34 +372,23 @@ export class JobsService {
   }
 
   /**
-   * Re-mirrors the provider from the job (the source of truth) onto orders whose mirror is missing, older than the job's
-   * revision, or names another provider. Pages over the jobs that were ever written (`rev > 0`) by `_id` — the
-   * comparison needs both documents, so it happens here — bounded to 10 pages per run. Never throws.
+   * Re-mirrors the provider from the job (the source of truth) onto the orders of jobs whose `rev` is ahead of the
+   * `mirroredRev` bookkeeping. The stale rows are chosen in the database (`$expr`) before `$limit`, so healthy rows
+   * never hide them; each repair writes the complete field set and clears the row from the next scan.
+   * Pages by `_id`, bounded to 10 pages per run. Never throws.
    */
   private async reconcileMirror(limit: number): Promise<number> {
     let fixed = 0;
     try {
       let after: Types.ObjectId | undefined;
       for (let page = 0; page < 10; page++) {
-        const rows = await this.jobs.aggregate<Job & { _id: Types.ObjectId; o: { providerRev?: number; centerId?: Types.ObjectId }[] }>([
-          { $match: { status: { $in: LIVE }, rev: { $gt: 0 }, ...(after ? { _id: { $gt: after } } : {}) } },
+        const rows = await this.jobs.aggregate<JobDocument & MirrorSource & { _id: Types.ObjectId }>([
+          { $match: { status: { $in: LIVE }, rev: { $gt: 0 }, $expr: { $gt: ['$rev', '$mirroredRev'] }, ...(after ? { _id: { $gt: after } } : {}) } },
           { $sort: { _id: 1 } },
           { $limit: limit },
-          { $lookup: { from: 'orders', localField: 'orderId', foreignField: '_id', as: 'o' } },
         ]);
         for (const j of rows) {
-          const o = j.o[0];
-          if (!o) continue;
-          const stale = o.providerRev === undefined || o.providerRev === null || o.providerRev < j.rev || String(o.centerId ?? '') !== String(j.providerId ?? '');
-          if (!stale) continue;
-          if (j.providerId) {
-            await this.mirrorProvider(j, {
-              set: { centerId: j.providerId, 'delivery.method': j.deliveryMethod, ...(j.pickupAt ? { 'delivery.pickupAt': j.pickupAt } : {}), ...(j.providerPricing ? { providerPricing: j.providerPricing } : {}) },
-              unset: j.providerPricing ? {} : { providerPricing: 1 },
-            }, true);
-          } else {
-            await this.mirrorProvider(j, { unset: { centerId: 1, providerPricing: 1 } }, true);
-          }
+          await this.mirrorProvider(j);
           fixed++;
         }
         if (rows.length < limit) break;
