@@ -1,8 +1,10 @@
 import { Chip } from '@/components/brand'
 import { notify, toast } from '@/components/ui/sonner'
 import { fa, money } from '@/lib/format'
-import type { Extra } from '@/lib/types'
+import { useState } from 'react'
+import type { Extra, Paper, PrintSize } from '@/lib/types'
 import {
+  type PaperBody,
   useBindColorMutations,
   useBindColors,
   useColorMutations,
@@ -15,6 +17,7 @@ import {
   usePapers,
 } from '../api'
 import { CatalogCard, type CatalogItem } from '../components/CatalogCard'
+import { AdminSelect, NumInput } from '../components/controls'
 import { PageHeader } from '../components/kit'
 
 const bySort = <T extends { sort: number }>(a: T, b: T) => (a.sort ?? 0) - (b.sort ?? 0)
@@ -154,10 +157,11 @@ function ExtrasCard() {
 function PapersCard() {
   const query = usePapers()
   const m = usePaperMutations()
+  const byId = new Map((query.data ?? []).map((p) => [p.id, p]))
   const items: CatalogItem[] = [...(query.data ?? [])].sort(bySort).map((p) => ({ id: p.id, name: p.name, num: p.price, on: p.on }))
   return (
     <CatalogCard
-      title="نوع کاغذ — چاپ اسناد"
+      title="نوع کاغذ"
       addLabel="افزودن کاغذ"
       addTone="cyan"
       namePlaceholder="نام کاغذ"
@@ -165,6 +169,10 @@ function PapersCard() {
       cell={(i) => `${money(i.num)} هر برگ`}
       note="اولین کاغذ روشن، کاغذ پیش‌فرض چاپ اسناد است. کاغذهای خاموش‌شده در فرم نمایش داده نمی‌شوند. قیمت برای هر برگ A4 است؛ A5 و A3 با ضریب «قیمت‌ها» حساب می‌شوند."
       newItem={{ name: 'کاغذ جدید', num: 250 }}
+      rowExtra={(item) => {
+        const paper = byId.get(item.id)
+        return paper ? <PaperFields paper={paper} /> : null
+      }}
       messages={{
         allOn: 'همه کاغذها روشن شد',
         allOff: 'همه کاغذها خاموش شد',
@@ -177,7 +185,10 @@ function PapersCard() {
       onSave={(d, done) =>
         d.id
           ? m.update.mutate({ id: d.id, name: d.name, price: Math.max(0, d.num) }, { onSuccess: done })
-          : m.create.mutate({ name: d.name, price: Math.max(0, d.num), on: true }, { onSuccess: done })
+          : m.create.mutate(
+              { name: d.name, price: Math.max(0, d.num), on: true, type: 'plain', weight: 80, colorPrint: false, supportedSizes: ['A4'], supportsSingle: true, supportsDouble: true },
+              { onSuccess: done },
+            )
       }
       onToggle={(i, on, done) => m.update.mutate({ id: i.id, on }, { onSuccess: done })}
       onToggleAll={(on, done) => m.toggleAll.mutate(on, { onSuccess: done })}
@@ -185,6 +196,64 @@ function PapersCard() {
       onReorder={(ids, done) => m.reorder.mutate(ids, { onSuccess: done })}
       reorderBusy={m.reorder.isPending}
     />
+  )
+}
+
+const PAPER_TYPES = [
+  { value: 'plain', label: 'تحریر' },
+  { value: 'glossy', label: 'گلاسه' },
+  { value: 'cardstock', label: 'مقوا' },
+]
+const PAPER_SIZES: PrintSize[] = ['A3', 'A4', 'A5', 'A6']
+
+/** v4 per-paper fields under a paper row; every control saves immediately (numbers on blur). */
+function PaperFields({ paper }: { paper: Paper }) {
+  const m = usePaperMutations()
+  const [weight, setWeight] = useState(paper.weight)
+  const [cost, setCost] = useState(paper.paperCost ?? 0)
+  const saved = () => notify('تغییرات ذخیره شد')
+  const patch = (body: Partial<PaperBody>) =>
+    m.update.mutate({ id: paper.id, ...body }, { onSuccess: saved })
+  const toggleSize = (s: PrintSize) => {
+    const next = paper.supportedSizes.includes(s) ? paper.supportedSizes.filter((x) => x !== s) : PAPER_SIZES.filter((x) => x === s || paper.supportedSizes.includes(x))
+    if (!next.length) {
+      toast.error('دست‌کم یک قطع لازم است')
+      return
+    }
+    patch({ supportedSizes: next })
+  }
+  const busy = m.update.isPending
+  return (
+    <div className="grid w-full gap-2.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <AdminSelect value={paper.type} onValueChange={(v) => patch({ type: v as Paper['type'] })} options={PAPER_TYPES} ariaLabel="نوع کاغذ" className="h-9 w-[110px] data-[size=default]:h-9" />
+        <label className="flex items-center gap-1.5 text-[12px] font-bold text-muted-1">
+          گرماژ
+          <NumInput aria-label="گرماژ" value={weight} onValueChange={setWeight} onBlur={() => weight !== paper.weight && patch({ weight })} className="w-[76px] py-1.5" />
+        </label>
+        <label className="flex items-center gap-1.5 text-[12px] font-bold text-muted-1">
+          هزینه کاغذ (تومان، اختیاری)
+          <NumInput aria-label="هزینه کاغذ" value={cost} onValueChange={setCost} onBlur={() => cost !== (paper.paperCost ?? 0) && patch({ paperCost: cost > 0 ? cost : null })} className="w-[96px] py-1.5" />
+        </label>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
+        <Chip size="sm" selected={paper.colorPrint} disabled={busy} onClick={() => patch({ colorPrint: !paper.colorPrint })} className="px-3 py-1.5 text-[12px]">
+          در چاپ رنگی
+        </Chip>
+        <Chip size="sm" selected={paper.supportsSingle} disabled={busy} onClick={() => patch({ supportsSingle: !paper.supportsSingle })} className="px-3 py-1.5 text-[12px]">
+          یک‌رو
+        </Chip>
+        <Chip size="sm" selected={paper.supportsDouble} disabled={busy} onClick={() => patch({ supportsDouble: !paper.supportsDouble })} className="px-3 py-1.5 text-[12px]">
+          دورو
+        </Chip>
+        <span className="mx-1 h-4 w-px bg-line" />
+        {PAPER_SIZES.map((s) => (
+          <Chip key={s} size="sm" selected={paper.supportedSizes.includes(s)} disabled={busy} onClick={() => toggleSize(s)} className="px-3 py-1.5 text-[12px]">
+            {s}
+          </Chip>
+        ))}
+      </div>
+    </div>
   )
 }
 

@@ -13,6 +13,7 @@ import { NotificationsPage } from './pages/NotificationsPage'
 import { OrdersPage } from './pages/OrdersPage'
 import { PlansPage } from './pages/PlansPage'
 import { PricesPage } from './pages/PricesPage'
+import { PricingCenterPage } from './pages/pricing/PricingCenterPage'
 import { ProductionPage } from './pages/ProductionPage'
 import { RulesPage } from './pages/RulesPage'
 import { SettingsPage } from './pages/SettingsPage'
@@ -31,6 +32,7 @@ export const adminRoutes: RouteObject[] = [
           { path: 'production', element: <ProductionPage /> },
           { path: 'services', element: <CatalogPage /> },
           { path: 'prices', element: <PricesPage /> },
+          { path: 'pricing', element: <PricingCenterPage /> },
           { path: 'plans', element: <PlansPage /> },
           { path: 'settings', element: <SettingsPage /> },
           { path: 'rules', element: <RulesPage /> },

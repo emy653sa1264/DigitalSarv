@@ -142,7 +142,7 @@ export interface Campaign {
   services: CampaignService[]
   stats: { orders: number; books: number; avgOrder: number }
 }
-export type CampaignService = 'school' | 'print' | 'docs' | 'flyer' | 'cart' | 'repair'
+export type CampaignService = 'school' | 'print' | 'black_white_printing' | 'color_printing' | 'docs' | 'flyer' | 'cart' | 'repair'
 export interface Catalog {
   colors: Color[]
   extras: Extra[]
@@ -618,4 +618,63 @@ export interface AdminSettings {
   courier: CourierPaySettings
   checklists: ChecklistSettings
   printAddons: PrintAddons
+}
+
+// ── Admin price book (contract v4.0) ───────────────────────────────────────
+export type PriceStatus = 'draft' | 'pending_approval' | 'rejected' | 'disabled' | 'scheduled' | 'active' | 'expired'
+export type PriceRounding = 0 | 100 | 500 | 1000
+export interface PriceVersionView {
+  id: string
+  layer: 'customer' | 'provider'
+  providerId: string | null
+  comboKey: string
+  version: number
+  mode: 'manual' | 'fixed_markup' | 'percent_markup' | 'formula'
+  price?: number
+  formula?: string
+  markup?: number
+  discount?: number
+  rounding: PriceRounding
+  effectiveFrom: string
+  effectiveUntil?: string
+  state: 'draft' | 'pending_approval' | 'published' | 'rejected' | 'disabled'
+  reason: string
+  createdBy?: { id: string; name: string }
+  createdAt: string
+  status: PriceStatus
+  /** Evaluated at quantity 1; null = cannot be evaluated. */
+  unitPrice: number | null
+}
+export interface MatrixRow {
+  comboKey: string
+  service: 'bw' | 'color' | 'spiral' | 'addon'
+  options: Record<string, string | number | undefined>
+  label: string
+  current: PriceVersionView | null
+  next: PriceVersionView | null
+}
+export type BulkOp = 'inc_pct' | 'dec_pct' | 'inc_fixed' | 'dec_fixed' | 'replace'
+export interface BulkBody {
+  layer: 'customer'
+  filter: { service?: MatrixRow['service']; size?: PrintSize; colorType?: ColorType; paper?: string; side?: 'single' | 'double'; comboKeys?: string[] }
+  op: BulkOp
+  value: number
+  rounding?: PriceRounding
+  effectiveFrom?: string
+}
+export interface BulkPreview {
+  rows: { comboKey: string; label: string; current: number | null; next: number | null }[]
+  skipped: { comboKey: string; label: string; reason: string }[]
+}
+export interface BindingRange { id: string; minPages: number; maxPages: number; on: boolean; sort: number }
+export interface PriceAuditEntry {
+  id: string
+  action: 'create' | 'publish' | 'schedule' | 'disable' | 'rollback' | 'bulk' | 'approve' | 'reject' | 'range'
+  layer: string
+  comboKeys: string[]
+  reason: string
+  by?: { id: string; name: string }
+  at: string
+  before?: unknown
+  after?: unknown
 }

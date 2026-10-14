@@ -20,6 +20,8 @@ import type {
   Paged,
   Paper,
   Plan,
+  PrintAddons,
+  PrintSize,
   PlanPatch,
   PricingRule,
   ProductionBoard,
@@ -75,7 +77,18 @@ export type BindColorBody = ColorBody
 export interface ExtraBody { label: string; price: number; on?: boolean; services?: Extra['services']; needsText?: boolean }
 export interface GradeBody { name: string; books: number; on?: boolean }
 /** `price` = toman per A4 sheet (v3). */
-export interface PaperBody { name: string; price: number; on?: boolean }
+export interface PaperBody {
+  name: string
+  price: number
+  on?: boolean
+  type?: Paper['type']
+  weight?: number
+  paperCost?: number | null
+  colorPrint?: boolean
+  supportedSizes?: PrintSize[]
+  supportsSingle?: boolean
+  supportsDouble?: boolean
+}
 export type RuleBody = Omit<PricingRule, 'id' | 'usedCount' | 'order'> & { order?: number }
 export type CampaignBody = Omit<Campaign, 'id' | 'stats'>
 /** `zoneId: null` clears the zone (PATCH only). */
@@ -86,7 +99,7 @@ export interface CmsBody { label?: string; on?: boolean; order?: number }
 export interface NotificationBody { text?: string; on?: boolean }
 /** v3.3 `POST /admin/notifications` (409 when the event already has a template). */
 export interface NotificationCreateBody { event: OrderStatus; text: string; on?: boolean }
-export interface SettingsPatch { ops?: Partial<AdminSettings['ops']>; courier?: Partial<AdminSettings['courier']>; checklists?: Partial<AdminSettings['checklists']> }
+export interface SettingsPatch { ops?: Partial<AdminSettings['ops']>; courier?: Partial<AdminSettings['courier']>; checklists?: Partial<AdminSettings['checklists']>; printAddons?: Partial<PrintAddons> }
 
 // ── Generic list + CRUD ────────────────────────────────────────────────────
 function useList<T>(key: QueryKey, path: string) {

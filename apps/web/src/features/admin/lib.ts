@@ -91,10 +91,12 @@ export const SERVICE_LABEL: Record<ServiceKind, string> = {
 }
 
 /** «سرویس‌های مشمول» options of a campaign (design `campFields`). */
-export const CAMPAIGN_SERVICES: CampaignService[] = ['school', 'print', 'docs', 'flyer', 'cart', 'repair']
+export const CAMPAIGN_SERVICES: CampaignService[] = ['school', 'print', 'black_white_printing', 'color_printing', 'docs', 'flyer', 'cart', 'repair']
 export const CAMPAIGN_SERVICE_LABEL: Record<CampaignService, string> = {
   school: 'فنری کتاب',
   print: 'چاپ اسناد',
+  black_white_printing: 'چاپ سیاه‌وسفید',
+  color_printing: 'چاپ رنگی',
   docs: 'پایان‌نامه و صحافی',
   flyer: 'تراکت',
   cart: 'شارژ کارتریج',

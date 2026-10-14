@@ -9,8 +9,8 @@ import { useAdminPrices, useCampaignMutations, type CampaignBody } from '../api'
 import { Field, FormDialog } from '../components/FormDialog'
 import { CAMPAIGN_SERVICE_LABEL, CAMPAIGN_SERVICES } from '../lib'
 
-/** Contract `DEFAULT_CAMPAIGN_SERVICES` (v3): «فنری کتاب، چاپ اسناد، پایان‌نامه و صحافی». */
-const DEFAULT_SERVICES: CampaignService[] = ['school', 'print', 'docs']
+/** New campaigns cover the v4 print services; the legacy «چاپ اسناد» chip only shows for campaigns that already have it. */
+const DEFAULT_SERVICES: CampaignService[] = ['school', 'black_white_printing', 'color_printing', 'docs']
 
 interface Form {
   title: string
@@ -151,7 +151,7 @@ function CampaignForm({ open, onOpenChange, campaign }: { open: boolean; onOpenC
       </div>
       <Field label="سرویس‌های مشمول" hint="تخفیف کوپن فقط روی جمع همین سرویس‌ها اعمال می‌شود.">
         <div className="flex flex-wrap gap-2" role="group" aria-label="سرویس‌های مشمول">
-          {CAMPAIGN_SERVICES.map((s) => (
+          {CAMPAIGN_SERVICES.filter((s) => s !== 'print' || campaign?.services?.includes('print')).map((s) => (
             <Chip key={s} size="sm" selected={form.services.includes(s)} onClick={() => toggleService(s)}>
               {CAMPAIGN_SERVICE_LABEL[s]}
             </Chip>

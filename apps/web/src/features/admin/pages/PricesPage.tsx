@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
-import { BadgePercent, BookOpen, GraduationCap, Newspaper, Printer, Truck, type LucideIcon } from 'lucide-react'
+import { BadgePercent, BookOpen, GraduationCap, Newspaper, Truck, type LucideIcon } from 'lucide-react'
+import { Link } from 'react-router'
 import { DsSwitch, GradientBadge, TONES, type BrandTone } from '@/components/brand'
 import { notify } from '@/components/ui/sonner'
 import { fa } from '@/lib/format'
 import type { AdminPrices, Prices } from '@/lib/types'
 import { useAdminPrices, usePriceMutations } from '../api'
 import { NumInput } from '../components/controls'
-import { PageHeader, QueryView } from '../components/kit'
+import { CardNote, PageHeader, QueryView } from '../components/kit'
 import { SaveChip, type SaveState } from '../components/SaveChip'
 
 type PriceKey = keyof Prices
@@ -37,25 +38,6 @@ const GROUPS: Group[] = [
     items: [
       { k: 'bindPerBook', label: 'فنری هر کتاب', unit: 'تومان' },
       { k: 'linedSheet', label: 'هر برگ کاغذ خط‌دار', unit: 'تومان' },
-    ],
-  },
-  {
-    id: 'print',
-    title: 'چاپ اسناد',
-    tone: 'cyan',
-    icon: Printer,
-    items: [
-      { k: 'printBw', label: 'هر صفحه سیاه‌وسفید (A4)', unit: 'تومان' },
-      { k: 'printColor', label: 'هر صفحه رنگی (A4)', unit: 'تومان' },
-      { k: 'printDoubleDiscount', label: 'تخفیف چاپ دورو', unit: 'درصد' },
-      { k: 'printA5Pct', label: 'ضریب A5', unit: 'درصد قیمت A4' },
-      { k: 'printA3Pct', label: 'ضریب A3', unit: 'درصد قیمت A4' },
-      { k: 'printBindSpiral', label: 'صحافی فنری (هر نسخه)', unit: 'تومان' },
-      { k: 'printBindGlue', label: 'صحافی ته‌چسب (هر نسخه)', unit: 'تومان' },
-      { k: 'printBindHard', label: 'صحافی گالینگور (هر نسخه)', unit: 'تومان' },
-      { k: 'printStaple', label: 'منگنه (هر نسخه)', unit: 'تومان' },
-      { k: 'printLamCover', label: 'لمینت جلد (هر نسخه)', unit: 'تومان' },
-      { k: 'printLamSheet', label: 'لمینت هر برگ (A4)', unit: 'تومان' },
     ],
   },
   {
@@ -223,6 +205,14 @@ export function PricesPage() {
           </button>
         }
       />
+
+      <CardNote className="-mt-2 mb-4">
+        قیمت چاپ سیاه‌وسفید، چاپ رنگی، کاغذهای ویژه و فنری در «
+        <Link to="/admin/pricing" className="font-extrabold text-accent-soft-ink underline">
+          مرکز مدیریت قیمت
+        </Link>
+        » است.
+      </CardNote>
 
       {/* Sticky: quick-nav tone chips + save status */}
       <div className="sticky top-2 z-20 mb-4 flex items-center gap-2 rounded-full border border-line bg-white/92 p-1.5 shadow-[0_6px_18px_rgba(7,9,15,0.06)] backdrop-blur lg:top-[26px]">
