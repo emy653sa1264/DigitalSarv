@@ -3,6 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { PLAN_IDS, REDIS_KEYS } from '../../common/constants.js';
 import { RedisService } from '../../common/redis/redis.service.js';
+import { toAsciiDigits } from '../../common/utils/phone.js';
 import { tehranYmd } from '../../common/utils/dates.js';
 import { defined } from '../../common/utils/defined.js';
 import { assertObjectId } from '../../common/utils/object-id.js';
@@ -19,11 +20,14 @@ import {
   bindColorCss,
   defaultChecklists,
   defaultCourierPay,
+  defaultDispatch,
   defaultOps,
   defaultPrintAddons,
   PRINT_ADDON_FLAGS,
   type Checklists,
   type CourierPaySettings,
+  type DispatchSettings,
+  type PickupPoint,
   type OpsSettings,
   type PrintAddons,
   type Prices,
@@ -64,6 +68,8 @@ export interface ResolvedSettings {
   courier: CourierPaySettings;
   checklists: Checklists;
   printAddons: PrintAddons;
+  dispatch: DispatchSettings;
+  pickupPoints: PickupPoint[];
 }
 
 @Injectable()
@@ -127,6 +133,7 @@ export class CatalogService {
         prices: settings.prices,
         urgentEnabled: settings.urgentEnabled,
         ops: settings.ops,
+        pickupPoints: settings.pickupPoints.filter((p) => p.on).map(({ on: _on, ...p }) => p),
         printing,
         campaign: campaign ? campaignJson(campaign) : null,
       }),
@@ -191,6 +198,8 @@ export class CatalogService {
         pickup: s?.checklists?.pickup?.length ? s.checklists.pickup : checklists.pickup,
       },
       printAddons: { ...defaultPrintAddons(), ...defined(s?.printAddons ?? {}) } as PrintAddons,
+      dispatch: { ...defaultDispatch(), ...defined(s?.dispatch ?? {}) } as DispatchSettings,
+      pickupPoints: (s?.pickupPoints ?? []).map((p) => ({ id: p.id, name: p.name, address: p.address, phone: p.phone, hours: p.hours ?? '', on: p.on !== false })),
     };
   }
 
@@ -225,8 +234,8 @@ export class CatalogService {
 
   /** «تنظیمات» (v3.3). */
   async getAdminSettings() {
-    const { ops, courier, checklists, printAddons } = await this.getSettings();
-    return { ops, courier, checklists, printAddons };
+    const { ops, courier, checklists, printAddons, dispatch, pickupPoints } = await this.getSettings();
+    return { ops, courier, checklists, printAddons, dispatch, pickupPoints };
   }
 
   /** Partial update: given fields replace the current value; lists are replaced as a whole. */
@@ -239,6 +248,17 @@ export class CatalogService {
       pickup: dto.checklists?.pickup ?? current.checklists.pickup,
     };
     const printAddons = { ...current.printAddons, ...defined(dto.printAddons ?? {}) } as PrintAddons;
+    const dispatch = { ...current.dispatch, ...defined(dto.dispatch ?? {}) } as DispatchSettings;
+    let pickupPoints = current.pickupPoints;
+    if (dto.pickupPoints) {
+      const seen = new Set<string>();
+      pickupPoints = dto.pickupPoints.map((p) => {
+        const id = p.id?.trim() || newKey('pp');
+        if (seen.has(id)) throw new BadRequestException('شناسه محل تحویل تکراری است');
+        seen.add(id);
+        return { id, name: p.name.trim(), address: p.address.trim(), phone: toAsciiDigits(p.phone).replace(/\D/g, ''), hours: (p.hours ?? '').trim(), on: p.on !== false };
+      });
+    }
     // per-flag dotted paths: concurrent toggles of different flags do not overwrite each other
     const addonSets: Record<string, boolean> = {};
     for (const f of PRINT_ADDON_FLAGS) {
@@ -247,11 +267,11 @@ export class CatalogService {
     }
     await this.settings.updateOne(
       { _id: SETTINGS_ID },
-      { $set: { ops, courier, checklists, ...addonSets }, $setOnInsert: { prices: { ...DEFAULT_PRICES }, urgentEnabled: true } },
+      { $set: { ops, courier, checklists, dispatch, pickupPoints, ...addonSets }, $setOnInsert: { prices: { ...DEFAULT_PRICES }, urgentEnabled: true } },
       { upsert: true },
     );
     await this.invalidate();
-    return { ops, courier, checklists, printAddons };
+    return { ops, courier, checklists, printAddons, dispatch, pickupPoints };
   }
 
   // ------------------------------------------------------------ plans

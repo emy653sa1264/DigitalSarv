@@ -25,6 +25,7 @@ import { Upload, UploadSchema } from '../modules/uploads/upload.schema.js';
 import { PriceVersion, PriceVersionSchema } from '../modules/price-book/schemas/price-version.schema.js';
 import { PriceAudit, PriceAuditSchema } from '../modules/price-book/schemas/price-audit.schema.js';
 import { BindingRange, BindingRangeSchema } from '../modules/price-book/schemas/binding-range.schema.js';
+import { Job, JobSchema } from '../modules/dispatch/job.schema.js';
 
 const features = MongooseModule.forFeature([
   { name: User.name, schema: UserSchema },
@@ -49,6 +50,7 @@ const features = MongooseModule.forFeature([
   { name: PriceVersion.name, schema: PriceVersionSchema },
   { name: PriceAudit.name, schema: PriceAuditSchema },
   { name: BindingRange.name, schema: BindingRangeSchema },
+  { name: Job.name, schema: JobSchema },
 ]);
 
 /**

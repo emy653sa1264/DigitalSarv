@@ -1,32 +1,38 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import {
+  DELIVERY_METHODS,
   ORDER_STATUSES,
   PAY_METHODS,
   PAYMENT_DRIVERS,
   PAYMENT_STATUSES,
+  PICKUP_AT,
   PLAN_IDS,
+  type DeliveryMethod,
   type OrderStatus,
   type PayMethod,
   type PaymentDriverName,
   type PaymentStatus,
+  type PickupAt,
   type PlanId,
 } from '../../common/constants.js';
+import type { ProviderPricingSnapshot } from '../dispatch/job-model.js';
 import type { ChildDraft, Quote, ServiceDraft, ServicePricing } from '../pricing/pricing.types.js';
 
 @Schema({ _id: false })
 export class Pickup {
-  @Prop({ type: String, required: true })
+  @Prop({ type: String, default: '' })
   address: string;
 
   @Prop({ type: String, required: true })
   phone: string;
 
-  @Prop({ type: String, required: true })
-  date: string;
+  /** A pickup slot exists only with home pickup (D12). */
+  @Prop({ type: String })
+  date?: string;
 
-  @Prop({ type: String, required: true })
-  slot: string;
+  @Prop({ type: String })
+  slot?: string;
 
   @Prop({ type: Number })
   lat?: number;
@@ -92,6 +98,29 @@ export type OrderService = ServiceDraft & { price: number; label: string; detail
 
 // optimisticConcurrency: whole-document saves fail (VersionError → 409 via saveOrConflict) if the order
 // changed since it was loaded; every atomic findOneAndUpdate on orders must `$inc: { __v: 1 }`.
+@Schema({ _id: false })
+export class PlaceSnapshot {
+  @Prop({ type: String, required: true }) id: string;
+  @Prop({ type: String, required: true }) name: string;
+  @Prop({ type: String, default: '' }) address: string;
+  @Prop({ type: String, default: '' }) phone: string;
+  @Prop({ type: String, default: '' }) hours: string;
+  @Prop({ type: String, enum: ['point', 'provider'], required: true }) kind: 'point' | 'provider';
+}
+export const PlaceSnapshotSchema = SchemaFactory.createForClass(PlaceSnapshot);
+
+/** v4.2 delivery (D12, D15, D17). Orders saved before v4.2 have none: read as `deliveryOf()` (courier + home pickup). */
+@Schema({ _id: false })
+export class OrderDelivery {
+  @Prop({ type: String, enum: DELIVERY_METHODS, default: 'courier' }) method: DeliveryMethod;
+  @Prop({ type: Boolean, default: true }) homePickup: boolean;
+  @Prop({ type: String, enum: PICKUP_AT }) pickupAt?: PickupAt;
+  @Prop({ type: PlaceSnapshotSchema }) pickupPoint?: PlaceSnapshot;
+  @Prop({ type: PlaceSnapshotSchema }) providerShop?: PlaceSnapshot;
+  @Prop({ type: String, default: '' }) note: string;
+}
+export const OrderDeliverySchema = SchemaFactory.createForClass(OrderDelivery);
+
 @Schema({ collection: 'orders', timestamps: true, optimisticConcurrency: true })
 export class Order {
   @Prop({ type: String, required: true, unique: true })
@@ -184,6 +213,14 @@ export class Order {
   /** Photos the courier took at pickup (`Upload` ids). */
   @Prop({ type: [MongooseSchema.Types.ObjectId], default: undefined })
   pickupPhotoIds?: Types.ObjectId[];
+
+  /** v4.2 delivery choice and place. */
+  @Prop({ type: OrderDeliverySchema })
+  delivery?: OrderDelivery;
+
+  /** v4.2 provider-price snapshot of the current assignment (§40). Never serialized to customers/couriers (select: false). */
+  @Prop({ type: MongooseSchema.Types.Mixed, select: false })
+  providerPricing?: ProviderPricingSnapshot;
 
   /**
    * Internal: gateway authorities whose verified capture was credited to the wallet because the order

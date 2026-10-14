@@ -175,3 +175,21 @@ export const BIND_COLORS: BindColorSeed[] = [
   { key: 'navy', name: 'آبی تیره', hex: '#16274f', css: 'linear-gradient(160deg,#2c4a86 0%,#16274f 60%,#0b1531 100%)', extra: 0, on: true, sort: 2 },
   { key: 'marbled', name: 'ابر و باد', hex: '#7d8ea6', css: 'repeating-linear-gradient(115deg,#4a5568 0 4px,#7d8ea6 4px 7px,#2f3a4d 7px 11px,#98a3b5 11px 14px)', extra: 0, on: true, sort: 3 },
 ];
+
+// ---------------------------------------------------------------- v4.2 dispatch (M3)
+
+export interface DispatchSettings {
+  /** Minutes a provider has to accept/reject before the job returns to «تخصیص‌نیافته» (D21). */
+  responseTimeoutMinutes: number;
+  leadHours: number;
+  urgentLeadHours: number;
+  /** 0 = no deadline reminder. */
+  deadlineReminderMinutes: number;
+  /** 0 = admins complete delivered jobs by hand. */
+  autoCompleteHours: number;
+}
+export const DEFAULT_DISPATCH: DispatchSettings = { responseTimeoutMinutes: 120, leadHours: 48, urgentLeadHours: 24, deadlineReminderMinutes: 120, autoCompleteHours: 24 };
+export const defaultDispatch = (): DispatchSettings => ({ ...DEFAULT_DISPATCH });
+
+/** «محل‌های تحویل حضوری» of Digital Sarv (D17). `phone` in ASCII digits. */
+export interface PickupPoint { id: string; name: string; address: string; phone: string; hours: string; on: boolean }

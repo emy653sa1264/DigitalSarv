@@ -1,6 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema } from 'mongoose';
-import type { CourierPaySettings, OpsSettings, Prices, PrintAddons, QcChecklists } from '../catalog.defaults.js';
+import type { CourierPaySettings, DispatchSettings, OpsSettings, PickupPoint, Prices, PrintAddons, QcChecklists } from '../catalog.defaults.js';
 
 /**
  * Singleton document `_id: 'main'` holding the price table, global switches and «تنظیمات» (v3.3).
@@ -29,6 +29,12 @@ export class Settings {
 
   @Prop({ type: MongooseSchema.Types.Mixed })
   printAddons?: Partial<PrintAddons>;
+
+  @Prop({ type: MongooseSchema.Types.Mixed })
+  dispatch?: Partial<DispatchSettings>;
+
+  @Prop({ type: [MongooseSchema.Types.Mixed], default: undefined })
+  pickupPoints?: PickupPoint[];
 }
 
 export type SettingsDocument = HydratedDocument<Settings>;

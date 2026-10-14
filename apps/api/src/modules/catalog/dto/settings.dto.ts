@@ -117,6 +117,41 @@ export class PrintAddonsDto {
   @IsOptional() @IsBoolean() docsSpiral?: boolean;
 }
 
+const dispatchMsg = (what: string, min: number, max: number) => ({ message: `${what} باید عدد صحیح بین ${min.toLocaleString('fa-IR')} و ${max.toLocaleString('fa-IR')} باشد` });
+const DispatchInt = (what: string, min: number, max: number) =>
+  applyDecorators(IsOptional(), Type(() => Number), IsInt(dispatchMsg(what, min, max)), Min(min, dispatchMsg(what, min, max)), Max(max, dispatchMsg(what, min, max)));
+
+export class DispatchSettingsDto {
+  @DispatchInt('مهلت پاسخ مجری (دقیقه)', 10, 1440) responseTimeoutMinutes?: number;
+  @DispatchInt('مهلت انجام سفارش (ساعت)', 1, 720) leadHours?: number;
+  @DispatchInt('مهلت سفارش فوری (ساعت)', 1, 720) urgentLeadHours?: number;
+  @DispatchInt('یادآوری مهلت (دقیقه)', 0, 1440) deadlineReminderMinutes?: number;
+  @DispatchInt('تکمیل خودکار (ساعت)', 0, 720) autoCompleteHours?: number;
+}
+
+const pointPhoneMsg = { message: 'شماره تماس محل تحویل معتبر نیست' };
+export class PickupPointDto {
+  /** An empty id from the form means «new point». */
+  @Transform(({ value }) => (value === '' ? undefined : value))
+  @IsOptional() @IsString() @Matches(/^[A-Za-z0-9_-]{2,40}$/, { message: 'شناسه محل تحویل معتبر نیست' })
+  id?: string;
+
+  @IsString({ message: 'نام محل تحویل را وارد کنید' }) @IsNotEmpty({ message: 'نام محل تحویل را وارد کنید' }) @MaxLength(60, { message: 'نام محل تحویل حداکثر ۶۰ کاراکتر است' })
+  name: string;
+
+  @IsString({ message: 'آدرس محل تحویل را وارد کنید' }) @IsNotEmpty({ message: 'آدرس محل تحویل را وارد کنید' }) @MaxLength(300)
+  address: string;
+
+  @Transform(asciiDigits) @IsString(pointPhoneMsg) @Matches(/^\d{5,15}$/, pointPhoneMsg)
+  phone: string;
+
+  @IsOptional() @IsString() @MaxLength(60, textMsg)
+  hours?: string;
+
+  @IsOptional() @IsBoolean()
+  on?: boolean;
+}
+
 export class UpdateSettingsDto {
   @IsOptional() @IsObject() @ValidateNested() @Type(() => OpsSettingsDto)
   ops?: OpsSettingsDto;
@@ -129,4 +164,10 @@ export class UpdateSettingsDto {
 
   @IsOptional() @ValidateNested() @Type(() => PrintAddonsDto)
   printAddons?: PrintAddonsDto;
+
+  @IsOptional() @IsObject() @ValidateNested() @Type(() => DispatchSettingsDto)
+  dispatch?: DispatchSettingsDto;
+
+  @IsOptional() @IsArray() @ArrayMaxSize(30, { message: 'حداکثر ۳۰ محل تحویل حضوری مجاز است' }) @ValidateNested({ each: true }) @Type(() => PickupPointDto)
+  pickupPoints?: PickupPointDto[];
 }

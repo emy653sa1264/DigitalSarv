@@ -3,7 +3,7 @@ import { Types } from 'mongoose';
 import { fakeModel, type Doc } from '../../../test/fake-model.js';
 import { FakeRedis, fakeRedisService } from '../../../test/fake-redis.js';
 import { addDays } from '../../common/utils/dates.js';
-import { BIND_COLORS, DEFAULT_CHECKLISTS, DEFAULT_OPS, defaultPrintAddons } from './catalog.defaults.js';
+import { BIND_COLORS, DEFAULT_CHECKLISTS, DEFAULT_DISPATCH, DEFAULT_OPS, defaultPrintAddons } from './catalog.defaults.js';
 import { CatalogService } from './catalog.service.js';
 
 function setup({ settings = [] as Doc[], campaign = null as Doc | null, colors = [] as Doc[], bindColors = [] as Doc[] } = {}) {
@@ -44,7 +44,7 @@ describe('«تنظیمات» (v3.3)', () => {
     expect(res.checklists.pickup).toEqual(['y']);
     expect(settings.docs[0].ops.sameDayCutoff).toBe('15:00');
     expect((await svc.getCatalog()).ops).toMatchObject({ sameDayCutoff: '15:00' }); // not the cached one
-    await expect(svc.getAdminSettings()).resolves.toEqual({ ops: res.ops, courier: res.courier, checklists: res.checklists, printAddons: defaultPrintAddons() });
+    await expect(svc.getAdminSettings()).resolves.toEqual({ ops: res.ops, courier: res.courier, checklists: res.checklists, printAddons: defaultPrintAddons(), dispatch: DEFAULT_DISPATCH, pickupPoints: [] });
   });
 });
 
@@ -93,5 +93,33 @@ describe('list ordering and bind colours (v3.3)', () => {
     expect(Object.keys(update.$set).filter((k) => k.startsWith('printAddons'))).toEqual(['printAddons.mixed']);
     expect(update.$set).not.toHaveProperty('printAddons');
     expect(res.printAddons).toMatchObject({ glue: true, mixed: true, docsSpiral: true });
+  });
+});
+
+describe('v4.2 dispatch settings and pickup points', () => {
+  it('dispatch reads as the defaults, stored values win', async () => {
+    const { svc } = setup({ settings: [{ _id: 'main', prices: {}, dispatch: { responseTimeoutMinutes: 45 } }] });
+    expect((await svc.getSettings()).dispatch).toEqual({ ...DEFAULT_DISPATCH, responseTimeoutMinutes: 45 });
+    expect((await svc.getSettings()).pickupPoints).toEqual([]);
+  });
+  it('pickup points are replaced as a whole, get ids, and only `on` ones reach the catalog (without `on`)', async () => {
+    const { svc } = setup({ settings: [{ _id: 'main', prices: {} }] });
+    const res = await svc.updateSettings({
+      dispatch: { leadHours: 72 },
+      pickupPoints: [
+        { name: ' دفتر مرکزی ', address: 'تهران، ونک', phone: '۰۲۱۹۱۰۰۲۲۳۳', hours: '۹ تا ۱۸', on: true },
+        { id: 'pp-old', name: 'شعبه شرق', address: 'تهران، تهرانپارس', phone: '02177001122', hours: '', on: false },
+      ],
+    } as never);
+    expect(res.dispatch).toMatchObject({ leadHours: 72, responseTimeoutMinutes: 120 });
+    expect(res.pickupPoints[0]).toMatchObject({ id: expect.stringMatching(/^pp/), name: 'دفتر مرکزی', phone: '02191002233', on: true });
+    expect(res.pickupPoints[1].id).toBe('pp-old');
+    const cat = await svc.getCatalog();
+    expect(cat.pickupPoints).toEqual([{ id: res.pickupPoints[0].id, name: 'دفتر مرکزی', address: 'تهران، ونک', phone: '02191002233', hours: '۹ تا ۱۸' }]);
+  });
+  it('duplicate pickup point ids are refused', async () => {
+    const { svc } = setup({ settings: [{ _id: 'main', prices: {} }] });
+    const p = { id: 'pp1', name: 'الف', address: 'آدرس', phone: '02100000000', hours: '', on: true };
+    await expect(svc.updateSettings({ pickupPoints: [p, { ...p, name: 'ب' }] } as never)).rejects.toThrow('شناسه محل تحویل تکراری است');
   });
 });

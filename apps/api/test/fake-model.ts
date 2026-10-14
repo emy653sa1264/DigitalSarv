@@ -1,7 +1,7 @@
 /**
  * In-memory stand-in for the subset of a Mongoose Model the services use: Mongo-style filters
  * (dotted paths, $in/$nin/$ne/$exists/$lt/$lte/$gt/$gte/$elemMatch/$or) and updates
- * ($set/$unset/$inc/$push). Each update matches and applies without an await in between, so it is
+ * ($set/$unset/$inc/$push/$pull/$addToSet, $setOnInsert on upserts). Each update matches and applies without an await in between, so it is
  * atomic like a real findOneAndUpdate — concurrency tests can rely on it. Test-only helper.
  */
 import { Types } from 'mongoose';
@@ -151,18 +151,30 @@ export function fakeModel(docs: Doc[] = []) {
     }
     return { deletedCount };
   };
+  /** An upsert inserts the filter's equality fields + `$setOnInsert` + the rest of the update. */
+  const insertFromUpsert = (filter: Doc, update: Doc) => {
+    const now = new Date();
+    const d: Doc = { _id: new Types.ObjectId(), createdAt: now, updatedAt: now, ...clone(equalityFields(filter)) };
+    docs.push(d);
+    applyUpdate(d, { ...update, $set: { ...((update.$setOnInsert as Doc) ?? {}), ...((update.$set as Doc) ?? {}) } });
+    return d;
+  };
   const updateOne = async (filter: Doc, update: Doc, options?: { upsert?: boolean }) => {
     await Promise.resolve();
-    let d = first(filter);
+    const d = first(filter);
     if (!d && options?.upsert) {
-      d = { _id: new Types.ObjectId(), ...clone(equalityFields(filter)) };
-      docs.push(d);
-      applyUpdate(d, update);
+      insertFromUpsert(filter, update);
       return { matchedCount: 0, modifiedCount: 0, upsertedCount: 1 };
     }
     if (!d) return { matchedCount: 0, modifiedCount: 0, upsertedCount: 0 };
     applyUpdate(d, update);
     return { matchedCount: 1, modifiedCount: 1, upsertedCount: 0 };
+  };
+  const create = async (doc: Doc) => {
+    const now = new Date();
+    const d = { _id: new Types.ObjectId(), createdAt: now, updatedAt: now, ...clone(doc) };
+    docs.push(d);
+    return out(d);
   };
   return {
     docs,
@@ -195,9 +207,10 @@ export function fakeModel(docs: Doc[] = []) {
       const values = docs.filter((d) => matches(d, filter)).flatMap((d) => [get(d, field)].flat()).filter((v) => v !== undefined);
       return [...new Map(values.map((v) => [String(norm(v)), v])).values()];
     }),
-    findOneAndUpdate: vi.fn(async (filter: Doc, update: Doc) => {
+    findOneAndUpdate: vi.fn(async (filter: Doc, update: Doc, options?: { upsert?: boolean }) => {
       await Promise.resolve();
       const d = first(filter);
+      if (!d && options?.upsert) return out(insertFromUpsert(filter, update));
       if (!d) return null;
       applyUpdate(d, update);
       return out(d);
@@ -217,12 +230,8 @@ export function fakeModel(docs: Doc[] = []) {
     }),
     deleteOne: vi.fn(async (filter: Doc) => removeWhere(filter, false)),
     deleteMany: vi.fn(async (filter: Doc = {}) => removeWhere(filter, true)),
-    create: vi.fn(async (doc: Doc) => {
-      const now = new Date();
-      const d = { _id: new Types.ObjectId(), createdAt: now, updatedAt: now, ...clone(doc) };
-      docs.push(d);
-      return out(d);
-    }),
+    create: vi.fn(create),
+    insertMany: vi.fn(async (list: Doc[]) => Promise.all(list.map(create))),
   };
 }
 
