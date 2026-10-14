@@ -17,15 +17,15 @@ import {
 import type { AuthUser } from '../../common/auth/auth-user.js';
 import { CurrentUser, Roles } from '../../common/auth/decorators.js';
 import { JwtAuthGuard, RolesGuard } from '../../common/auth/guards.js';
-import { ORDER_STATUSES, type OrderStatus } from '../../common/constants.js';
+import { NOTIFICATION_EVENTS, type NotificationAudience, type NotificationEvent } from '../../common/constants.js';
 import { PageQueryDto } from '../../common/utils/pagination.js';
 import { NotificationsService } from './notifications.service.js';
 
 const textMsg = { message: 'متن اعلان را وارد کنید' };
 
 export class CreateNotificationDto {
-  @IsIn(ORDER_STATUSES, { message: 'وضعیت سفارش معتبر نیست' })
-  event: OrderStatus;
+  @IsIn(NOTIFICATION_EVENTS, { message: 'رویداد اعلان معتبر نیست' })
+  event: NotificationEvent;
 
   @IsString(textMsg) @IsNotEmpty(textMsg) @MaxLength(300, { message: 'متن اعلان حداکثر ۳۰۰ کاراکتر است' })
   text: string;
@@ -84,21 +84,21 @@ export class NotificationsController {
   @Delete(':id') remove(@Param('id') id: string) { return this.notifications.remove(id); }
 }
 
-/** Customer inbox and Web Push subscriptions (v3.3). */
+/** Role inboxes (customer, provider, admin) and Web Push subscriptions (v3.3, v4.2). */
 @Controller('notifications')
 export class CustomerNotificationsController {
   constructor(private readonly notifications: NotificationsService) {}
 
   @Get('mine')
-  @UseGuards(JwtAuthGuard, RolesGuard) @Roles('customer')
+  @UseGuards(JwtAuthGuard, RolesGuard) @Roles('customer', 'provider', 'admin')
   mine(@CurrentUser() user: AuthUser, @Query() q: PageQueryDto) {
-    return this.notifications.mine(user.id, q);
+    return this.notifications.mine(user.id, q, user.role as NotificationAudience);
   }
 
   @Post('mine/read') @HttpCode(200)
-  @UseGuards(JwtAuthGuard, RolesGuard) @Roles('customer')
+  @UseGuards(JwtAuthGuard, RolesGuard) @Roles('customer', 'provider', 'admin')
   read(@CurrentUser() user: AuthUser, @Body() dto: ReadNotificationsDto) {
-    return this.notifications.markRead(user.id, dto.ids);
+    return this.notifications.markRead(user.id, dto.ids, user.role as NotificationAudience);
   }
 
   /** Public: the VAPID public key (`null` = web push is off). */
@@ -108,13 +108,13 @@ export class CustomerNotificationsController {
   }
 
   @Post('push/subscribe') @HttpCode(200)
-  @UseGuards(JwtAuthGuard, RolesGuard) @Roles('customer')
+  @UseGuards(JwtAuthGuard, RolesGuard) @Roles('customer', 'provider', 'admin')
   subscribe(@CurrentUser() user: AuthUser, @Body() dto: PushSubscribeDto) {
     return this.notifications.subscribe(user.id, dto);
   }
 
   @Post('push/unsubscribe') @HttpCode(200)
-  @UseGuards(JwtAuthGuard, RolesGuard) @Roles('customer')
+  @UseGuards(JwtAuthGuard, RolesGuard) @Roles('customer', 'provider', 'admin')
   unsubscribe(@CurrentUser() user: AuthUser, @Body() dto: PushUnsubscribeDto) {
     return this.notifications.unsubscribe(user.id, dto.endpoint);
   }

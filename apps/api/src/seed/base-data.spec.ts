@@ -59,3 +59,9 @@ describe('demo orders against the seeded price book', () => {
     expect(priceColorPrint({ ...base, pages: 24, size: 'A4', sides: 'single', copies: 1, colorType: 'full', paper: 'glossy200' } as never, ctx).price).toBe(24 * 35000);
   });
 });
+
+it('v4.2: every dispatch event has a seeded push template', async () => {
+  const { NOTIFICATIONS } = await import('./base-data.js');
+  const { DISPATCH_EVENTS } = await import('../common/constants.js');
+  for (const e of DISPATCH_EVENTS) expect(NOTIFICATIONS.some((n) => n.event === e && n.channel === 'push')).toBe(true);
+});

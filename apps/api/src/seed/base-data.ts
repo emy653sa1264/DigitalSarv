@@ -122,6 +122,20 @@ export const NOTIFICATIONS = [
   { event: 'delivered', channel: 'push', text: 'سفارش تحویل داده شد.', on: true },
   // cash-on-delivery and unpaid orders are cancelled too, so the refund is worded conditionally
   { event: 'cancelled', channel: 'push', text: 'سفارش شما لغو شد؛ اگر مبلغی پرداخت کرده بودید، به کیف پول شما برگشت.', on: true },
+  // v4.2 dispatch (§68): provider «سرو مجری», admin alerts, customer fulfilment
+  { event: 'job_assigned', channel: 'push', text: 'سفارش جدیدی به شما سپرده شد؛ لطفاً بررسی و پاسخ دهید.', on: true },
+  { event: 'job_delivery_assigned', channel: 'push', text: 'ارسال یک سفارش به شما سپرده شد.', on: true },
+  { event: 'job_withdrawn', channel: 'push', text: 'تخصیص این سفارش به شما لغو شد.', on: true },
+  { event: 'job_cancelled', channel: 'push', text: 'این سفارش لغو شد؛ کار روی آن را متوقف کنید.', on: true },
+  { event: 'job_changed', channel: 'push', text: 'جزئیات این سفارش (تحویل یا مهلت) تغییر کرد.', on: true },
+  { event: 'job_deadline', channel: 'push', text: 'مهلت انجام این سفارش نزدیک است.', on: true },
+  { event: 'job_rejected', channel: 'push', text: 'مجری سفارش را رد کرد؛ سفارش به تخصیص‌نیافته‌ها برگشت.', on: true },
+  { event: 'job_timeout', channel: 'push', text: 'مجری در مهلت پاسخ نداد؛ سفارش به تخصیص‌نیافته‌ها برگشت.', on: true },
+  { event: 'job_failed', channel: 'push', text: 'مجری اعلام کرد سفارش قابل انجام نیست؛ سفارش به تخصیص‌نیافته‌ها برگشت.', on: true },
+  { event: 'job_late', channel: 'push', text: 'مهلت سفارش گذشته و هنوز آماده نشده است.', on: true },
+  { event: 'provider_unavailable', channel: 'push', text: 'مجری این سفارش در دسترس نیست؛ تخصیص را بررسی کنید.', on: true },
+  { event: 'assigned', channel: 'push', text: 'سفارش شما به واحد تولید سپرده شد.', on: true },
+  { event: 'ready_for_pickup', channel: 'push', text: 'سفارش شما آماده تحویل حضوری است.', on: true },
 ] as const;
 
 export const ZONES = [

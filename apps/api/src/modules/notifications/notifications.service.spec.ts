@@ -87,7 +87,7 @@ describe('NotificationsService inbox + subscriptions', () => {
     expect(page).toMatchObject({ total: 2, page: 1, limit: 20, unread: 2 });
     expect(page.items[0]).toEqual({
       id: expect.any(String), orderId: String(orderId), orderCode: expect.any(String), event: 'registered',
-      text: 'سفارش شما ثبت شد.', read: false, createdAt: expect.any(Date),
+      text: 'سفارش شما ثبت شد.', read: false, createdAt: expect.any(Date), audience: 'customer', url: `/app/track/${orderId}`,
     });
 
     await expect(svc.markRead(String(customerId), [page.items[0].id])).resolves.toEqual({ ok: true, unread: 1 });
@@ -118,5 +118,52 @@ describe('NotificationsService inbox + subscriptions', () => {
     expect(created).toMatchObject({ event: 'binding', channel: 'push', on: true });
     await expect(svc.remove(String(created._id))).resolves.toEqual({ ok: true });
     expect(templates.docs.some((t) => t.event === 'binding')).toBe(false);
+  });
+});
+
+describe('v4.2 provider / admin notifications (§68, D19)', () => {
+  const tpl = (event: string, text: string, on = true) => ({ _id: new Types.ObjectId(), event, channel: 'push', text, on });
+
+  it('notify: one inbox row per user (deduplicated) with audience, url and job id; push titled «سرو مجری»', async () => {
+    const { svc, templates, inbox, push } = setup({ subs: [sub(otherId, 'https://push.example/p')] });
+    templates.docs.push(tpl('job_assigned', 'سفارش جدیدی به شما سپرده شد.'));
+    const jobId = new Types.ObjectId();
+    const ref = { orderId, orderCode: '10300', jobId, url: `/provider/jobs/${jobId}`, tag: `job-${jobId}` };
+    await svc.notify('job_assigned', [otherId, String(otherId)], ref);
+    expect(inbox.docs).toHaveLength(1);
+    expect(inbox.docs[0]).toMatchObject({ event: 'job_assigned', audience: 'provider', url: `/provider/jobs/${jobId}`, read: false, orderCode: '10300' });
+    expect(String(inbox.docs[0].jobId)).toBe(String(jobId));
+    await vi.waitFor(() =>
+      expect(push.send).toHaveBeenCalledWith(expect.anything(), { title: 'سرو مجری', body: 'سفارش جدیدی به شما سپرده شد.', url: ref.url, tag: ref.tag }),
+    );
+  });
+
+  it('an off or missing template sends nothing; notify never throws', async () => {
+    const { svc, templates, inbox } = setup();
+    templates.docs.push(tpl('job_late', 'دیر شد', false));
+    await svc.notify('job_late', [otherId], { orderId, orderCode: '1', url: '/admin/dispatch', tag: 't' });
+    await svc.notify('job_failed', [otherId], { orderId, orderCode: '1', url: '/admin/dispatch', tag: 't' });
+    expect(inbox.docs).toHaveLength(0);
+    templates.findOne.mockRejectedValueOnce(new Error('mongo down'));
+    await expect(svc.notify('job_late', [otherId], { orderId, orderCode: '1', url: '/', tag: 't' })).resolves.toBeUndefined();
+  });
+
+  it('each role sees only its own audience in its inbox', async () => {
+    const { svc, templates } = setup();
+    templates.docs.push(tpl('job_timeout', 'مجری پاسخ نداد'));
+    await svc.dispatch('registered', { ...order, customerId: otherId });
+    await svc.notify('job_timeout', [otherId], { orderId, orderCode: '10300', url: '/admin/dispatch', tag: 't' });
+    expect((await svc.mine(String(otherId), {})).items.map((i) => i.event)).toEqual(['registered']);
+    expect((await svc.mine(String(otherId), {}, 'admin')).items.map((i) => i.event)).toEqual(['job_timeout']);
+    expect((await svc.mine(String(otherId), {}, 'provider')).total).toBe(0);
+    await expect(svc.markRead(String(otherId), undefined, 'admin')).resolves.toEqual({ ok: true, unread: 0 });
+    expect((await svc.mine(String(otherId), {})).unread).toBe(1);
+  });
+
+  it('dispatch appends a suffix (the pickup place of ready_for_pickup)', async () => {
+    const { svc, templates, inbox } = setup();
+    templates.docs.push(tpl('ready_for_pickup', 'سفارش شما آماده تحویل حضوری است.'));
+    await svc.dispatch('ready_for_pickup', order, ' — دفتر مرکزی، تهران، ونک');
+    expect(inbox.docs[0]).toMatchObject({ audience: 'customer', text: 'سفارش شما آماده تحویل حضوری است. — دفتر مرکزی، تهران، ونک' });
   });
 });

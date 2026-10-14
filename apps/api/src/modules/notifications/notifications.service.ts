@@ -1,13 +1,20 @@
 import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import type { OrderStatus } from '../../common/constants.js';
+import { audienceOf, type NotificationAudience, type NotificationEvent } from '../../common/constants.js';
 import { assertObjectId } from '../../common/utils/object-id.js';
 import { pageParams } from '../../common/utils/pagination.js';
 import { NotificationTemplate } from './notification-template.schema.js';
 import { PushService, type PushMessage } from './push.service.js';
 import { PushSubscription } from './push-subscription.schema.js';
 import { UserNotification, userNotificationJson } from './user-notification.schema.js';
+
+/** Reference of a provider/admin notification (contract v4.2). */
+export interface NotifyRef { orderId: unknown; orderCode: string; jobId?: unknown; url: string; tag: string }
+
+const PUSH_TITLE: Record<NotificationAudience, string> = { customer: 'دیجیتال سرو', provider: 'سرو مجری', admin: 'دیجیتال سرو · مدیریت' };
+/** v3.3 rows have no audience: they are the customer's. */
+const audienceFilter = (a: NotificationAudience) => (a === 'customer' ? { audience: { $nin: ['provider', 'admin'] as NotificationAudience[] } } : { audience: a });
 
 /** What `dispatch` needs of an order. */
 export interface DispatchOrder { _id: unknown; code: string; customerId: unknown }
@@ -35,7 +42,7 @@ export class NotificationsService {
   }
 
   /** One template per event; the channel is always `push` (= inbox + web push). */
-  async create(dto: { event: OrderStatus; text: string; on?: boolean }) {
+  async create(dto: { event: NotificationEvent; text: string; on?: boolean }) {
     if (await this.templates.exists({ event: dto.event })) throw new ConflictException('برای این وضعیت قبلاً قالب اعلان تعریف شده است');
     return this.templates.create({ event: dto.event, channel: 'push', text: dto.text, on: dto.on ?? true });
   }
@@ -59,16 +66,43 @@ export class NotificationsService {
    * Creates the in-app notification for an order event (when its template is on) and pushes it in the
    * background. Never throws — notifications must not slow down or break the order flow.
    */
-  async dispatch(event: OrderStatus, order: DispatchOrder): Promise<void> {
+  async dispatch(event: NotificationEvent, order: DispatchOrder, suffix = ''): Promise<void> {
     try {
       const template = await this.templates.findOne({ event, channel: 'push', on: true });
       if (!template) return;
       const userId = new Types.ObjectId(String(order.customerId));
       const orderId = String(order._id);
-      await this.inbox.create({ userId, orderId: new Types.ObjectId(orderId), orderCode: order.code, event, text: template.text, read: false });
-      void this.pushToUser(userId, { title: 'دیجیتال سرو', body: template.text, url: `/app/track/${orderId}`, tag: orderId });
+      const text = template.text + suffix;
+      const url = `/app/track/${orderId}`;
+      await this.inbox.create({ userId, orderId: new Types.ObjectId(orderId), orderCode: order.code, event, audience: 'customer', url, text, read: false });
+      void this.pushToUser(userId, { title: PUSH_TITLE.customer, body: text, url, tag: orderId });
     } catch (err) {
       this.logger.warn(`notification ${event} for order ${order.code} failed: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * v4.2: provider / admin events (§68) — one inbox row per user and a Web Push titled by audience. Never throws:
+   * notifications must not slow down or break the dispatch flow.
+   */
+  async notify(event: NotificationEvent, userIds: unknown[], ref: NotifyRef, suffix = ''): Promise<void> {
+    try {
+      const ids = [...new Set(userIds.filter(Boolean).map(String))];
+      if (!ids.length) return;
+      const template = await this.templates.findOne({ event, channel: 'push', on: true });
+      if (!template) return;
+      const audience = audienceOf(event);
+      const text = template.text + suffix;
+      for (const id of ids) {
+        const userId = new Types.ObjectId(id);
+        await this.inbox.create({
+          userId, orderId: new Types.ObjectId(String(ref.orderId)), orderCode: ref.orderCode, event, audience, url: ref.url, text, read: false,
+          ...(ref.jobId ? { jobId: new Types.ObjectId(String(ref.jobId)) } : {}),
+        });
+        void this.pushToUser(userId, { title: PUSH_TITLE[audience], body: text, url: ref.url, tag: ref.tag });
+      }
+    } catch (err) {
+      this.logger.warn(`notification ${event} for order ${ref.orderCode} failed: ${(err as Error).message}`);
     }
   }
 
@@ -95,9 +129,9 @@ export class NotificationsService {
 
   // ------------------------------------------------------------ customer inbox
 
-  async mine(userId: string, q: { page?: number; limit?: number }) {
+  async mine(userId: string, q: { page?: number; limit?: number }, audience: NotificationAudience = 'customer') {
     const { page, limit, skip } = pageParams(q);
-    const owner = { userId: new Types.ObjectId(userId) };
+    const owner = { userId: new Types.ObjectId(userId), ...audienceFilter(audience) };
     const [docs, total, unread] = await Promise.all([
       this.inbox.find(owner).sort({ createdAt: -1, _id: -1 }).skip(skip).limit(limit).lean(),
       this.inbox.countDocuments(owner),
@@ -107,8 +141,8 @@ export class NotificationsService {
   }
 
   /** Marks the given ids (or all) of the caller as read. */
-  async markRead(userId: string, ids?: string[]) {
-    const owner = { userId: new Types.ObjectId(userId) };
+  async markRead(userId: string, ids?: string[], audience: NotificationAudience = 'customer') {
+    const owner = { userId: new Types.ObjectId(userId), ...audienceFilter(audience) };
     await this.inbox.updateMany(
       { ...owner, read: false, ...(ids ? { _id: { $in: ids.map((id) => new Types.ObjectId(id)) } } : {}) },
       { $set: { read: true } },

@@ -1,14 +1,14 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument } from 'mongoose';
-import { ORDER_STATUSES, type OrderStatus } from '../../common/constants.js';
+import { NOTIFICATION_EVENTS, type NotificationEvent } from '../../common/constants.js';
 
 export const CHANNELS = ['sms', 'push'] as const;
 export type Channel = (typeof CHANNELS)[number];
 
 @Schema({ collection: 'notificationTemplates', timestamps: true })
 export class NotificationTemplate {
-  @Prop({ type: String, enum: ORDER_STATUSES, required: true })
-  event: OrderStatus;
+  @Prop({ type: String, enum: NOTIFICATION_EVENTS, required: true })
+  event: NotificationEvent;
 
   @Prop({ type: String, enum: CHANNELS, required: true })
   channel: Channel;
