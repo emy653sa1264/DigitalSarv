@@ -471,3 +471,143 @@ interface CourierPaySettings { perTaskFee: number /* default 75000 */; settlemen
 
 ### List ordering (26)
 `POST /admin/{colors|extras|grades|papers|bind-colors}/reorder { ids: string[] }` sets `sort` = 1-based position; invalidates the catalog. The first `on` item by `sort` is the default paper / spiral colour / bind colour.
+
+## v4.0 — pricing core (Master Specification V4, Milestone 1)
+
+Design: `docs/v4-design.md`. Everything is additive; v1–v3.3 behaviour is unchanged unless stated.
+
+### New services
+
+| Service | `kind` | Web route |
+|---|---|---|
+| چاپ سیاه‌وسفید | `black_white_printing` | `/app/print/bw` |
+| چاپ رنگی | `color_printing` | `/app/print/color` |
+
+`/app/print` is a chooser between the two. Kind `print` («چاپ اسناد») is still accepted by `POST /orders/quote`
+(old drafts) and kept on old orders, but `POST /orders` answers **400** «چاپ اسناد به «چاپ سیاه‌وسفید» و «چاپ رنگی» تبدیل شده است؛ سرویس را دوباره انتخاب کنید» for it. `POST /orders/:id/reorder` converts `print` lines (`ink: 'bw'` → `black_white_printing`, otherwise `color_printing` with `colorType: 'full'`, `mixed: ink === 'mixed'`, `paper: ''`).
+
+```ts
+type PrintSize = 'A3' | 'A4' | 'A5' | 'A6';
+type ColorType = 'text' | 'full';          // متن رنگی / تمام‌رنگی
+interface PrintV4Base {
+  fileId?: string; fileName?: string; pages: number;
+  scope: 'all' | 'range'; from?: number; to?: number;
+  size: PrintSize; sides: 'single' | 'double'; copies: number;
+  binding: 'none' | 'spiral' | 'glue' | 'hardcover'; spiralColor?: string;
+  staple: boolean; laminate: 'none' | 'cover' | 'all'; extras?: string[]; desc?: string;
+}
+type BwPrintSpec = PrintV4Base;
+interface ColorPrintSpec extends PrintV4Base {
+  colorType: ColorType;
+  paper: string;            // Paper.key with colorPrint; '' = the first `on` colorPrint paper by sort; unknown/off → UNAVAILABLE
+  mixed?: boolean;          // «ترکیبی» add-on, plain paper only
+  colorRanges?: { from: number; to: number }[]; colorPages?: string; // only kept when mixed
+}
+```
+
+Add-ons are gated by `Settings.printAddons` (all `false` by default except `docsSpiral: true`); a switched-off add-on is
+normalized away (binding → `none`, staple → `false`, laminate → `none`, extras → `[]`, mixed → `false`).
+
+```ts
+interface PrintAddons { mixed: boolean; spiral: boolean; glue: boolean; hardcover: boolean; staple: boolean;
+  lamCover: boolean; lamAll: boolean; extras: boolean; docsSpiral: boolean }
+```
+
+### Price book (customer layer)
+
+- **Combination keys:** `bw|<size>|<side>` · `color|<size>|<colorType>|<paperKey>|<side>` · `spiral|<rangeId>` ·
+  `addon|glue` · `addon|hardcover` · `addon|staple` · `addon|lam_cover` · `addon|lam_sheet|<size>`.
+- **PriceVersion** `{ id, layer: 'customer'|'provider', providerId: string|null, comboKey, version, mode:
+  'manual'|'fixed_markup'|'percent_markup'|'formula', price?, formula?, markup?, discount?, rounding: 0|100|500|1000,
+  effectiveFrom, effectiveUntil?, state: 'draft'|'pending_approval'|'published'|'rejected'|'disabled', reason,
+  createdBy?: { id, name }, createdAt, status: 'draft'|'pending_approval'|'rejected'|'disabled'|'scheduled'|'active'|'expired',
+  unitPrice: number | null }` (`unitPrice` = evaluated at quantity 1; `null` = cannot be evaluated).
+  M1 accepts only `layer: 'customer'` and modes `manual` / `formula`.
+- **Resolution at time t** (per layer + provider + combo): among versions with `state ∈ {published, disabled}`,
+  `effectiveFrom ≤ t` and (`effectiveUntil` absent or `> t`), take the latest `effectiveFrom`, then the highest
+  `version`; if it is `disabled` (or none exists) the combo is **UNAVAILABLE**. A version with `effectiveUntil` is
+  a temporary price: afterwards the previous one applies again.
+- **Unit price:** `manual` → `price`; `formula` → evaluated with `base_price` (same layer, the `single` sibling of
+  a `double` combo), `paper_cost` (the paper's `paperCost`), `quantity` (sheets of the line), `markup`, `discount`;
+  then `rounding` (nearest multiple; 0 = nearest integer). Missing variable, division by zero, non-finite or
+  negative → UNAVAILABLE.
+- Two published versions of one combo may not share the same `effectiveFrom` (409).
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/admin/price-book?layer=customer&service=bw\|color\|spiral\|addon` | `customer_price_view` | `MatrixRow[]` `{ comboKey, service, options, label, current: PriceVersion\|null, next: PriceVersion\|null }` — every known combination (sizes × sides; × colour types × colorPrint papers; ranges; add-ons) plus any combo that has versions |
+| GET | `/admin/price-book/history?layer=customer&comboKey=` | `customer_price_view` | `PriceVersion[]` newest first |
+| POST | `/admin/price-book/versions` | `customer_price_edit` (+ `customer_price_publish` when `publish`) | body `{ layer, comboKey, mode, price?, formula?, markup?, discount?, rounding?, effectiveFrom?, effectiveUntil?, publish: boolean, reason }` → `PriceVersion` (`effectiveFrom` default now; future = scheduled) |
+| POST | `/admin/price-book/versions/:id/publish` | `customer_price_publish` | `{ reason }`, draft → published |
+| POST | `/admin/price-book/versions/:id/disable` | `customer_price_publish` | `{ reason }` |
+| POST | `/admin/price-book/versions/:id/rollback` | `customer_price_rollback` | `{ reason }` → new published version copying the values, effective now |
+| POST | `/admin/price-book/preview` | `customer_price_view` | `{ comboKey, mode, price?, formula?, markup?, discount?, rounding? }` → `{ unitPrice: number\|null, error?: string }` |
+| POST | `/admin/price-book/bulk/preview` | `customer_price_bulk_update` | `BulkBody` → `{ rows: { comboKey, label, current, next }[], skipped: { comboKey, label, reason }[] }` |
+| POST | `/admin/price-book/bulk/apply` | `customer_price_bulk_update` + `customer_price_publish` | `BulkBody & { reason }` → `{ bulkId, created, skipped }` (recomputed server-side) |
+| GET | `/admin/price-book/audit?page=&limit=` | `customer_price_view` | paged `{ id, action, layer, comboKeys, reason, by?: {id,name}, at, before?, after? }` |
+| GET/POST | `/admin/binding-ranges` · PATCH/DELETE `/admin/binding-ranges/:id` | `customer_price_edit` | `{ id, minPages, maxPages, on, sort }`; integers ≥ 1, `min ≤ max`, active ranges may not overlap (400); DELETE → 409 when the range has price versions (disable it instead) |
+
+```ts
+interface BulkBody {
+  layer: 'customer';                     // exactly one layer per operation
+  filter: { service?: 'bw'|'color'|'spiral'|'addon'; size?: PrintSize; colorType?: ColorType; paper?: string; side?: 'single'|'double'; comboKeys?: string[] };
+  op: 'inc_pct' | 'dec_pct' | 'inc_fixed' | 'dec_fixed' | 'replace';
+  value: number;                         // integer ≥ 0; percentages 0–1000
+  rounding?: 0 | 100 | 500 | 1000;
+  effectiveFrom?: string;
+}
+```
+Bulk applies only to combos whose current version is `manual`; formula combos and unavailable combos are
+returned in `skipped`. Results below 0 are skipped.
+
+### Permissions
+
+`User.permissions?: string[]` from: `provider_price_view, provider_price_edit, provider_price_publish,
+provider_price_bulk_update, provider_price_rollback, customer_price_view, customer_price_edit,
+customer_price_publish, customer_price_bulk_update, customer_price_rollback, provider_view, provider_edit,
+provider_manage, dispatch_view, dispatch_assign, dispatch_reassign, provider_order_view, provider_order_accept,
+provider_order_status`. An admin **without** the field has every permission (all existing admins). Missing
+permission → 403 «به این بخش دسترسی ندارید».
+
+### Papers
+
+`Paper` gains `type: 'plain'|'glossy'|'cardstock'`, `weight: number` (gsm), `paperCost?: number` (toman per sheet,
+used by formulas), `colorPrint: boolean` (offered in چاپ رنگی), `supportedSizes: PrintSize[]`, `supportsSingle`,
+`supportsDouble`. `price` keeps its v3 meaning for kind `print` only. Admin body accepts the new fields.
+
+### Catalog
+
+`GET /catalog` gains `printing: { sizes: PrintSize[]; addons: PrintAddons; prices: Record<comboKey, number>;
+spiralRanges: { id, minPages, maxPages, price }[] }` — only effective customer unit prices (quantity 1, formula
+combos included when evaluable); nothing about versions, authors or providers. The cache TTL is capped at the
+next scheduled price change. `GET /admin/settings` / `PUT /admin/settings` gain `printAddons`.
+
+### Pricing formulas (v4)
+
+- `pagesN`, `from`/`to` as print (v3). `sheets = sides === 'double' ? ceil(pagesN / 2) : pagesN`.
+- B/W: `unit = U(bw|size|side)`; base = `sheets × unit`.
+- Colour: `unit = U(color|size|colorType|paper|side)`; base = `sheets × unit`. With `mixed` (plain paper only):
+  `colorSheets` = sheets that hold ≥ 1 colour page (page i of the printed sequence lies on sheet `double ? ceil(i/2) : i`),
+  base = `colorSheets × U(color…) + (sheets − colorSheets) × U(bw|size|side)`.
+- Add-ons per copy: spiral `U(spiral|<range containing pagesN>) + Color(spiralColor).extra`, glue `U(addon|glue)`,
+  hardcover `U(addon|hardcover)`, staple (binding none only) `U(addon|staple)`, laminate cover `U(addon|lam_cover)`,
+  laminate all `sheets × U(addon|lam_sheet|size)`, extras `Σ Extra.price` (on, scope `print`).
+- `price = (base + addOns) × copies`. Any required `U(...)` UNAVAILABLE → the service is UNAVAILABLE.
+- Docs (`پایان‌نامه و صحافی`) gains `binding?: 'hardcover' | 'spiral'` (default `hardcover` = v3.3 formula) and
+  `spiralColor?`. With `spiral` (needs `printAddons.docsSpiral`): `bind = U(spiral|<range containing pagesN>) +
+  Color(spiralColor).extra` replaces `docBind + stamp + bindColor.extra`; stamp/bind colour are not shown.
+- Labels: `چاپ سیاه‌وسفید` · `۳۰ صفحه · ۱۵ برگ · A4 · دورو[ · فنری آبی|ته‌چسب|گالینگور][ · منگنه][ · لمینت جلد|لمینت همه صفحات][ · <extras>][ · ۲ نسخه]`;
+  `چاپ رنگی` · `۳۰ صفحه · ۱۵ برگ · A4 · تمام‌رنگی|متن رنگی · گلاسه ۲۰۰ گرم · دورو[ · ترکیبی (۴ برگ رنگی)]…`.
+  Docs spiral detail replaces ` · جلد <name> · زرکوب|نقره‌کوب` with ` · فنری[ <colour>]`.
+
+### Quote and order additions
+
+- `Quote.services[i].unavailable?: string` — Persian reason; that service's `price` is 0 and is not usable.
+- `POST /orders`: 400 with the first `unavailable` reason; optional body field `expectedTotal?: number` — when given
+  and different from the server's `quote.total`: **409** `{ statusCode: 409, code: 'PRICE_CHANGED', message:
+  'قیمت سفارش تغییر کرده است', previousTotal, newTotal }`, nothing is created or charged.
+- `Order.services[i].pricing?: { calculatedAt, currency: 'toman', lines: { comboKey, versionId, version, unitPrice,
+  quantity, subtotal }[], customerSubtotal }` — snapshot for v4 kinds (and docs spiral). Never rewritten.
+- Campaign services gain `black_white_printing`, `color_printing` (`DEFAULT_CAMPAIGN_SERVICES` too; `seed:base` adds
+  both to every campaign that lists `print`). QC checklist of both kinds = `checklists.qc.print`. Extras with scope
+  `print` apply to both kinds.
