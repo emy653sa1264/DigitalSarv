@@ -185,6 +185,10 @@ export class ZibalPaymentDriver implements PaymentDriver {
     }
     if (body.result === 100 || body.result === 201) {
       // 201 may omit the amount; when present it must match what we asked for (never silently pay a mismatch)
+      if (body.amount !== undefined && body.amount !== null && (String(body.amount).trim() === '' || !Number.isFinite(Number(body.amount)))) {
+        // an unreadable amount is not evidence of a mismatch: retry later instead of crediting NaN → 0
+        return { ok: false, message: `zibal returned a non-numeric amount for trackId ${authority}: ${String(body.amount)}`, retryable: true };
+      }
       if (body.amount !== undefined && body.amount !== null && Number(body.amount) !== tomanToRial(amount)) {
         const message = `zibal amount mismatch for trackId ${authority}: provider ${String(body.amount)} rial, expected ${tomanToRial(amount)}`;
         new Logger('ZibalPaymentDriver').error(message);

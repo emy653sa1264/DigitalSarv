@@ -25,7 +25,7 @@ import type { PaymentDriver } from './payment-driver.js';
 export const PAYMENT_DRIVER = Symbol('PAYMENT_DRIVER');
 
 /** `pending` = the provider could not be reached to verify yet (`payment.status: 'verifying'`). */
-type Outcome = 'ok' | 'failed' | 'pending';
+type Outcome = 'ok' | 'failed' | 'pending' | 'mismatch';
 
 /** Redis flag held while an attempt is verified with the provider — `start` refuses to replace it meanwhile. */
 export const verifyLockKey = (authority: string) => `pay:verifying:${authority}`;
@@ -220,25 +220,45 @@ export class PaymentsService {
 
   /**
    * The provider captured an amount different from the one requested: the order is NOT paid. The captured
-   * money (rial → toman, floored) is credited to the customer's wallet once per authority (the authority is
-   * pushed to `refundedAuthorities` in the same compare-and-set, so replays never credit twice). The order
-   * stays `pending_payment` (payable again with a new `/pay`); `payment.status` becomes `mismatch` with a timeline note.
+   * money (rial → toman, floored) is credited to the customer's wallet once per authority — like `creditToWallet`,
+   * the only idempotency guard is `refundedAuthorities: { $ne: authority }`, so the money is credited even when the
+   * order was cancelled/expired or a newer `/pay` replaced the authority meanwhile. Only when the authority still
+   * matches and the order is not paid is `payment.status` set to `mismatch` (with a timeline note).
    */
   private async creditMismatch(order: OrderDocument, authority: string, paidRial: number, message: string): Promise<Outcome> {
     const credit = Number.isFinite(paidRial) && paidRial > 0 ? Math.floor(paidRial / 10) : 0;
-    const note = { status: 'pending_payment' as const, label: `مغایرت مبلغ پرداخت (${credit} تومان به کیف پول اعتبار شد)`, at: new Date() };
     const credited = await this.orders.findOneAndUpdate(
-      { _id: order._id, status: 'pending_payment', 'payment.authority': authority, 'payment.status': { $ne: 'paid' }, refundedAuthorities: { $ne: authority } },
-      { $set: { 'payment.status': 'mismatch' }, $push: { refundedAuthorities: authority, timeline: note }, $inc: { __v: 1 } },
+      { _id: order._id, refundedAuthorities: { $ne: authority } },
+      { $push: { refundedAuthorities: authority }, $inc: { __v: 1 } },
       { returnDocument: 'after' },
     );
     if (!credited) {
       this.logger.warn(`order ${order.code}: payment ${authority} amount mismatch was already handled`);
-      return 'failed';
+      return 'mismatch';
     }
-    if (credit > 0) await this.users.updateOne({ _id: credited.customerId }, { $inc: { walletBalance: credit } });
-    this.logger.error(`order ${order.code}: payment ${authority} AMOUNT MISMATCH (${message}) — order not paid, ${credit} toman credited to the wallet`);
-    return 'failed';
+    const note = { status: 'pending_payment' as const, label: `مغایرت مبلغ پرداخت (${credit} تومان به کیف پول اعتبار شد)`, at: new Date() };
+    await this.orders.updateOne(
+      { _id: order._id, 'payment.authority': authority, 'payment.status': { $ne: 'paid' } },
+      { $set: { 'payment.status': 'mismatch' }, $push: { timeline: note }, $inc: { __v: 1 } },
+    );
+    await this.creditWallet(credited, authority, credit, `AMOUNT MISMATCH (${message})`);
+    return 'mismatch';
+  }
+
+  /**
+   * `$inc` of the wallet after the idempotency marker was written (not one atomic write — M5 adds a recoverable
+   * pending-credit record). Logs at ERROR before the `$inc` and, if it fails, «settle manually» with the same fields.
+   */
+  private async creditWallet(order: Pick<OrderDocument, 'code' | 'customerId'>, authority: string, amount: number, why: string) {
+    if (!(amount > 0)) return;
+    const fields = `order ${order.code}, authority ${authority}, ${amount} toman, customer ${String(order.customerId)}`;
+    this.logger.error(`wallet credit about to be applied (${why}): ${fields}`);
+    try {
+      await this.users.updateOne({ _id: order.customerId }, { $inc: { walletBalance: amount } });
+    } catch (err) {
+      this.logger.error(`wallet credit FAILED — settle manually (${why}): ${fields}: ${(err as Error).message}`);
+      throw err;
+    }
   }
 
   private async markFailed(attempt: QueryFilter<Order>) {
@@ -298,7 +318,7 @@ export class PaymentsService {
       this.logger.log(`order ${current.code}: payment ${authority} was already credited to the wallet`);
       return;
     }
-    if (amount > 0) await this.users.updateOne({ _id: credited.customerId }, { $inc: { walletBalance: amount } });
+    await this.creditWallet(credited, authority, amount, `captured payment refId ${refId} the order could not take`);
     const why = ownAttempt ? 'the order was cancelled while it was verified' : 'the order no longer accepted it';
     this.logger.warn(`order ${credited.code}: payment ${authority} (refId ${refId}) captured but ${why} — ${amount} toman credited to the wallet`);
   }

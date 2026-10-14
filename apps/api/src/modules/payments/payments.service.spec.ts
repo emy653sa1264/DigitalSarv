@@ -52,6 +52,7 @@ function setup(orderDocs: Doc[] = [pendingOrder()], driver: PaymentDriver = new 
 
 const ok = (o: Doc) => `${WEB}/app/pay/return?order=${String(o._id)}&status=ok`;
 const failed = (o: Doc) => `${WEB}/app/pay/return?order=${String(o._id)}&status=failed`;
+const mismatchUrl = (o: Doc) => `${WEB}/app/pay/return?order=${String(o._id)}&status=mismatch`;
 const pending = (o: Doc) => `${WEB}/app/pay/return?order=${String(o._id)}&status=pending`;
 
 describe('PaymentsService.handleCallback (verify idempotency)', () => {
@@ -347,7 +348,7 @@ describe('PaymentsService: provider amount mismatch', () => {
       verify: vi.fn(async () => ({ ok: false as const, message: 'amount mismatch', retryable: false, mismatch: { paidRial: 3_150_005 } })),
     };
     const { svc, user, rules } = setup([o], driver);
-    await expect(svc.handleCallback('zibal', '159', 'OK')).resolves.toBe(failed(o));
+    await expect(svc.handleCallback('zibal', '159', 'OK')).resolves.toBe(mismatchUrl(o));
     expect(user.walletBalance).toBe(315000);
     expect(o).toMatchObject({ status: 'pending_payment', paid: false });
     expect(o.payment.status).toBe('mismatch');
@@ -357,5 +358,46 @@ describe('PaymentsService: provider amount mismatch', () => {
     expect(user.walletBalance).toBe(315000);
     expect(o.refundedAuthorities).toEqual(['159']);
     expect(rules.recordUsage).not.toHaveBeenCalled();
+  });
+
+  const mismatchDriver = (onVerify?: () => void): PaymentDriver => ({
+    name: 'zibal',
+    request: vi.fn(),
+    verify: vi.fn(async () => { onVerify?.(); return { ok: false as const, message: 'amount mismatch', retryable: false, mismatch: { paidRial: 3_150_005 } }; }),
+  });
+  const zibalOrder = (extra: Doc = {}) => pendingOrder({ payment: { driver: 'zibal', authority: '159', status: 'pending', amount: 500000, requestedAt: new Date() }, ...extra });
+
+  it('order cancelled while the provider verifies: the captured money is still credited once (replay does not double)', async () => {
+    const o = zibalOrder();
+    let ctx!: ReturnType<typeof setup>;
+    ctx = setup([o], mismatchDriver(() => { ctx.order.status = 'cancelled'; }));
+    await expect(ctx.svc.handleCallback('zibal', '159', 'OK')).resolves.toBe(mismatchUrl(o));
+    expect(ctx.user.walletBalance).toBe(315000);
+    expect(ctx.order.refundedAuthorities).toEqual(['159']);
+    // replay: the order is cancelled now, so it is never re-verified; and a direct re-settle does not double either
+    await ctx.svc.handleCallback('zibal', '159', 'OK');
+    await (ctx.svc as never as { creditMismatch: (...a: unknown[]) => Promise<unknown> }).creditMismatch(ctx.order, '159', 3_150_005, 'again');
+    expect(ctx.user.walletBalance).toBe(315000);
+  });
+  it('a newer /pay replaced the authority while verifying: credited once, payment.status of the new attempt untouched', async () => {
+    const o = zibalOrder();
+    let ctx!: ReturnType<typeof setup>;
+    ctx = setup([o], mismatchDriver(() => { ctx.order.payment.authority = '160'; }));
+    await expect(ctx.svc.handleCallback('zibal', '159', 'OK')).resolves.toBe(mismatchUrl(o));
+    expect(ctx.user.walletBalance).toBe(315000);
+    expect(ctx.order.refundedAuthorities).toEqual(['159']);
+    expect(ctx.order.payment).toMatchObject({ authority: '160', status: 'pending' });
+    expect(ctx.order.status).toBe('pending_payment');
+    await (ctx.svc as never as { creditMismatch: (...a: unknown[]) => Promise<unknown> }).creditMismatch(ctx.order, '159', 3_150_005, 'again');
+    expect(ctx.user.walletBalance).toBe(315000);
+  });
+  it('wallet $inc failure after the marker: logged «settle manually» and rethrown', async () => {
+    const o = zibalOrder();
+    const ctx = setup([o], mismatchDriver());
+    const logs: string[] = [];
+    vi.spyOn((ctx.svc as never as { logger: { error: (m: string) => void } }).logger, 'error').mockImplementation((m: string) => { logs.push(m); });
+    vi.spyOn(ctx.users, 'updateOne').mockRejectedValueOnce(new Error('db down'));
+    await expect(ctx.svc.handleCallback('zibal', '159', 'OK')).rejects.toThrow('db down');
+    expect(logs.some((l) => /settle manually/.test(l) && l.includes('159') && l.includes('315000') && l.includes('10300'))).toBe(true);
   });
 });

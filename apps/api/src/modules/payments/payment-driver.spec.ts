@@ -142,6 +142,14 @@ describe('ZibalPaymentDriver: amount check and real timeout', () => {
     const none = fetchReturning({ result: 201, refNumber: 1 });
     await expect(new ZibalPaymentDriver({ merchant: 'zibal', fetch: none.fetch }).verify({ authority: '1', amount: 315000 })).resolves.toMatchObject({ ok: true });
   });
+  it('verify: a non-numeric amount is retryable, never a mismatch', async () => {
+    for (const amount of ['abc', '', {}]) {
+      const f = fetchReturning({ result: 100, refNumber: 1, amount } as never);
+      const r = await new ZibalPaymentDriver({ merchant: 'zibal', fetch: f.fetch }).verify({ authority: '1', amount: 315000 });
+      expect(r).toMatchObject({ ok: false, retryable: true });
+      expect(r).not.toHaveProperty('mismatch');
+    }
+  });
   it('timeout: an aborted fetch is retryable on verify and rejects on request', async () => {
     const hang: FetchLike = (_url, init) =>
       new Promise((_resolve, reject) => {

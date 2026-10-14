@@ -40,7 +40,7 @@ The four v2 files share one prototype script (logic/pricing unchanged from v1); 
 - [ ] V4-M2 Providers, provider prices, staff permissions, Zibal — `docs/superpowers/plans/2026-10-15-v4-m2-providers.md`
 - [ ] V4-M3 Dispatch center, provider panel, fulfillment and delivery
 - [ ] V4-M4 Provider ledger and settlement
-- [ ] V4-M5 Security and regression verification
+- [ ] V4-M5 Security and regression verification (incl. a recoverable pending-wallet-credit record: the wallet credit is currently marker-then-`$inc`, logged at ERROR before the `$inc`)
 
 ## Needs from the owner before going live
 
