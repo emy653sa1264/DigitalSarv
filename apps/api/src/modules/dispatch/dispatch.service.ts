@@ -434,7 +434,7 @@ export class DispatchService {
     if (!changes.priority && !changes.deadline) return this.result(job._id, by); // nothing changed: no write
     const updated = await this.jobs.cas(job, job.status, {
       set: { ...(dto.priority ? { priority: dto.priority } : {}), ...(deadline ? { deadline } : {}) },
-      ...(deadline ? { unset: { deadlineNotifiedAt: 1, lateAlertedAt: 1 } } : {}),
+      ...(changes.deadline ? { unset: { deadlineNotifiedAt: 1, lateAlertedAt: 1 } } : {}),
       history: this.jobs.entry(job, 'updated', job.status, { byRole: 'admin', by }, new Date(), { changes }),
     });
     if (!updated) throw raced();
