@@ -8,11 +8,11 @@ import type { Order, ProductionColumn } from '@/lib/types'
 import { ORDER_STATUS_LABEL } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { useAdminOrder, useCenters, useOrderMutations, useProduction } from '../api'
-import { AdminSelect, NONE, StatusTag } from '../components/controls'
+import { StatusTag } from '../components/controls'
 import { OrderFilesList } from '../components/files'
 import { AdminCard, CardTitle, PageHeader, QueryView } from '../components/kit'
 import { ServiceSpec, useCatalogNames } from '../components/ServiceSpec'
-import { PRODUCTION_TONE, QC_LABELS_FALLBACK, SERVICE_LABEL, isTerminal, nextFlowStatus, orderFiles } from '../lib'
+import { PRODUCTION_TONE, QC_LABELS_FALLBACK, SERVICE_LABEL, nextFlowStatus, orderFiles } from '../lib'
 
 export function ProductionPage() {
   const board = useProduction()
@@ -71,6 +71,7 @@ function BoardColumn({ column: c, activeId, onSelect }: { column: ProductionColu
             )}
           >
             {fa(i.label || i.code)}
+            {i.providerName && <span className="block text-[11px] text-muted-2">{i.providerName}</span>}
           </button>
         )
       })}
@@ -261,38 +262,35 @@ function FamilyCard({ order }: { order: Order }) {
   )
 }
 
-/** Picks the print centre that does this order (`PATCH /admin/orders/:id/assign { centerId }`). */
+/** Read-only provider of this order; assignment lives in the dispatch center. */
 function CenterCard({ order }: { order: Order }) {
   const navigate = useNavigate()
   const centers = useCenters()
-  const { assign } = useOrderMutations()
-  const locked = isTerminal(order.status) || order.status === 'pending_payment'
-
-  const change = (v: string) =>
-    assign.mutate({ id: order.id, centerId: v === NONE ? null : v }, { onSuccess: () => notify('مرکز چاپ سفارش تعیین شد') })
+  const name = centers.data?.find((c) => c.id === order.centerId)?.name
 
   return (
     <div className="rounded-[26px] bg-night p-5 text-[#9aa2b8]">
-      <div className="mb-2 text-[17px] font-black text-white">تخصیص به مرکز چاپ</div>
-      <div className="mb-3 text-[13px] leading-[1.85]">مرکز چاپی را که این سفارش را انجام می‌دهد انتخاب کنید.</div>
+      <div className="mb-2 text-[17px] font-black text-white">مجری</div>
+      <div className="mb-3 text-[13px] leading-[1.85]">تخصیص و تغییر مجری از مرکز تخصیص انجام می‌شود.</div>
       {centers.isError ? (
-        <div className="text-[12.5px] font-bold text-[#ffa8cf]">فهرست مراکز چاپ دریافت نشد.</div>
+        <div className="text-[12.5px] font-bold text-[#ffa8cf]">فهرست مجریان دریافت نشد.</div>
       ) : (
-        <AdminSelect
-          ariaLabel="مرکز چاپ"
-          value={order.centerId || NONE}
-          onValueChange={change}
-          disabled={locked || assign.isPending || centers.isPending}
-          placeholder={centers.isPending ? 'در حال بارگذاری…' : 'انتخاب مرکز'}
-          options={[{ value: NONE, label: 'بدون مرکز' }, ...(centers.data ?? []).map((c) => ({ value: c.id, label: c.name }))]}
-        />
+        <div className="flex h-11 items-center justify-between gap-2 rounded-full bg-white/10 px-4 text-[13.5px] font-bold text-white">
+          <span className="truncate">{centers.isPending ? 'در حال بارگذاری…' : (name ?? 'تخصیص‌نیافته')}</span>
+          <a
+            href={`/admin/dispatch?job=${order.id}`}
+            onClick={(e) => {
+              e.preventDefault()
+              navigate(`/admin/dispatch?job=${order.id}`)
+            }}
+            className="shrink-0 text-[12px] font-extrabold text-[#c9bcff] hover:text-white"
+          >
+            مرکز تخصیص
+          </a>
+        </div>
       )}
-      <button
-        type="button"
-        onClick={() => navigate('/admin/centers')}
-        className="mt-3 cursor-pointer text-[12.5px] font-bold text-[#c9bcff] hover:text-white"
-      >
-        مشاهده مراکز چاپ
+      <button type="button" onClick={() => navigate('/admin/providers')} className="mt-3 cursor-pointer text-[12.5px] font-bold text-[#c9bcff] hover:text-white">
+        مشاهده مجریان
       </button>
     </div>
   )

@@ -1,5 +1,5 @@
 import type { BrandTone } from '@/components/brand'
-import type { DeliveryMethod, DeliveryStatus, DispatchTab, JobPriority, JobStatus, NotificationAudience, NotificationEvent, ProviderCheck, ProviderTab, RejectReason } from '@/lib/types'
+import type { DeliveryMethod, DeliveryStatus, DispatchEvent, DispatchTab, JobPriority, JobStatus, NotificationAudience, NotificationEvent, ProviderCheck, ProviderTab, RejectReason } from '@/lib/types'
 import { ORDER_STATUS_LABEL } from '@/lib/types'
 
 export const JOB_STATUS_LABEL: Record<JobStatus, string> = {
@@ -39,6 +39,7 @@ const DISPATCH_EVENT_LABEL: Record<Exclude<NotificationEvent, keyof typeof ORDER
   job_failed: 'مدیر — عدم امکان انجام', job_late: 'مدیر — تأخیر', provider_unavailable: 'مدیر — مجری در دسترس نیست',
   assigned: 'مشتری — سپرده به تولید', ready_for_pickup: 'مشتری — آماده تحویل حضوری',
 }
+export const DISPATCH_EVENTS_ORDER: DispatchEvent[] = ['assigned', 'ready_for_pickup', 'job_assigned', 'job_delivery_assigned', 'job_withdrawn', 'job_cancelled', 'job_changed', 'job_deadline', 'job_rejected', 'job_timeout', 'job_failed', 'job_late', 'provider_unavailable']
 export const NOTIFICATION_EVENT_LABEL = (e: NotificationEvent): string =>
   (ORDER_STATUS_LABEL as Record<string, string>)[e] ?? (DISPATCH_EVENT_LABEL as Record<string, string>)[e] ?? e
 export const NOTIFICATION_AUDIENCE_LABEL: Record<NotificationAudience, string> = { customer: 'مشتری', provider: 'مجری', admin: 'مدیران' }

@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react'
+import { useNavigate } from 'react-router'
 import { ErrorState, LoadingBlock, TONES, TotalsPanel } from '@/components/brand'
 import {
   AlertDialog,
@@ -10,8 +11,11 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { Textarea } from '@/components/ui/textarea'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
-import { notify } from '@/components/ui/sonner'
+import { notify, toast } from '@/components/ui/sonner'
+import { ApiError } from '@/lib/api'
+import { DELIVERY_METHOD_LABEL } from '@/lib/dispatch-labels'
 import { fa, jalali, jalaliDayTime, money } from '@/lib/format'
 import type { Order, OrderStatus } from '@/lib/types'
 import { ORDER_STATUS_LABEL } from '@/lib/types'
@@ -19,6 +23,7 @@ import { cn } from '@/lib/utils'
 import { useAdminOrder, useCenters, useCouriers, useOrderMutations } from '../api'
 import { AdminSelect, NONE, StatusTag } from '../components/controls'
 import { OrderFilesList, UploadThumb } from '../components/files'
+import { Field, FormDialog } from '../components/FormDialog'
 import { ServiceSpec, useCatalogNames } from '../components/ServiceSpec'
 import { PAY_LABEL, SERVICE_LABEL, adminStatusOptions, isTerminal, orderFiles, refundableAmount } from '../lib'
 
@@ -63,6 +68,7 @@ function OrderDetail({ id }: { id: string }) {
         {order && (
           <>
             <ControlsCard order={order} />
+            <DeliveryCard order={order} />
             <ChildrenCard order={order} />
             {order.services.length > 0 && <ServicesCard order={order} />}
             <FilesCard order={order} />
@@ -115,6 +121,8 @@ function ControlsCard({ order }: { order: Order }) {
   const couriers = useCouriers()
   const centers = useCenters()
   const [confirming, setConfirming] = useState<OrderStatus>()
+  const [retry, setRetry] = useState<CenterRetry | null>(null)
+  const navigate = useNavigate()
 
   const unpaid = order.status === 'pending_payment'
   const final = isTerminal(order.status)
@@ -133,8 +141,27 @@ function ControlsCard({ order }: { order: Order }) {
   const changeCourier = (v: string) =>
     assign.mutate({ id: order.id, courierId: v === NONE ? null : v }, { onSuccess: () => notify('پیک سفارش تعیین شد') })
 
-  const changeCenter = (v: string) =>
-    assign.mutate({ id: order.id, centerId: v === NONE ? null : v }, { onSuccess: () => notify('مرکز چاپ سفارش تعیین شد') })
+  const sendCenter = (centerId: string | null, extra: { override?: boolean; reason?: string; confirmMissingPrice?: boolean } = {}) =>
+    assign.mutate(
+      { id: order.id, centerId, ...extra },
+      {
+        onSuccess: () => {
+          setRetry(null)
+          notify('مجری سفارش تعیین شد')
+        },
+        onError: (e) => {
+          if (!(e instanceof ApiError) || !centerId) return
+          const d = (e.data ?? {}) as ServerProblem
+          if (d.code === 'NOT_CAPABLE') setRetry({ centerId, kind: 'hard', problems: d.problems ?? [], override: !!extra.override, confirmMissing: !!extra.confirmMissingPrice })
+          else if (d.code === 'PROVIDER_NOT_ELIGIBLE') setRetry({ centerId, kind: 'override', problems: d.problems ?? [e.message], override: true, confirmMissing: !!extra.confirmMissingPrice })
+          else if (d.code === 'PROVIDER_PRICE_MISSING') setRetry({ centerId, kind: 'price', problems: d.missing ?? [], override: !!extra.override, confirmMissing: true })
+        },
+      },
+    )
+  const changeCenter = (v: string) => {
+    setRetry(null)
+    sendCenter(v === NONE ? null : v)
+  }
 
   return (
     <Section title="وضعیت و تخصیص">
@@ -149,7 +176,7 @@ function ControlsCard({ order }: { order: Order }) {
             options={options.map((s) => ({ value: s, label: ORDER_STATUS_LABEL[s] }))}
           />
           {unpaid && <span className="text-[11.5px] leading-6 text-muted-2">پرداخت درگاه هنوز تأیید نشده؛ تا آن زمان فقط لغو سفارش ممکن است.</span>}
-          {final && <span className="text-[11.5px] leading-6 text-muted-2">این سفارش بسته شده است؛ وضعیت، پیک و مرکز چاپ آن دیگر تغییر نمی‌کند.</span>}
+          {final && <span className="text-[11.5px] leading-6 text-muted-2">این سفارش بسته شده است؛ وضعیت و پیک آن دیگر تغییر نمی‌کند.</span>}
         </label>
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="grid gap-1.5">
@@ -164,18 +191,40 @@ function ControlsCard({ order }: { order: Order }) {
             />
           </label>
           <label className="grid gap-1.5">
-            <span className="text-[12.5px] font-extrabold text-muted-1">مرکز چاپ</span>
+            <span className="text-[12.5px] font-extrabold text-muted-1">مجری</span>
             <AdminSelect
-              ariaLabel="مرکز چاپ"
+              ariaLabel="مجری"
               value={order.centerId || NONE}
               onValueChange={changeCenter}
               disabled={unpaid || final || assign.isPending || centers.isPending}
-              placeholder="انتخاب مرکز"
-              options={[{ value: NONE, label: 'بدون مرکز' }, ...(centers.data ?? []).map((c) => ({ value: c.id, label: c.name }))]}
+              placeholder="انتخاب مجری"
+              options={[{ value: NONE, label: 'تخصیص‌نیافته' }, ...(centers.data ?? []).map((c) => ({ value: c.id, label: c.name }))]}
             />
+            <a
+              href={`/admin/dispatch?job=${order.id}`}
+              onClick={(e) => {
+                e.preventDefault()
+                navigate(`/admin/dispatch?job=${order.id}`)
+              }}
+              className="text-[12px] font-extrabold text-accent"
+            >
+              باز کردن در مرکز تخصیص
+            </a>
           </label>
         </div>
       </div>
+
+      {retry && (
+        <CenterRetryDialog
+          key={`${retry.centerId}-${retry.kind}`}
+          retry={retry}
+          pending={assign.isPending}
+          onClose={() => setRetry(null)}
+          onSubmit={(reason) =>
+            sendCenter(retry.centerId, { ...(retry.override ? { override: true } : {}), ...(reason ? { reason } : {}), ...(retry.confirmMissing ? { confirmMissingPrice: true } : {}) })
+          }
+        />
+      )}
 
       <AlertDialog open={!!confirming} onOpenChange={(open) => !open && setConfirming(undefined)}>
         <AlertDialogContent className="rounded-[26px] border-line bg-white">
@@ -195,6 +244,80 @@ function ControlsCard({ order }: { order: Order }) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </Section>
+  )
+}
+
+interface ServerProblem {
+  code?: string
+  problems?: string[]
+  missing?: string[]
+}
+interface CenterRetry {
+  centerId: string
+  kind: 'hard' | 'override' | 'price'
+  problems: string[]
+  override: boolean
+  confirmMissing: boolean
+}
+
+/** Same rules as the dispatch center's assign dialog: hard blockers are shown, eligibility needs a reason, a missing provider price needs confirmation. */
+function CenterRetryDialog({ retry, pending, onClose, onSubmit }: { retry: CenterRetry; pending: boolean; onClose: () => void; onSubmit: (reason: string) => void }) {
+  const [reason, setReason] = useState('')
+  const [confirmed, setConfirmed] = useState(false)
+  const submit = () => {
+    if (retry.kind === 'hard') return onClose()
+    if (retry.override && !reason.trim()) return void toast.error('دلیل نادیده‌گرفتن شرایط را بنویسید')
+    if (retry.kind === 'price' && !confirmed) return void toast.error('قیمت مجری تنظیم نشده؛ برای ادامه آن را تأیید کنید')
+    onSubmit(reason.trim())
+  }
+  return (
+    <FormDialog
+      open
+      onOpenChange={(o) => !o && onClose()}
+      title={retry.kind === 'hard' ? 'امکان انجام ندارد' : 'تخصیص به مجری'}
+      submitLabel={retry.kind === 'hard' ? 'بستن' : 'تخصیص'}
+      pending={pending}
+      onSubmit={submit}
+    >
+      {retry.kind === 'hard' && (
+        <div className="rounded-[16px] bg-pink-soft px-3 py-2.5 text-[12.5px] font-bold leading-6 text-pink-ink">
+          این مجری توانایی انجام این سفارش را ندارد و قابل نادیده‌گرفتن نیست{retry.problems.length > 0 ? `: ${retry.problems.join('، ')}` : ''}
+        </div>
+      )}
+      {retry.kind !== 'hard' && retry.override && (
+        <div className="rounded-[16px] bg-amber-soft px-3 py-2.5 text-[12.5px] font-bold leading-6 text-amber-ink">
+          این مجری همه شرایط را ندارد{retry.problems.length > 0 ? `: ${retry.problems.join('، ')}` : ''}
+        </div>
+      )}
+      {retry.kind === 'price' && (
+        <label className="flex items-start gap-2 rounded-[16px] bg-pink-soft/50 p-3 text-[12.5px] leading-6">
+          <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} className="mt-1" />
+          <span>
+            <b>قیمت مجری تنظیم نشده</b>
+            {retry.problems.length > 0 ? ` — ${retry.problems.join('، ')}` : ''}. با این حال سپرده شود (پرداخت مجری بعداً تعیین می‌شود).
+          </span>
+        </label>
+      )}
+      {retry.kind !== 'hard' && retry.override && (
+        <Field label="دلیل نادیده‌گرفتن شرایط">
+          <Textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300} />
+        </Field>
+      )}
+    </FormDialog>
+  )
+}
+
+function DeliveryCard({ order }: { order: Order }) {
+  const d = order.delivery
+  if (!d) return null
+  const place = d.pickupAt === 'provider' ? d.providerShop : d.pickupPoint
+  return (
+    <Section title="روش تحویل">
+      <Row label="روش" value={DELIVERY_METHOD_LABEL[d.method]} />
+      <Row label="تحویل‌گیری از منزل" value={d.homePickup ? 'دارد' : 'ندارد'} />
+      {place && <Row label="محل تحویل حضوری" value={`${place.name} — ${place.address}`} />}
+      {d.note && <Row label="توضیحات تحویل" value={d.note} />}
     </Section>
   )
 }

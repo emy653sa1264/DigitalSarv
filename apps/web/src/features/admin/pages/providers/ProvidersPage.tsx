@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useNavigate } from 'react-router'
 import { DsSwitch, EmptyState, InfoBanner, TONES } from '@/components/brand'
 import { notify } from '@/components/ui/sonner'
 import { fa } from '@/lib/format'
@@ -20,6 +21,8 @@ export function ProvidersPage() {
   const query = useProviders(canView)
   const { update, remove } = useProviderMutations()
   const canEdit = useCan('provider_edit')
+  const canDispatch = useCan('dispatch_view')
+  const navigate = useNavigate()
   const canManage = useCan('provider_manage')
   const [dialog, setDialog] = useState<{ open: boolean; item?: Provider }>({ open: false })
   const [search, setSearch] = useState('')
@@ -67,6 +70,18 @@ export function ProvidersPage() {
                     <span dir="ltr" className="text-start text-[12.5px] font-bold">{p.login ? fa(p.login.phone) : <span className="text-muted-3">—</span>}</span>
                     <span className="text-muted-2">{p.capacity.dailySheets !== undefined ? `${fa(p.capacity.dailySheets)} برگ` : '—'}</span>
                     <span className="flex justify-end gap-1.5">
+                      {canDispatch && (
+                        <a
+                          href={`/admin/dispatch?tab=in_progress&providerId=${p.id}`}
+                          onClick={(e) => {
+                            e.preventDefault()
+                            navigate(`/admin/dispatch?tab=in_progress&providerId=${p.id}`)
+                          }}
+                          className="rounded-full bg-accent-soft px-3 py-1.5 text-[12px] font-extrabold text-accent-soft-ink"
+                        >
+                          سفارش‌ها
+                        </a>
+                      )}
                       {canEdit && <IconAction kind="edit" label="ویرایش" onClick={() => setDialog({ open: true, item: p })} />}
                       {canManage && (
                         <ConfirmDelete title={`حذف ${p.name}؟`}

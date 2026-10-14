@@ -4,13 +4,15 @@ import { Chip, DsSwitch } from '@/components/brand'
 import { Input } from '@/components/ui/input'
 import { notify, toast } from '@/components/ui/sonner'
 import { fa, jalali, toEnDigits } from '@/lib/format'
-import type { AdminSettings, ChecklistSettings, CourierPaySettings, OpsSettings, QcListKey } from '@/lib/types'
+import type { AdminSettings, ChecklistSettings, CourierPaySettings, DispatchSettings, OpsSettings, PickupPoint, QcListKey } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { useAdminSettings, useSettingsMutation, type SettingsPatch } from '../api'
 import { AddButton, AdminSelect, MoveButtons, NumInput, RowInput } from '../components/controls'
 import { Field } from '../components/FormDialog'
 import { AdminCard, CardNote, CardTitle, PageHeader, QueryView } from '../components/kit'
 import { SaveChip, type SaveState } from '../components/SaveChip'
+import { DispatchCard, dispatchProblem } from './settings/DispatchCard'
+import { PickupPointsCard, pointsProblem } from './settings/PickupPointsCard'
 
 /** Persian week order → JS `getDay()` (0 Sunday … 6 Saturday). */
 const WEEKDAYS: { day: number; label: string }[] = [
@@ -71,7 +73,7 @@ export function SettingsPage() {
   const query = useAdminSettings()
   return (
     <>
-      <PageHeader title="تنظیمات" subtitle="زمان‌بندی تحویل‌گیری، اطلاعات تماس، دستمزد پیک و چک‌لیست‌ها؛ هر تغییر پس از چند لحظه خودکار ذخیره می‌شود." />
+      <PageHeader title="تنظیمات" subtitle="زمان‌بندی تحویل‌گیری، اطلاعات تماس، دستمزد پیک، تخصیص سفارش، محل‌های تحویل حضوری و چک‌لیست‌ها؛ هر تغییر پس از چند لحظه خودکار ذخیره می‌شود." />
       <QueryView query={query} rows={5}>
         {(data) => <SettingsForm initial={data} />}
       </QueryView>
@@ -84,6 +86,8 @@ function SettingsForm({ initial }: { initial: AdminSettings }) {
   const [ops, setOps] = useState<OpsSettings>(initial.ops)
   const [courier, setCourier] = useState<CourierPaySettings>(initial.courier)
   const [checklists, setChecklists] = useState<ChecklistSettings>(initial.checklists)
+  const [dispatch, setDispatch] = useState<DispatchSettings>(initial.dispatch)
+  const [points, setPoints] = useState<PickupPoint[]>(initial.pickupPoints)
   const [state, setState] = useState<SaveState>('saved')
   const pending = useRef<SettingsPatch>({})
   const timer = useRef<ReturnType<typeof setTimeout>>(undefined)
@@ -135,6 +139,16 @@ function SettingsForm({ initial }: { initial: AdminSettings }) {
     setCourier(next)
     stage('courier', next, courierProblem(next))
   }
+  const updateDispatch = (patch: Partial<DispatchSettings>) => {
+    const next = { ...dispatch, ...patch }
+    setDispatch(next)
+    stage('dispatch', next, dispatchProblem(next))
+  }
+  const updatePoints = (list: PickupPoint[]) => {
+    setPoints(list)
+    // a new point has no id yet: omit it (never '') so the server assigns one
+    stage('pickupPoints', list.map((p) => ({ ...p, id: p.id || undefined, name: p.name.trim(), address: p.address.trim(), hours: p.hours.trim(), phone: toEnDigits(p.phone) })), pointsProblem(list))
+  }
   const updateChecklist = (tab: ChecklistTab, list: string[]) => {
     const next: ChecklistSettings = tab === 'pickup' ? { ...checklists, pickup: list } : { ...checklists, qc: { ...checklists.qc, [tab]: list } }
     setChecklists(next)
@@ -158,6 +172,10 @@ function SettingsForm({ initial }: { initial: AdminSettings }) {
           <ContactCard ops={ops} onChange={updateOps} problem={contactProblem(ops)} />
           <CourierPayCard courier={courier} onChange={updateCourier} problem={courierProblem(courier)} />
         </div>
+      </div>
+      <div className="mt-4 grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr))]">
+        <DispatchCard value={dispatch} onChange={updateDispatch} problem={dispatchProblem(dispatch)} />
+        <PickupPointsCard value={points} onChange={updatePoints} problem={pointsProblem(points)} />
       </div>
       <ChecklistsCard checklists={checklists} onChange={updateChecklist} problem={checklistProblem(checklists)} />
     </>

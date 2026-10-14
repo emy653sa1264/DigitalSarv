@@ -2,8 +2,8 @@ import { useState } from 'react'
 import { DsSwitch, InfoBanner } from '@/components/brand'
 import { notify, toast } from '@/components/ui/sonner'
 import { Textarea } from '@/components/ui/textarea'
-import { NOTIFICATION_EVENT_LABEL } from '@/lib/dispatch-labels'
-import type { NotificationEvent, NotificationTemplate } from '@/lib/types'
+import { DISPATCH_EVENTS_ORDER, NOTIFICATION_AUDIENCE_LABEL, NOTIFICATION_EVENT_LABEL, audienceOfEvent } from '@/lib/dispatch-labels'
+import type { NotificationAudience, NotificationEvent, NotificationTemplate } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { useNotificationMutations, useNotificationTemplates } from '../api'
 import { AddButton, AdminSelect, ConfirmDelete } from '../components/controls'
@@ -18,7 +18,12 @@ const CHANNEL = {
 } as const
 
 /** Events the server dispatches (everything except the unpaid state). */
-const EVENTS: NotificationEvent[] = ORDER_STATUSES.filter((s) => s !== 'pending_payment')
+const EVENTS: NotificationEvent[] = [...ORDER_STATUSES.filter((s) => s !== 'pending_payment'), ...DISPATCH_EVENTS_ORDER]
+const GROUPS: { audience: NotificationAudience; title: string }[] = [
+  { audience: 'customer', title: 'اعلان‌های مشتری' },
+  { audience: 'provider', title: 'اعلان‌های مجری (سرو مجری)' },
+  { audience: 'admin', title: 'هشدارهای مدیران' },
+]
 
 export function NotificationsPage() {
   const query = useNotificationTemplates()
@@ -31,20 +36,25 @@ export function NotificationsPage() {
     <>
       <PageHeader
         title="اعلان‌ها"
-        subtitle="متن اعلان هر مرحله سفارش قابل ویرایش است؛ هر اعلان را جداگانه روشن یا خاموش کنید."
+        subtitle="متن اعلان هر مرحله سفارش و رویداد تخصیص قابل ویرایش است؛ هر اعلان را جداگانه روشن یا خاموش کنید."
         actions={
           <AddButton onClick={() => setAdding(true)} disabled={!query.data || freeEvents.length === 0} title={freeEvents.length === 0 ? 'برای همه مراحل اعلان تعریف شده است' : undefined}>
             افزودن اعلان
           </AddButton>
         }
       />
-      <InfoBanner className="mb-4">پیامک فقط برای کد ورود ارسال می‌شود؛ وضعیت سفارش به صورت اعلان درون‌برنامه و مرورگر ارسال می‌شود.</InfoBanner>
+      <InfoBanner className="mb-4">پیامک فقط برای کد ورود ارسال می‌شود؛ اعلان‌های مشتری، مجری و مدیران درون‌برنامه و مرورگر ارسال می‌شوند.</InfoBanner>
       <QueryView query={query} rows={6} isEmpty={(d) => d.length === 0} empty={{ title: 'قالب اعلانی تعریف نشده است', hint: 'با «افزودن اعلان» اولین قالب را بسازید.' }}>
         {(list) => (
-          <div className="rounded-[26px] border border-line bg-white px-4 py-2 sm:px-5">
-            {[...list]
-              .sort((a, b) => EVENTS.indexOf(a.event) - EVENTS.indexOf(b.event))
-              .map((n) => {
+          <div className="grid gap-4">
+            {GROUPS.map((g) => {
+              const items = list.filter((n) => audienceOfEvent(n.event) === g.audience).sort((a, b) => EVENTS.indexOf(a.event) - EVENTS.indexOf(b.event))
+              if (items.length === 0) return null
+              return (
+                <section key={g.audience} aria-label={NOTIFICATION_AUDIENCE_LABEL[g.audience]}>
+                  <h3 className="m-0 mb-2 text-[14.5px] font-black">{g.title}</h3>
+                  <div className="rounded-[26px] border border-line bg-white px-4 py-2 sm:px-5">
+            {items.map((n) => {
                 const ch = CHANNEL[n.channel] ?? CHANNEL.push
                 return (
                   <div key={n.id} className="flex flex-wrap items-center gap-3 border-t border-line-soft py-[13px] first:border-t-0 sm:flex-nowrap">
@@ -73,6 +83,10 @@ export function NotificationsPage() {
                   </div>
                 )
               })}
+                  </div>
+                </section>
+              )
+            })}
           </div>
         )}
       </QueryView>
@@ -125,7 +139,7 @@ function AddNotificationDialog({ open, events, onOpenChange }: { open: boolean; 
 
   const submit = () => {
     if (!event) {
-      toast.error('مرحله سفارش را انتخاب کنید')
+      toast.error('رویداد را انتخاب کنید')
       return
     }
     if (!text.trim()) {
@@ -145,13 +159,13 @@ function AddNotificationDialog({ open, events, onOpenChange }: { open: boolean; 
 
   return (
     <FormDialog open={open} onOpenChange={onOpenChange} title="افزودن اعلان" submitLabel="افزودن" pending={create.isPending} onSubmit={submit}>
-      <Field label="مرحله سفارش" hint="فقط مراحلی که هنوز اعلان ندارند.">
+      <Field label="رویداد" hint="فقط رویدادهایی که هنوز اعلان ندارند.">
         <AdminSelect
-          ariaLabel="مرحله سفارش"
+          ariaLabel="رویداد"
           value={event}
           onValueChange={(v) => setEvent(v as NotificationEvent)}
-          placeholder="انتخاب مرحله"
-          options={events.map((e) => ({ value: e, label: NOTIFICATION_EVENT_LABEL(e) }))}
+          placeholder="انتخاب رویداد"
+          options={events.map((e) => ({ value: e, label: `${NOTIFICATION_AUDIENCE_LABEL[audienceOfEvent(e)]} · ${NOTIFICATION_EVENT_LABEL(e)}` }))}
         />
       </Field>
       <Field label="متن اعلان">
