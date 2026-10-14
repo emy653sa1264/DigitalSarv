@@ -39,4 +39,30 @@ describe('provider price of a job (§52–53)', () => {
     expect(pricingSnapshot({ providerId: 'P', quote, at, delivery: { providerId: 'F', fee: 30000 }, confirmedMissing: false }).payoutBasis).toBe(50000);
     expect(pricingSnapshot({ providerId: 'P', quote: { ...quote, subtotal: null }, at, delivery: null, confirmedMissing: true })).toMatchObject({ payoutBasis: null, confirmedMissing: true });
   });
+  it('M1: an order with no lines at all is unpriced — subtotal and payout basis null, never 0', () => {
+    for (const order of [{}, { services: [], children: [] }]) {
+      const q = providerQuote(order, {}, labelOf);
+      expect(q).toEqual({ lines: [], missing: [{ comboKey: null, label: 'سفارش ردیف قابل قیمت‌گذاری ندارد' }], subtotal: null });
+      expect(pricingSnapshot({ providerId: 'P', quote: q, at: new Date('2026-10-16T08:00:00Z'), delivery: { providerId: 'P', fee: 30000 }, confirmedMissing: false }))
+        .toMatchObject({ providerSubtotal: null, payoutBasis: null });
+    }
+  });
+  it('M2: a line quantity that is not a finite integer ≥ 1 is missing («تعداد نامعتبر»), never NaN', () => {
+    for (const quantity of [0, -2, 1.5, NaN, Infinity]) {
+      const order = { services: [{ kind: 'black_white_printing', label: 'چاپ سیاه‌وسفید', pricing: { lines: [bwLine('bw|A4|single', quantity)] } }] };
+      const q = providerQuote(order, { 'bw|A4|single': { price: 3000, versionId: 'p', version: 1 } }, labelOf);
+      expect(q.lines).toEqual([]);
+      expect(q.subtotal).toBeNull();
+      expect(q.missing).toEqual([{ serviceIndex: 0, comboKey: 'bw|A4|single', label: 'چاپ سیاه‌وسفید: چاپ سیاه‌وسفید · A4 · یک‌رو · تعداد نامعتبر' }]);
+    }
+  });
+  it('M3: a provider price that is not a finite number > 0 is missing, never a 0-cost line', () => {
+    for (const price of [0, -5, NaN, Infinity]) {
+      const order = { services: [{ kind: 'black_white_printing', label: 'چاپ سیاه‌وسفید', pricing: { lines: [bwLine('bw|A4|single', 2)] } }] };
+      const q = providerQuote(order, { 'bw|A4|single': { price, versionId: 'p', version: 1 } }, labelOf);
+      expect(q.lines).toEqual([]);
+      expect(q.subtotal).toBeNull();
+      expect(q.missing).toHaveLength(1);
+    }
+  });
 });

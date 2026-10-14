@@ -36,14 +36,20 @@ export function providerQuote(order: PricedOrder, entries: Record<string, Provid
       return;
     }
     for (const l of priced) {
-      const e = PRICE_BOOK.test(l.comboKey) ? entries[l.comboKey] : undefined;
-      if (!e) {
-        missing.push({ serviceIndex: i, comboKey: l.comboKey, label: `${s.label || 'سرویس'}: ${labelOf(l.comboKey)}` });
+      const usable = PRICE_BOOK.test(l.comboKey) ? entries[l.comboKey] : undefined;
+      // a provider price that is not a finite number > 0 is no price at all (never a 0-cost line)
+      const e = usable && Number.isFinite(usable.price) && usable.price > 0 ? usable : undefined;
+      const qtyOk = Number.isInteger(l.quantity) && l.quantity >= 1;
+      if (!e || !qtyOk) {
+        const reason = !qtyOk ? ' · تعداد نامعتبر' : '';
+        missing.push({ serviceIndex: i, comboKey: l.comboKey, label: `${s.label || 'سرویس'}: ${labelOf(l.comboKey)}${reason}` });
         continue;
       }
       lines.push({ serviceIndex: i, comboKey: l.comboKey, label: labelOf(l.comboKey), versionId: e.versionId, version: e.version, unitPrice: e.price, quantity: l.quantity, subtotal: e.price * l.quantity });
     }
   });
+  // an order with no lines at all cannot be priced: null, never 0
+  if (!lines.length && !missing.length) missing.push({ comboKey: null, label: 'سفارش ردیف قابل قیمت‌گذاری ندارد' });
   return { lines, missing, subtotal: missing.length ? null : lines.reduce((t, l) => t + l.subtotal, 0) };
 }
 

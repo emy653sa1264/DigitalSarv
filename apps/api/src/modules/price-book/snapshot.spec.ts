@@ -63,4 +63,13 @@ describe('snapshot — provider prices of base providers', () => {
       [String(A)]: { 'bw|A4|single': { price: 3600, versionId: String(v2._id), version: 2 } },
     });
   });
+  it('M4: pending_approval and rejected provider rows are ignored by effectiveProviderEntries', () => {
+    const live = pv(A, 3500);
+    const pending = pv(A, 9900, { version: 2, state: 'pending_approval', effectiveFrom: new Date('2026-05-01') });
+    const rejected = pv(A, 8800, { version: 3, state: 'rejected', effectiveFrom: new Date('2026-05-15') });
+    expect(effectiveProviderEntries([live, pending, rejected] as never, at)).toEqual({
+      [String(A)]: { 'bw|A4|single': { price: 3500, versionId: String(live._id), version: 1 } },
+    });
+    expect(effectiveProviderEntries([pending, rejected] as never, at)).toEqual({});
+  });
 });
