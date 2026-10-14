@@ -226,3 +226,7 @@ Out of scope (spec §93): automated/AI matching, bidding, ratings, SLA, forecast
 | D19 | Provider notifications: **in-app inbox + web push** in «سرو مجری» (no SMS). |
 | D20 | Provider payouts are settled **weekly** (settlement weekday configurable in تنظیمات); balance accrues per delivered order; admin records each payout. |
 | D21 | A rejected **or unanswered** assignment returns to «تخصیص‌نیافته» and alerts the admin; the response timeout is configurable (default 2 hours). |
+| D22 | Pickup and delivery fees stay exactly as today for every order, whatever the delivery method (owner, 2026-10-16). |
+| D23 | Non-print services get provider prices in M4; M3 assigns them with a «قیمت مجری تنظیم نشده» confirmation. |
+| D24 | Providers see only what they need: the delivering provider gets name/phone/address/note; a pickup-shop provider name/phone; producers children's names; never customer prices. |
+| D25 | Default timings: deadline 48 h (24 h urgent), provider response 2 h, deadline reminder 2 h before, auto-complete 24 h after delivery — editable in تنظیمات. |
