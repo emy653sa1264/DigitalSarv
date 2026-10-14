@@ -1,26 +1,23 @@
-import { useState, type ReactNode } from 'react'
-import { LogOut, Store } from 'lucide-react'
-import { ErrorState, InfoBanner, LoadingBlock, MobileHeader, Panel, ScreenBody, ToneTag } from '@/components/brand'
-import {
-  AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
-import { Button } from '@/components/ui/button'
-import { notify } from '@/components/ui/sonner'
+import { type ReactNode } from 'react'
+import { Store } from 'lucide-react'
+import { InfoBanner, LoadingBlock, MobileHeader, Panel, ScreenBody, ToneTag } from '@/components/brand'
 import { fa, money } from '@/lib/format'
 import {
   CAPABILITY_ADDON_LABEL, COLOR_TYPE_LABEL, EQUIPMENT_KIND_LABEL, EQUIPMENT_TAG_LABEL, PROVIDER_SERVICE_LABEL, PROVIDER_STATUS, SIDE_LABEL, WEEKDAYS,
 } from '@/lib/provider-labels'
-import { useCatalog, useLogout } from '@/lib/query'
+import { useCatalog } from '@/lib/query'
 import type { ProviderSelf } from '@/lib/types'
 import { useProviderMe } from './api'
+import { LogoutButton } from './LogoutButton'
+import { ProviderError } from './ProviderError'
 
 export function ProfileScreen() {
   const me = useProviderMe()
   return (
     <>
-      <MobileHeader title="پروفایل مجری" subtitle={me.data ? me.data.businessName || me.data.name : 'سرو مجری'} icon={Store} tone="cyan" />
+      <MobileHeader title="پروفایل مجری" subtitle={me.data ? fa(me.data.businessName || me.data.name) : 'سرو مجری'} icon={Store} tone="cyan" />
       <ScreenBody>
-        {me.isPending ? <LoadingBlock rows={4} /> : me.isError ? <ErrorState error={me.error} onRetry={() => void me.refetch()} /> : <ProfileContent p={me.data} />}
+        {me.isPending ? <LoadingBlock rows={4} /> : me.isError ? <ProviderError error={me.error} onRetry={() => void me.refetch()} /> : <ProfileContent p={me.data} />}
       </ScreenBody>
     </>
   )
@@ -38,8 +35,6 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 function ProfileContent({ p }: { p: ProviderSelf }) {
   const catalog = useCatalog()
   const paperName = (key: string) => catalog.data?.papers.find((x) => x.key === key)?.name ?? key
-  const logout = useLogout()
-  const [confirm, setConfirm] = useState(false)
   const st = PROVIDER_STATUS[p.status]
   const hours = WEEKDAYS.map((w) => ({ ...w, ranges: p.workingHours.filter((h) => h.weekday === w.day) }))
 
@@ -47,7 +42,7 @@ function ProfileContent({ p }: { p: ProviderSelf }) {
     <>
       <div className="rounded-[24px] bg-night p-5 text-white">
         <div className="text-[20px] font-black">{p.name}</div>
-        {p.businessName && <div className="mt-0.5 text-[13px] text-[#9aa2b8]">{p.businessName}</div>}
+        {p.businessName && <div className="mt-0.5 text-[13px] text-[#9aa2b8]">{fa(p.businessName)}</div>}
         <div className="mt-3 flex flex-wrap gap-2">
           <ToneTag tone={st.tone}>{st.label}</ToneTag>
           <ToneTag tone={p.availableForOrders ? 'green' : 'ink'}>{p.availableForOrders ? 'آماده دریافت سفارش' : 'سفارش جدید نمی‌پذیرد'}</ToneTag>
@@ -55,9 +50,9 @@ function ProfileContent({ p }: { p: ProviderSelf }) {
       </div>
 
       <Section title="اطلاعات تماس">
-        {p.contactName && <div>مسئول: {p.contactName}</div>}
+        {p.contactName && <div>مسئول: {fa(p.contactName)}</div>}
         {p.phone && <div>تلفن: <span dir="ltr" className="inline-block font-bold">{fa(p.phone)}</span></div>}
-        {p.address && <div>{p.address}</div>}
+        {p.address && <div>{fa(p.address)}</div>}
         {!p.contactName && !p.phone && !p.address && <div>ثبت نشده است</div>}
       </Section>
 
@@ -103,21 +98,7 @@ function ProfileContent({ p }: { p: ProviderSelf }) {
 
       <InfoBanner className="mt-3">برای تغییر اطلاعات پروفایل، توانمندی‌ها یا ظرفیت با پشتیبانی دیجیتال سرو تماس بگیرید.</InfoBanner>
 
-      <Button variant="outline" size="lg" block className="mt-3" onClick={() => setConfirm(true)}>
-        <LogOut className="size-4" /> خروج از حساب
-      </Button>
-      <AlertDialog open={confirm} onOpenChange={setConfirm}>
-        <AlertDialogContent className="rounded-[26px] border-line bg-white">
-          <AlertDialogHeader>
-            <AlertDialogTitle className="text-lg font-black">خروج از حساب؟</AlertDialogTitle>
-            <AlertDialogDescription className="text-[13.5px] leading-7 text-muted-1">برای ورود دوباره کد تأیید لازم است.</AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>انصراف</AlertDialogCancel>
-            <AlertDialogAction onClick={async () => { await logout(); notify('از حساب خارج شدید') }}>خروج</AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <LogoutButton className="mt-3" />
     </>
   )
 }
