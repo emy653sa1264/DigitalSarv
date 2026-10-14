@@ -79,10 +79,10 @@ function ColorsCard() {
   )
 }
 
-/** «کتاب مدرسه / چاپ اسناد» scope of an extra (v3.3 `services`; missing = both). */
+/** «کتاب مدرسه / چاپ سیاه‌وسفید و رنگی» scope of an extra (v3.3 `services`; missing = both). */
 const EXTRA_SCOPES: { key: Extra['services'][number]; label: string }[] = [
   { key: 'school', label: 'کتاب مدرسه' },
-  { key: 'print', label: 'چاپ اسناد' },
+  { key: 'print', label: 'چاپ سیاه‌وسفید و رنگی' },
 ]
 const scopeOf = (e?: Extra): Extra['services'] => (e?.services?.length ? e.services : ['school', 'print'])
 

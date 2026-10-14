@@ -91,7 +91,7 @@ export const CMS = [
   ['hero', 'هیرو', true], ['school', 'فنری کتاب مدرسه', true],
   ['print', 'چاپ اسناد', true], ['docs', 'پایان‌نامه و صحافی', true],
   ['flyer', 'تراکت', true], ['cartridge', 'کارتریج', true], ['repair', 'تعمیر پرینتر', true],
-  ['how', 'چطور کار می‌کند', true], ['prices', 'قیمت‌ها', false],
+  ['how', 'چطور کار می‌کند', true], ['prices', 'قیمت‌ها', true],
   ['plans', 'عضویت', true], ['campaign', 'کمپین', true],
   ['faq', 'پرسش‌های پرتکرار', true], ['cta', 'فراخوان نهایی', true], ['footer', 'فوتر', true],
 ] as const;
