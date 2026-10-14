@@ -45,6 +45,8 @@ export class AdminPriceBookController {
   @Post('price-book/preview') @HttpCode(200)
   async preview(@Body() dto: PreviewVersionDto, @CurrentUser() user: AuthUser) {
     await this.book.assertCan(user.id, layerPermission(dto.layer ?? 'customer', 'view'));
+    // a provider-based formula reveals provider prices
+    if (dto.baseProviderId) await this.book.assertCan(user.id, 'provider_price_view');
     return this.book.preview(dto);
   }
 

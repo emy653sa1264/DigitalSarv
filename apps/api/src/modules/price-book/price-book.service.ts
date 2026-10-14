@@ -594,6 +594,8 @@ export class PriceBookService {
       if (customer === null) return [];
       const c = customer;
       return Object.entries(prices)
+        // changing one provider's price must not report other providers' pre-existing conflicts
+        .filter(([pid]) => layer !== 'provider' || !providerId || pid === providerId)
         .filter(([, m]) => typeof m[key] === 'number' && m[key] > c)
         .map(([pid, m]) => ({ comboKey: key, providerId: pid, providerName: names.get(pid) ?? '', providerPrice: m[key], customerPrice: c }));
     };

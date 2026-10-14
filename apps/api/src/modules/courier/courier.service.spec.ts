@@ -29,7 +29,7 @@ describe('CourierService.verify recount', () => {
     };
     const pricing = {
       context: vi.fn(async () => ({ grades: [], extras: [] })),
-      quote: vi.fn(async () => ({ quote: { total: 1, children: [{ total: 1 }] }, appliedRuleIds: [] })),
+      quote: vi.fn(async (..._args: unknown[]) => ({ quote: { total: 1, children: [{ total: 1 }] }, appliedRuleIds: [] })),
     };
     const svc = new CourierService(
       fakeModel([{ _id: courierId, userId }]) as never, fakeModel([order]) as never, fakeModel([]) as never, fakeModel([]) as never,

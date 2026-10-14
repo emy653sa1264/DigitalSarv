@@ -60,6 +60,14 @@ describe('StaffService (§81)', () => {
     expect(users.docs.find((d) => String(d._id) === String(ids.s1))).toMatchObject({ role: 'admin' });
     expect(users.docs.find((d) => String(d._id) === String(ids.s1))!.permissions).toBeUndefined();
   });
+  it('a null name is ignored (not a 500); remove revokes sessions before and after the demotion', async () => {
+    const { svc, users, sessions } = setup();
+    await expect(svc.update(String(ids.lim), { name: null as never })).resolves.toMatchObject({ name: 'کارشناس قیمت' });
+    const order: string[] = [];
+    sessions.revokeUser.mockImplementation(async () => { order.push(`revoke:${users.docs.find((u) => String(u._id) === String(ids.lim))!.role}`); });
+    await svc.remove(String(ids.lim));
+    expect(order).toEqual(['revoke:admin', 'revoke:customer']);
+  });
   it('demote revokes sessions and removes the permissions', async () => {
     const { svc, users, sessions } = setup();
     await expect(svc.remove(String(ids.lim))).resolves.toEqual({ ok: true });

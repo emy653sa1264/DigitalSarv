@@ -5,7 +5,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { ArrayMaxSize, IsArray, IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
-import { Model, Types, type UpdateQuery } from 'mongoose';
+import { Model, Types, type QueryFilter, type UpdateQuery } from 'mongoose';
 import type { AuthUser } from '../../common/auth/auth-user.js';
 import { CurrentUser, Roles } from '../../common/auth/decorators.js';
 import { JwtAuthGuard, RolesGuard } from '../../common/auth/guards.js';
@@ -85,11 +85,13 @@ export class StaffService {
         await this.users.updateOne({ _id: target._id, role: 'admin' }, { $unset: { permissions: 1 } });
       } else {
         if (!target.permissions) await this.assertAnotherSuper(target._id);
-        await this.users.updateOne({ _id: target._id, role: 'admin' }, { $set: { permissions: [...new Set(dto.permissions)] } });
-        if (!target.permissions) await this.ensureSuperRemains(target._id, { $unset: { permissions: 1 } });
+        const written = [...new Set(dto.permissions)];
+        await this.users.updateOne({ _id: target._id, role: 'admin' }, { $set: { permissions: written } });
+        // undo only while the row still holds exactly what we wrote
+        if (!target.permissions) await this.ensureSuperRemains({ _id: target._id, role: 'admin', permissions: written }, { $unset: { permissions: 1 } });
       }
     }
-    if (dto.name !== undefined) await this.users.updateOne({ _id: target._id }, { $set: { name: dto.name.trim() } });
+    if (typeof dto.name === 'string') await this.users.updateOne({ _id: target._id }, { $set: { name: dto.name.trim() } });
     return this.get(id);
   }
 
@@ -98,8 +100,10 @@ export class StaffService {
     const target = await this.find(id);
     if (this.bootstrapPhones().has(target.phone)) throw new BadRequestException(BOOTSTRAP);
     if (!target.permissions) await this.assertAnotherSuper(target._id);
+    // revoke before AND after the demotion: a token minted in between would otherwise outlive the role change
+    await this.sessions.revokeUser(String(target._id));
     await this.users.updateOne({ _id: target._id, role: 'admin' }, { $set: { role: 'customer' }, $unset: { permissions: 1 } });
-    if (!target.permissions) await this.ensureSuperRemains(target._id, { $set: { role: 'admin' } });
+    if (!target.permissions) await this.ensureSuperRemains({ _id: target._id, role: 'customer', permissions: { $exists: false } }, { $set: { role: 'admin' } });
     await this.sessions.revokeUser(String(target._id));
     return { ok: true };
   }
@@ -127,9 +131,9 @@ export class StaffService {
   }
 
   /** Two concurrent demotions can both pass the pre-check: re-count after writing and undo ours when none is left. */
-  private async ensureSuperRemains(targetId: Types.ObjectId, undo: UpdateQuery<User>) {
+  private async ensureSuperRemains(written: QueryFilter<User>, undo: UpdateQuery<User>) {
     if (await this.users.countDocuments({ role: 'admin', permissions: { $exists: false } })) return;
-    await this.users.updateOne({ _id: targetId }, undo);
+    await this.users.updateOne(written, undo);
     throw new ConflictException(LAST_SUPER);
   }
 

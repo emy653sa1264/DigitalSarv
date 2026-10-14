@@ -38,6 +38,11 @@ describe('ProvidersService', () => {
     await expect(svc.update(p.id, { phone: '123' })).rejects.toThrow(/شماره تماس/);
     expect(await svc.update(p.id, { status: 'busy', availableForOrders: false })).toMatchObject({ status: 'busy', availableForOrders: false });
   });
+  it('null optional strings never 500: a null name is 400, other nulls clear the field', async () => {
+    const { svc, id } = setup();
+    await expect(svc.update(id, { name: null as never })).rejects.toBeInstanceOf(BadRequestException);
+    expect(await svc.update(id, { address: null as never, phone: null as never })).toMatchObject({ address: '', phone: '' });
+  });
   it('links a customer phone as the provider login, revoking its old sessions', async () => {
     const { svc, users, sessions, id } = setup();
     const p = await svc.linkLogin(id, '09123456789');

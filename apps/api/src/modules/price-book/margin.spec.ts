@@ -52,6 +52,15 @@ describe('negative margin (§25)', () => {
     const res = await conflictOf(svc.create({ ...cust(0), mode: 'fixed_markup', price: undefined, markup: 200, baseProviderId: A }, by));
     expect(res).toMatchObject({ conflicts: [{ providerId: B, providerPrice: 4000, customerPrice: 3700 }] });
   });
+  it('a provider price change reports only its own provider, not other providers existing conflicts', async () => {
+    const { svc, by, A, B } = setup();
+    await svc.create(cust(4500), by);
+    await svc.create(prov(B, 5000, { confirmNegativeMargin: true }), by);
+    await expect(svc.create(prov(A, 4400), by)).resolves.toMatchObject({ status: 'active' });
+    const res = await conflictOf(svc.create(prov(A, 4600), by));
+    expect(res).toMatchObject({ code: 'NEGATIVE_MARGIN', conflicts: [{ providerId: A }] });
+    expect((res as { conflicts: unknown[] }).conflicts).toHaveLength(1);
+  });
   it('equal prices are not a negative margin', async () => {
     const { svc, by, A } = setup();
     await svc.create(prov(A, 3500), by);

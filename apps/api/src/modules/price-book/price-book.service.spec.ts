@@ -1,5 +1,5 @@
 import { Types } from 'mongoose';
-import { fakeModel } from '../../../test/fake-model.js';
+import { fakeModel, type Doc } from '../../../test/fake-model.js';
 import { PriceBookService } from './price-book.service.js';
 
 function setup() {
@@ -158,7 +158,7 @@ describe('bulk', () => {
     catalog.invalidate.mockClear();
     const real = versions.create.getMockImplementation()!;
     let calls = 0;
-    versions.create.mockImplementation(async (d: never) => { if (++calls === 2) throw new Error('boom'); return real(d); });
+    versions.create.mockImplementation(async (d: Doc) => { if (++calls === 2) throw new Error('boom'); return real(d); });
     const body = { layer: 'customer' as const, filter: { service: 'bw' as const, size: 'A4' as const }, op: 'inc_fixed' as const, value: 100, reason: 'تست' };
     await expect(svc.bulkApply(body, by)).rejects.toThrow('boom');
     const bulk = audits.docs.filter((a) => a.action === 'bulk');

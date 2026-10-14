@@ -92,7 +92,7 @@ describe.skipIf(!servicesUp)('API (e2e)', () => {
   const http = () => request(app.getHttpServer());
   beforeAll(async () => {
     // reruns within the OTP rate-limit window would 429: clear this project's OTP rate-limit keys (dev redis only)
-    const { default: Redis } = await import('ioredis');
+    const { Redis } = await import('ioredis');
     const redis = new Redis(process.env.REDIS_URL ?? 'redis://localhost:6379');
     const keys = await redis.keys('otp:rl:*');
     if (keys.length) await redis.del(...keys);

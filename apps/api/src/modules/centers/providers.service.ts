@@ -56,7 +56,7 @@ export class ProvidersService {
 
   async update(id: string, dto: ProviderDto): Promise<ProviderAdmin> {
     assertObjectId(id, 'مجری');
-    if (dto.name !== undefined && !dto.name.trim()) throw new BadRequestException('نام مجری را وارد کنید');
+    if (dto.name !== undefined && (typeof dto.name !== 'string' || !dto.name.trim())) throw new BadRequestException('نام مجری را وارد کنید');
     const fields = await this.validated(dto);
     const doc = await this.centers.findByIdAndUpdate(id, { $set: fields }, { returnDocument: 'after' });
     if (!doc) throw new NotFoundException(NOT_FOUND);
@@ -160,8 +160,10 @@ export class ProvidersService {
   private async validated(dto: ProviderDto): Promise<Record<string, unknown>> {
     const fields: Record<string, unknown> = defined({ ...dto });
     if (typeof fields.name === 'string') fields.name = fields.name.trim();
-    if (typeof dto.phone === 'string') {
-      const raw = dto.phone.trim();
+    // an explicit null on an optional string clears it (never reaches .trim()/normalize as null)
+    for (const k of ['businessName', 'contactName', 'phone', 'address', 'zone', 'adminNotes'] as const) if (fields[k] === null) fields[k] = '';
+    if (typeof fields.phone === 'string') {
+      const raw = fields.phone.trim();
       const phone = raw ? normalizePhone(raw) : '';
       if (phone === null) throw new BadRequestException('شماره تماس معتبر نیست');
       fields.phone = phone;
