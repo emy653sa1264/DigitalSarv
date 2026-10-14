@@ -99,3 +99,32 @@ describe('job units', () => {
     expect(providerServicesOf({ children: [{}], services: [{ kind: 'print', spec: { ink: 'color' } }, { kind: 'cart', spec: {} }] })).toEqual(['school', 'color_printing', 'cart']);
   });
 });
+
+describe('eligibility — fail closed and boundaries', () => {
+  const ctx = { now: NOW, orderZoneId: null };
+  it('an unknown line kind yields no eligible provider; empty capabilities is never a producer', () => {
+    const order = { services: [{ kind: 'hologram', label: 'هولوگرام', spec: {} }] };
+    expect(capable(order)).toEqual([]);
+    expect(capabilityProblems(jobRequirements(order), C.capabilities)).toEqual(['هولوگرام: نوع سرویس پشتیبانی نمی‌شود']);
+    expect(checkProvider(F, [], { sheets: 0, units: {} }, empty, ctx).assignable).toBe(false);
+    expect(checkProvider(F, jobRequirements(order), jobUnits(order), empty, ctx).assignable).toBe(false);
+  });
+  it('working hours boundaries by Tehran time', () => {
+    const h = [{ weekday: 6, from: '08:00', to: '11:00' }];
+    expect(openAt(h, new Date('2026-10-17T04:30:00Z'))).toBe(true); // 08:00
+    expect(openAt(h, new Date('2026-10-17T04:29:00Z'))).toBe(false); // 07:59
+    expect(openAt(h, new Date('2026-10-17T07:29:00Z'))).toBe(true); // 10:59
+    expect(openAt(h, NOW)).toBe(false); // 11:00 = to, closed
+    const late = new Date('2026-10-17T21:00:00Z'); // 00:30 Sunday Tehran, UTC still Saturday
+    expect(openAt([{ weekday: 0, from: '00:00', to: '01:00' }], late)).toBe(true);
+    expect(openAt([{ weekday: 6, from: '00:00', to: '23:59' }], late)).toBe(false);
+    expect(openAt([{ weekday: 5, from: '08:00', to: '20:00' }], new Date('2026-10-16T09:00:00Z'))).toBe(true); // Friday 12:30
+  });
+  it('missing size/sides/colorType fall back to A4, single, full', () => {
+    const [r] = jobRequirements({ services: [{ kind: 'color_printing', spec: { paper: 'glossy200' } }] });
+    expect(r).toMatchObject({ size: 'A4', side: 'single', colorType: 'full' });
+    const [b] = jobRequirements({ services: [{ kind: 'black_white_printing', spec: {} }] });
+    expect(b).toMatchObject({ size: 'A4', side: 'single' });
+    expect(capable({ services: [{ kind: 'color_printing', spec: { paper: 'glossy200' } }] })).toEqual(['C']);
+  });
+});

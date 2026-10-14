@@ -5,14 +5,14 @@
 import { tehranMinutes, tehranWeekday, tehranYmd } from '../../common/utils/dates.js';
 import { fa } from '../../common/utils/fa.js';
 import type { Capability, CapabilityAddon, Capacity, ProviderService, ProviderStatus, WorkingHours } from '../centers/provider-model.js';
-import type { ColorType, PrintSize, Side } from '../price-book/combo.js';
+import { PRINT_SIZES, type ColorType, type PrintSize, type Side } from '../price-book/combo.js';
 import { legacyPrintToV4 } from '../pricing/print-v4.js';
 
 export interface OrderLines {
   children?: { name?: string; books?: number }[];
   services?: { kind: string; label?: string; spec?: unknown; pricing?: { lines: { comboKey: string; quantity: number }[] } }[];
 }
-export interface LineRequirement { line: string; service: ProviderService; size?: PrintSize; side?: Side; colorType?: ColorType; paper?: string; addons: CapabilityAddon[] }
+export interface LineRequirement { line: string; /** `unknown` = an unrecognised line kind: nobody satisfies it (fail closed). */ service: ProviderService | 'unknown'; size?: PrintSize; side?: Side; colorType?: ColorType; paper?: string; addons: CapabilityAddon[] }
 
 export const SERVICE_LABEL: Record<ProviderService, string> = {
   black_white_printing: 'چاپ سیاه‌وسفید', color_printing: 'چاپ رنگی', docs: 'پایان‌نامه و صحافی', school: 'فنری کتاب مدرسه',
@@ -46,26 +46,35 @@ export function jobRequirements(order: OrderLines): LineRequirement[] {
   for (const s of order.services ?? []) {
     const { kind, spec } = v4Line(s);
     if (kind === 'black_white_printing' || kind === 'color_printing') {
+      // missing size/sides/colorType fall back to the pricing normalizer's defaults (A4, single, full)
       reqs.push({
-        line: s.label || SERVICE_LABEL[kind], service: kind, size: spec.size as PrintSize, side: spec.sides as Side,
-        ...(kind === 'color_printing' ? { colorType: spec.colorType as ColorType, paper: typeof spec.paper === 'string' ? spec.paper : '' } : {}),
+        line: s.label || SERVICE_LABEL[kind], service: kind,
+        size: (PRINT_SIZES as readonly string[]).includes(spec.size as string) ? (spec.size as PrintSize) : 'A4',
+        side: spec.sides === 'double' ? 'double' : 'single',
+        ...(kind === 'color_printing' ? { colorType: (spec.colorType === 'text' ? 'text' : 'full') as ColorType, paper: typeof spec.paper === 'string' ? spec.paper : '' } : {}),
         addons: printAddons(spec),
       });
     } else if ((OTHER as string[]).includes(kind)) {
       reqs.push({ line: s.label || SERVICE_LABEL[kind as ProviderService], service: kind as ProviderService, addons: [] });
+    } else {
+      reqs.push({ line: s.label || kind, service: 'unknown', addons: [] });
     }
   }
   return reqs;
 }
 
 export function providerServicesOf(order: OrderLines): ProviderService[] {
-  return [...new Set(jobRequirements(order).map((r) => r.service))];
+  return [...new Set(jobRequirements(order).map((r) => r.service))].filter((s): s is ProviderService => s !== 'unknown');
 }
 
 /** Persian problems, one per unmet need (empty = capable). */
 export function capabilityProblems(reqs: LineRequirement[], caps: Capability[], paperNames?: Map<string, string>): string[] {
   const out: string[] = [];
   for (const r of reqs) {
+    if (r.service === 'unknown') {
+      out.push(`${r.line}: نوع سرویس پشتیبانی نمی‌شود`);
+      continue;
+    }
     const c = caps.find((x) => x.service === r.service);
     if (!c) {
       out.push(`${r.line}: «${SERVICE_LABEL[r.service]}» در توانمندی‌های مجری نیست`);
@@ -128,6 +137,10 @@ export interface CheckResult { checks: ProviderCheck[]; eligible: boolean; assig
 
 const STATUS_MSG: Record<ProviderStatus, string> = { active: 'فعال', busy: 'مجری مشغول است', inactive: 'مجری غیرفعال است', suspended: 'مجری تعلیق شده است' };
 
+/**
+ * Capacity semantics: `capacity.dailySheets: 0` and `perService[].perDay: 0` mean "full" (a soft block, override with a reason);
+ * `capacityPerDay: 0` means "no limit" (legacy jobs/day).
+ */
 export function capacityLeft(p: Pick<ProviderFacts, 'capacity' | 'capacityPerDay'>, usage: Usage): CapacityLeft {
   const daily = p.capacity?.dailySheets;
   return {
@@ -144,6 +157,8 @@ export function checkProvider(
 ): CheckResult {
   const checks: ProviderCheck[] = [];
   const cap = capabilityProblems(reqs, p.capabilities ?? [], ctx.paperNames);
+  // a provider with no producing capability (e.g. delivery-only) never produces anything, even for an empty requirement list
+  if (!(p.capabilities ?? []).length) cap.unshift('مجری توانمندی تولیدی ندارد');
   checks.push({ key: 'capability', hard: true, ok: cap.length === 0, message: cap.length ? cap.join(' · ') : 'توانمندی‌ها با سفارش مطابقت دارد' });
   checks.push({ key: 'status', hard: p.status === 'inactive' || p.status === 'suspended', ok: p.status === 'active', message: STATUS_MSG[p.status] ?? STATUS_MSG.inactive });
   checks.push({ key: 'available', hard: false, ok: p.availableForOrders !== false, message: p.availableForOrders !== false ? 'سفارش جدید می‌پذیرد' : 'مجری فعلاً سفارش جدید نمی‌پذیرد' });
