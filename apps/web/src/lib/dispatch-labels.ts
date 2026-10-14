@@ -42,6 +42,7 @@ const DISPATCH_EVENT_LABEL: Record<Exclude<NotificationEvent, keyof typeof ORDER
 export const NOTIFICATION_EVENT_LABEL = (e: NotificationEvent): string =>
   (ORDER_STATUS_LABEL as Record<string, string>)[e] ?? (DISPATCH_EVENT_LABEL as Record<string, string>)[e] ?? e
 export const NOTIFICATION_AUDIENCE_LABEL: Record<NotificationAudience, string> = { customer: 'مشتری', provider: 'مجری', admin: 'مدیران' }
+/** Mirror of the API's `EVENT_AUDIENCE` (apps/api/src/common/constants.ts), which is the source of truth. */
 export function audienceOfEvent(e: NotificationEvent): NotificationAudience {
   if (e.startsWith('job_') && !['job_rejected', 'job_timeout', 'job_failed', 'job_late'].includes(e)) return 'provider'
   if (['job_rejected', 'job_timeout', 'job_failed', 'job_late', 'provider_unavailable'].includes(e)) return 'admin'

@@ -1,7 +1,7 @@
 import { keepPreviousData, useMutation, useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { queryClient } from '@/lib/query'
-import type { ProviderJobDetail, ProviderJobList, ProviderTab, RejectReason } from '@/lib/types'
+import type { ProviderJobDetail, ProviderJobList, ProviderJobTarget, ProviderTab, RejectReason } from '@/lib/types'
 import { providerKeys } from './api'
 
 export const pjk = {
@@ -25,7 +25,7 @@ export function useProviderJobMutations(id: string) {
   return {
     accept: useMutation({ mutationFn: () => api.post<ProviderJobDetail>(`/provider/jobs/${id}/accept`), onSuccess: done, onError }),
     reject: useMutation({ mutationFn: (b: { reasonCode: RejectReason; note?: string }) => api.post<{ ok: true }>(`/provider/jobs/${id}/reject`, b), onSuccess: done, onError }),
-    status: useMutation({ mutationFn: (b: { status: string; reasonCode?: RejectReason; note?: string }) => api.post<ProviderJobDetail | { ok: true }>(`/provider/jobs/${id}/status`, b), onSuccess: done, onError }),
+    status: useMutation({ mutationFn: (b: { status: ProviderJobTarget; reasonCode?: RejectReason; note?: string }) => api.post<ProviderJobDetail | { ok: true }>(`/provider/jobs/${id}/status`, b), onSuccess: done, onError }),
     qc: useMutation({ mutationFn: (b: { index: number; done: boolean }) => api.patch<ProviderJobDetail>(`/provider/jobs/${id}/qc`, b), onSuccess: done, onError }),
   }
 }

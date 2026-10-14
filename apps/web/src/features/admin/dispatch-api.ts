@@ -6,7 +6,7 @@ import type {
 import { ak } from './api'
 
 export interface DispatchParams {
-  tab: DispatchTab; page: number; limit: number; providerId?: string; service?: ProviderService; status?: JobStatus; priority?: JobPriority
+  tab?: DispatchTab; page: number; limit: number; providerId?: string; service?: ProviderService; status?: JobStatus; priority?: JobPriority
   deliveryMethod?: DeliveryMethod; deliveryStatus?: DeliveryStatus; from?: string; to?: string; q?: string
 }
 export interface AssignBody { providerId: string; deliveryMethod?: DeliveryMethod; deliveryProviderId?: string; pickupAt?: PickupAt; override?: boolean; reason?: string; confirmMissingPrice?: boolean }

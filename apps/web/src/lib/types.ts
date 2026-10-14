@@ -775,10 +775,11 @@ export type JobAction = 'created' | 'migrated' | 'assigned' | 'reassigned' | 'ac
 export interface JobHistoryView {
   at: string; action: JobAction; status: JobStatus; label: string; providerName?: string; deliveryProviderName?: string; byName?: string
   byRole: 'admin' | 'provider' | 'courier' | 'customer' | 'system'; reason?: string; reasonCode?: RejectReason; override?: boolean; stage?: CancelStage
+  changes?: { priority?: [string, string]; deadline?: [string, string] }
 }
 export interface AssignmentView {
   providerId: string; providerName: string; assignedByName?: string; assignedAt: string; acceptedAt?: string; rejectedAt?: string; completedAt?: string; endedAt?: string
-  reason?: string; reasonCode?: RejectReason; override?: boolean; outcome: 'pending' | 'active' | 'rejected' | 'timeout' | 'withdrawn' | 'failed' | 'cancelled' | 'completed'
+  reason?: string; reasonCode?: RejectReason; override?: boolean; overrideReason?: string; outcome: 'pending' | 'active' | 'rejected' | 'timeout' | 'withdrawn' | 'failed' | 'cancelled' | 'completed'
 }
 export interface DispatchJobDetail extends DispatchJobRow {
   homePickup: boolean; sheets: number; units: Partial<Record<ProviderService, number>>; requirements: string[]
@@ -789,16 +790,19 @@ export interface DispatchList { items: DispatchJobRow[]; total: number; page: nu
 export interface ProviderCheck { key: 'capability' | 'status' | 'available' | 'hours' | 'zone' | 'capacity' | 'delivery'; ok: boolean; hard: boolean; message: string }
 export interface EligibilityRow {
   providerId: string; name: string; businessName: string; status: ProviderStatus; current: boolean; eligible: boolean; assignable: boolean; checks: ProviderCheck[]
-  price: { subtotal: number | null; missing: string[]; lines: { label: string; unitPrice: number; quantity: number; subtotal: number }[] }
+  price: { subtotal: number | null; missing: string[]; lines: { label: string; unitPrice: number; quantity: number; subtotal: number }[] } | null
+  priced: boolean; priceMissing: string[]
   capacityLeft: { sheets: number | null; jobs: number | null; perService: { service: ProviderService; left: number }[] }
-  hourlySheets?: number; openNow: boolean | null; activeJobs: number; hasLogin: boolean; canDeliver: boolean; deliveryFee: number; allowCustomerPickup: boolean
+  hourlySheets?: number; openNow: boolean | null; activeJobs: number; hasLogin: boolean; canDeliver: boolean; deliveryFee: number | null; allowCustomerPickup: boolean
 }
-export interface Eligibility { jobId: string; requirements: string[]; eligible: EligibilityRow[]; others: EligibilityRow[]; deliveryProviders: { id: string; name: string; deliveryFee: number; zoneOk: boolean }[] }
+export interface Eligibility { jobId: string; requirements: string[]; eligible: EligibilityRow[]; others: EligibilityRow[]; deliveryProviders: { id: string; name: string; status: ProviderStatus; deliveryFee: number | null; zoneOk: boolean; reason?: string }[] }
 export interface ProviderPerformance {
   providerId: string; name: string; assigned: number; accepted: number; rejected: number; timeouts: number; failed: number
   rejectReasons: { code: RejectReason; label: string; count: number }[]; completed: number; cancelled: number; late: number
   avgResponseMinutes: number | null; avgProductionMinutes: number | null; avgDeliveryMinutes: number | null; activeJobs: number; todaySheets: number
 }
+export const PROVIDER_JOB_TARGETS = ['in_production', 'ready', 'out_for_delivery', 'ready_for_pickup', 'delivered', 'failed'] as const
+export type ProviderJobTarget = (typeof PROVIDER_JOB_TARGETS)[number]
 export interface ProviderJobView {
   id: string; orderCode: string; status: JobStatus; statusLabel: string; roles: ('production' | 'delivery')[]; priority: JobPriority; deadline: string; late: boolean
   assignedAt?: string; respondBy?: string; services: ProviderService[]; summary: string; delivery: { method: DeliveryMethod; label: string; pickupAt?: PickupAt }
