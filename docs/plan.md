@@ -38,7 +38,7 @@ The four v2 files share one prototype script (logic/pricing unchanged from v1); 
 - [x] V2-6 Integration: build all, Docker images, Playwright pass on all 4 apps (desktop + phone, mock gateway payment, PDF upload), security review (10 findings fixed), CI green on GitHub
 - [x] V4-M1 Pricing core — `docs/superpowers/plans/2026-10-14-v4-m1-pricing-core.md` (design `docs/v4-design.md`)
 - [x] V4-M2 Providers, provider prices, staff permissions, Zibal — `docs/superpowers/plans/2026-10-15-v4-m2-providers.md`
-- [ ] V4-M3 Dispatch center, provider panel, fulfillment and delivery
+- [ ] V4-M3 Dispatch center, provider panel, fulfillment and delivery — `docs/superpowers/plans/2026-10-16-v4-m3-dispatch.md`
 - [ ] V4-M4 Provider ledger and settlement
 - [ ] V4-M5 Security and regression verification (incl. a recoverable pending-wallet-credit record: the wallet credit is currently marker-then-`$inc`, logged at ERROR before the `$inc`)
 
@@ -47,3 +47,4 @@ The four v2 files share one prototype script (logic/pricing unchanged from v1); 
 Zarinpal merchant ID, Kavenegar API key + OTP template, production domain + TLS, admin phone numbers, server/VPS. Everything runs locally with `mock`/`log` drivers until then.
 - Zibal merchant ID (`ZIBAL_MERCHANT`) for production; until then `zibal` (sandbox) on staging only.
 - Confirmation of the 5 assumptions in `docs/v4-design.md`.
+- The Digital Sarv pickup points (name, address, phone, hours) for «تحویل حضوری», and the provider response timeout if not 2 hours.

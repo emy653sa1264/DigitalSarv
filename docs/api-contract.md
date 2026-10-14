@@ -828,3 +828,364 @@ negative margin against دیجیتال آرت).
 login (OTP), «قیمت‌های من», «پروفایل».
 
 **Margin check timing (v4.1).** The negative-margin check runs when a provider/customer price version is created or published, against the other layer as of that version's start time. It does not re-check scheduled future provider prices, dependent double-sided formulas, or older versions that come back into effect after an `effectiveUntil`. The provider-layer `conflicts` list only reports conflicts for the provider being changed. `GET /admin/price-book/preview` with `baseProviderId` requires `provider_price_view` (403 otherwise).
+
+## v4.2 — dispatch and fulfillment (Master Specification V4, Milestone 3)
+
+Design: `docs/v4-design.md` (D10–D12, D15, D17–D21). Everything is additive; v1–v4.1 behaviour is unchanged unless stated.
+
+### Jobs («کار» = the fulfilment of an order; D11, D18)
+
+```ts
+type JobStatus = 'unassigned' | 'assigned' | 'accepted' | 'in_production' | 'ready' | 'out_for_delivery'
+  | 'ready_for_pickup' | 'delivered' | 'completed' | 'rejected' | 'cancelled' | 'failed';
+// تخصیص‌نیافته · تخصیص‌یافته (در انتظار پاسخ) · پذیرفته‌شده · در حال تولید · آماده · در مسیر تحویل · آماده تحویل حضوری ·
+// تحویل شد · تکمیل‌شده · ردشده · لغوشده · ناموفق
+type DeliveryMethod = 'courier' | 'provider' | 'customer_pickup';   // ارسال با پیک · ارسال توسط مجری · تحویل حضوری
+type PickupAt = 'point' | 'provider';                               // Digital Sarv pickup point · the provider's shop (D17)
+type JobPriority = 'normal' | 'high' | 'urgent';                    // عادی · بالا · فوری
+type RejectReason = 'equipment_unavailable' | 'paper_unavailable' | 'capacity_full' | 'machine_problem' | 'outside_hours' | 'other';
+// تجهیزات در دسترس نیست · کاغذ موجود نیست · ظرفیت تکمیل است · دستگاه خراب است · خارج از ساعت کاری · سایر (§59)
+type CancelStage = 'before_production' | 'in_production' | 'after_production';
+```
+
+- **One job per order** (`seq: 1`, unique `{orderId, seq}`) covering every child and service line (`childIndexes`,
+  `lineIndexes`). It is created when the order is **placed**: wallet/COD orders at `POST /orders`, gateway orders when
+  the payment is verified (`pending_payment → registered`). A reconcile pass (at boot and every minute) creates any
+  missing job for orders that are not `pending_payment`/`cancelled`/`delivered` — including orders placed before v4.2:
+  an order with a v1 `centerId` becomes a job of that provider (v1 had no acceptance) with status
+  `registered|confirmed|courier_assigned|picked_up|awaiting_approval → accepted`, `preparing|binding|extras|qc → in_production`,
+  `packing → ready`, `out_for_delivery → out_for_delivery`, history action `migrated`, and **no** provider price snapshot.
+- `rejected` and `failed` are **history statuses**: the job itself returns to `unassigned` at once (D21) and the
+  provider joins `releasedProviderIds`. `attempts` counts assignments.
+- `deadline` = order `createdAt` + `dispatch.leadHours` (`dispatch.urgentLeadHours` for urgent orders); `priority`
+  starts `urgent` for urgent orders, else `normal`. Both are admin-editable.
+- `late` = now (or `readyAt`) is after `deadline` and the job is not cancelled.
+- The current production provider is mirrored into `Order.centerId` (v1 field; admins only). `deliveryProviderId`
+  (§61) is the provider that delivers when `deliveryMethod = 'provider'` (default: the production provider; may be a
+  delivery-only provider).
+
+**Job flow** (only these moves; anything else is 400 «تغییر وضعیت از «X» به «Y» مجاز نیست»):
+
+| From → To | By | Condition |
+|---|---|---|
+| unassigned → assigned | admin (`assign`) | |
+| assigned → accepted | production provider, admin on behalf | |
+| assigned → unassigned (history `rejected`) | production provider, admin on behalf | reason required |
+| assigned → unassigned (history `timeout`) | system | no answer within `dispatch.responseTimeoutMinutes` |
+| assigned/accepted/in_production → unassigned (history `unassigned`) | admin (`unassign`) | reason required |
+| assigned/accepted/in_production → assigned (other provider, history `reassigned`) | admin (`reassign`) | reason required |
+| accepted → in_production | production provider, admin | a home-pickup order must be past the courier pickup (400 «اقلام سفارش هنوز از مشتری تحویل گرفته نشده است») |
+| accepted/in_production → unassigned (history `failed`) | production provider, admin | reason required |
+| in_production → ready | production provider, admin | the order's QC checklist complete (400 «کنترل کیفیت کامل نشده است») |
+| ready → out_for_delivery | delivery provider (method `provider`), courier (method `courier`, `POST /courier/orders/:id/collected`), admin | |
+| ready → ready_for_pickup | production provider (method `customer_pickup` at `provider`), admin (any pickup) | |
+| ready → delivered | courier (method `courier`, legacy direct delivery), admin | |
+| out_for_delivery → delivered | delivery provider / courier (per method), admin | |
+| ready_for_pickup → delivered | production provider (at its shop), admin | |
+| delivered → completed | admin, system (`dispatch.autoCompleteHours` after delivery; 0 = off) | |
+| any live → cancelled | the order was cancelled | `cancel.stage` recorded (M4 compensation) |
+
+**Order status mapping (D10 — forward only, along the v1 happy path; never out of `pending_payment`,
+`awaiting_approval`, `delivered`, `cancelled`):**
+
+| Job reaches | Order moves to | Notes |
+|---|---|---|
+| `accepted` | `confirmed` (only from `registered`) | customer event `assigned` |
+| `in_production` | `preparing` (from anything earlier) | template `preparing` |
+| `ready` | `packing` | template `packing` |
+| `out_for_delivery` | `out_for_delivery` | template `out_for_delivery` |
+| `ready_for_pickup` | (stays `packing`) | customer event `ready_for_pickup` with the place appended |
+| `delivered` | `delivered` (+ COD paid, atomic) | template `delivered`; the order moves **first**, then the job |
+| `completed` | (stays `delivered`) | |
+| `cancelled` | — (the order was cancelled first) | |
+
+Reverse direction: an order cancelled anywhere cancels its live job; an order set `delivered` by the courier or the
+admin sets its job `delivered`; an admin `out_for_delivery` on an order whose job is `ready` with method `courier`
+moves the job too. The reconcile pass repairs any job whose order is already `cancelled`/`delivered`. The admin
+production board, `binding`/`extras`/`qc` and `PATCH /admin/orders/:id/status` keep working; the board items gain
+`providerName?` and `jobStatus?`.
+
+### Delivery on the order (D12, D15, D17)
+
+```ts
+interface PickupPoint { id: string; name: string; address: string; phone: string; hours: string; on: boolean }  // «محل‌های تحویل حضوری» in تنظیمات
+interface PlaceSnapshot { id: string; name: string; address: string; phone: string; hours: string; kind: 'point' | 'provider' }
+interface OrderDelivery {
+  method: DeliveryMethod;       // the customer chooses 'courier' (= «ارسال به آدرس») or 'customer_pickup'; the admin may switch courier ↔ provider
+  homePickup: boolean;          // children (school books) or cart / repair lines need the courier's home pickup
+  pickupAt?: PickupAt;          // customer_pickup only
+  pickupPoint?: PlaceSnapshot;  // the Digital Sarv point the customer chose (customer_pickup)
+  providerShop?: PlaceSnapshot; // set when the admin moves the pickup to the provider's shop (allowCustomerPickup)
+  note: string;                 // «توضیحات تحویل» (≤ 300)
+}
+```
+- `OrderDraft.delivery?: { method: 'courier' | 'customer_pickup'; pickupPointId?: string; note?: string }` (default `courier`).
+- `homePickup = children.length > 0 || some service kind ∈ {cart, repair}`. Orders saved before v4.2 read
+  `{ method: 'courier', homePickup: true, note: '' }`.
+- `POST /orders` (Persian 400s, in this order after the existing checks): homePickup → `pickup.date` + `pickup.slot`
+  required («زمان تحویل‌گیری را انتخاب کنید») and validated as v3.3; homePickup or method `courier` →
+  `pickup.address` required («آدرس تحویل‌گیری را وارد کنید» / «آدرس ارسال را وارد کنید»); `customer_pickup` →
+  `pickupPointId` must be an `on` point («محل تحویل حضوری معتبر نیست»). `pickup.phone` stays required. `PickupDto`
+  `address`, `date`, `slot` become optional at the DTO level.
+- **Quote and fees unchanged (D22):** `POST /orders/quote` and the order's `quote` are byte-identical to v4.1 for the
+  same draft — the pickup fee and delivery fee are charged exactly as today (plan / rule discounts unchanged) whatever
+  the delivery method and whether a home pickup happens; `delivery` in a draft is ignored by pricing. Clients derive
+  home pickup with the rule above (it is not part of the quote).
+- `GET /catalog` gains `pickupPoints: Omit<PickupPoint, 'on'>[]` (only `on` points, in stored order).
+
+### Customer order view
+
+`GET /orders/mine`, `GET /orders/:id`, `POST /orders`, `POST /orders/:id/cancel` for the customer **no longer contain
+`centerId`** and never `providerPricing`. They gain `delivery: OrderDelivery` and
+`fulfillment?: { status: JobStatus; label: string; place?: PlaceSnapshot }` (labels: در صف تولید · تأیید شد · در حال
+تولید · آماده شد · آماده تحویل حضوری · در مسیر تحویل · تحویل شد · لغو شد; `place` = the provider shop when
+`pickupAt = 'provider'`, else the chosen point). Admin and courier views are unchanged.
+
+### Provider price snapshot at assignment (§40, §52–53, §66)
+
+```ts
+interface ProviderPricingLine { serviceIndex: number; comboKey: string; label: string; versionId: string; version: number;
+  unitPrice: number /* provider_unit_price */; quantity: number; subtotal: number }
+interface ProviderPricingMissing { serviceIndex?: number; childIndex?: number; comboKey: string | null; label: string }
+interface ProviderPricingSnapshot {
+  providerId: string;             // provider_id
+  snapshotAt: string; currency: 'toman';
+  lines: ProviderPricingLine[];   // provider_price_version = versionId + version per line
+  missing: ProviderPricingMissing[];
+  providerSubtotal: number | null;            // provider_subtotal; null when anything is missing
+  delivery: { providerId: string; fee: number } | null;   // method 'provider'
+  payoutBasis: number | null;     // provider_payout_basis = providerSubtotal + delivery.fee when the production provider delivers (M4 reads it)
+  confirmedMissing: boolean;
+}
+```
+- Provider price of a job = Σ over every customer price-book line (`bw|`, `color|`, `spiral|`, `addon|`) of the
+  provider's **effective** unit price at assignment × the line quantity. Children (school binding), services without
+  price-book lines (flyer, cartridge, repair, hardcover docs) and non-price-book lines (`extra|…`, `spiral_color|…`,
+  `docs_print`) are **missing** («قیمت مجری تنظیم نشده»), never 0 (§53).
+- Stored on `Order.providerPricing` (never serialized to customers or couriers) and `Job.providerPricing`; every
+  snapshot of the job is kept in `Job.pricingHistory`. The customer snapshot is never rewritten.
+
+### Eligibility (§51–54)
+
+`checks` per provider (every provider is listed — eligible ones first; the server never sorts by price):
+
+| key | hard? | ok when |
+|---|---|---|
+| `capability` | **always hard** | every line matches a capability: school → `school`; docs/flyer/cart/repair → that service; B/W and colour → size, side, (colour) colour type + paper, add-ons (spiral, glue, hardcover, staple, lam_cover, lam_sheet, mixed). Legacy `print` lines are read as their v4 kind. |
+| `status` | hard for `inactive`/`suspended`, soft for `busy` | `active` |
+| `available` | soft | `availableForOrders` |
+| `hours` | soft | open now (Tehran) by `workingHours`; no hours = ok («ساعت کاری ثبت نشده است») |
+| `zone` | soft | no `serviceZoneIds` = all zones; order zone unknown = ok; else the order's zone (by name) is served |
+| `capacity` | soft | today's (Tehran, by `assignment.assignedAt`) usage + this job ≤ `capacity.dailySheets` (B/W + colour sheets × copies), ≤ `capacityPerDay` jobs (v1 field, 0 = off), ≤ each `capacity.perService` (units: print = sheets, school = books, docs = copies, flyer = quantity, cart = cartridges, repair = devices) |
+| `delivery` | hard | only when the requested method is `provider` and this provider would deliver: `canDeliver` and `active` |
+
+`hourlySheets` and equipment are shown, not checked. `eligible` = every check ok; `assignable` = no hard check failed.
+
+### Admin endpoints (`/admin/dispatch`, role admin)
+
+| Method | Path | Permission | Body / query → response |
+|---|---|---|---|
+| GET | `/admin/dispatch/jobs?tab=&providerId=&service=&status=&priority=&deliveryMethod=&deliveryStatus=&from=&to=&q=&page=&limit=` | `dispatch_view` | `{ items: DispatchJobRow[], total, page, limit, counts: Record<DispatchTab, number> }` |
+| GET | `/admin/dispatch/jobs/:id` | `dispatch_view` | `DispatchJobDetail` (`:id` = job id **or** order id) |
+| GET | `/admin/dispatch/jobs/:id/eligibility?deliveryMethod=` | `dispatch_view` | `Eligibility` |
+| POST | `/admin/dispatch/jobs/:id/assign` | `dispatch_assign` | `AssignJobBody` → `DispatchJobDetail` |
+| POST | `/admin/dispatch/jobs/:id/reassign` | `dispatch_reassign` | `AssignJobBody & { reason }` → `DispatchJobDetail` |
+| POST | `/admin/dispatch/jobs/:id/unassign` | `dispatch_reassign` | `{ reason }` → `DispatchJobDetail` |
+| PATCH | `/admin/dispatch/jobs/:id/delivery` | `dispatch_assign` | `{ deliveryMethod?, deliveryProviderId?, pickupAt?, reason? }` → `DispatchJobDetail` (until `ready`) |
+| PATCH | `/admin/dispatch/jobs/:id` | `dispatch_assign` | `{ priority?, deadline? (ISO) }` → `DispatchJobDetail` |
+| POST | `/admin/dispatch/jobs/:id/respond` | `provider_order_accept` | `{ accept: boolean, reasonCode?, reason }` (on behalf of the provider) → `DispatchJobDetail` |
+| POST | `/admin/dispatch/jobs/:id/status` | `provider_order_status` | `{ status: 'in_production'\|'ready'\|'out_for_delivery'\|'ready_for_pickup'\|'delivered'\|'completed'\|'failed', reason, reasonCode? }` → `DispatchJobDetail` |
+| GET | `/admin/dispatch/performance?from=&to=` | `provider_order_view` | `ProviderPerformance[]` (`yyyy-mm-dd` Tehran; default the last 30 days) |
+
+```ts
+type DispatchTab = 'new' | 'unassigned' | 'assigned' | 'in_progress' | 'ready' | 'delivery' | 'completed' | 'cancelled';
+// سفارش‌های جدید (unassigned, never assigned) · تخصیص‌نیافته (unassigned) · تخصیص‌یافته (assigned) · در حال انجام (accepted, in_production)
+// · آماده (ready) · تحویل (out_for_delivery, ready_for_pickup, delivered) · تکمیل‌شده · لغوشده (§55)
+type DeliveryStatus = 'pending' | 'ready' | 'on_the_way' | 'done';   // before ready · ready · out_for_delivery/ready_for_pickup · delivered/completed
+interface AssignJobBody {
+  providerId: string; deliveryMethod?: DeliveryMethod; deliveryProviderId?: string; pickupAt?: PickupAt;
+  override?: boolean; reason?: string; confirmMissingPrice?: boolean;
+}
+interface DispatchJobRow {
+  id: string; orderId: string; orderCode: string; customerName: string; zone?: string; services: ProviderService[]; summary: string;
+  status: JobStatus; orderStatus: OrderStatus; priority: JobPriority; deadline: string; late: boolean; attempts: number;
+  provider: { id: string; name: string } | null; deliveryProvider: { id: string; name: string } | null;
+  deliveryMethod: DeliveryMethod; pickupAt?: PickupAt; respondBy?: string;
+  lastException?: { kind: 'rejected' | 'timeout' | 'failed' | 'unassigned'; reason: string; providerName: string; at: string };
+  createdAt: string;
+}
+type JobAction = 'created' | 'migrated' | 'assigned' | 'reassigned' | 'accepted' | 'rejected' | 'timeout' | 'unassigned' | 'status'
+  | 'failed' | 'delivery_changed' | 'updated' | 'cancelled' | 'completed';
+interface JobHistoryView { at: string; action: JobAction; status: JobStatus; label: string; providerName?: string; deliveryProviderName?: string;
+  byName?: string; byRole: 'admin' | 'provider' | 'courier' | 'customer' | 'system'; reason?: string; reasonCode?: RejectReason; override?: boolean; stage?: CancelStage }
+interface AssignmentView { providerId: string; providerName: string; assignedByName?: string; assignedAt: string; acceptedAt?: string;
+  rejectedAt?: string; completedAt?: string; endedAt?: string; reason?: string; reasonCode?: RejectReason; override?: boolean;
+  outcome: 'pending' | 'active' | 'rejected' | 'timeout' | 'withdrawn' | 'failed' | 'cancelled' | 'completed' }   // §75
+interface DispatchJobDetail extends DispatchJobRow {
+  homePickup: boolean; sheets: number; units: Partial<Record<ProviderService, number>>; requirements: string[];
+  order: { status: OrderStatus; urgent: boolean; payMethod: PayMethod; paid: boolean; total: number; delivery: OrderDelivery;
+    pickup: { address: string; phone: string; date?: string; slot?: string }; qcDone: boolean; courierId?: string };
+  providerPricing: ProviderPricingSnapshot | null; history: JobHistoryView[]; assignments: AssignmentView[];
+  cancel?: { at: string; stage: CancelStage; providerName?: string };
+}
+interface ProviderCheck { key: 'capability' | 'status' | 'available' | 'hours' | 'zone' | 'capacity' | 'delivery'; ok: boolean; hard: boolean; message: string }
+interface EligibilityRow {
+  providerId: string; name: string; businessName: string; status: ProviderStatus; current: boolean;
+  eligible: boolean; assignable: boolean; checks: ProviderCheck[];
+  price: { subtotal: number | null; missing: string[]; lines: { label: string; unitPrice: number; quantity: number; subtotal: number }[] };
+  capacityLeft: { sheets: number | null; jobs: number | null; perService: { service: ProviderService; left: number }[] };
+  hourlySheets?: number; openNow: boolean | null; activeJobs: number; hasLogin: boolean;
+  canDeliver: boolean; deliveryFee: number; allowCustomerPickup: boolean;
+}
+interface Eligibility { jobId: string; requirements: string[]; eligible: EligibilityRow[]; others: EligibilityRow[];
+  deliveryProviders: { id: string; name: string; deliveryFee: number; zoneOk: boolean }[] }
+interface ProviderPerformance {
+  providerId: string; name: string; assigned: number; accepted: number; rejected: number; timeouts: number; failed: number;
+  rejectReasons: { code: RejectReason; label: string; count: number }[]; completed: number; cancelled: number; late: number;
+  avgResponseMinutes: number | null; avgProductionMinutes: number | null; avgDeliveryMinutes: number | null;
+  activeJobs: number; todaySheets: number;
+}   // §67 — collected and shown to admins only; never used to penalize
+```
+
+Errors (Persian):
+- 404 «سفارش یافت نشد» (unknown job / order), 404 «مجری یافت نشد».
+- 400 «این سفارش لغو یا تحویل شده است» · 400 «این سفارش هنوز پرداخت نشده است».
+- 409 «این سفارش قبلاً تخصیص داده شده است؛ برای تغییر مجری از «تغییر مجری» استفاده کنید» (assign when not `unassigned`).
+- 400 «این سفارش در وضعیتی نیست که بتوان مجری آن را تغییر داد» (reassign/unassign outside assigned/accepted/in_production).
+- 400 «این سفارش هم‌اکنون به همین مجری سپرده شده است».
+- 400 `{ statusCode: 400, code: 'NOT_CAPABLE', message: 'این مجری توانایی انجام این سفارش را ندارد', problems: string[] }` — never overridable (§86).
+- 409 `{ statusCode: 409, code: 'PROVIDER_NOT_ELIGIBLE', message: 'این مجری شرایط دریافت سفارش را ندارد؛ برای تخصیص با وجود این شرایط دلیل را بنویسید', problems: string[] }` → resend with `override: true` + `reason` (400 «دلیل نادیده‌گرفتن شرایط را بنویسید»).
+- 409 `{ statusCode: 409, code: 'PROVIDER_PRICE_MISSING', message: 'قیمت مجری تنظیم نشده', missing: string[] }` → resend with `confirmMissingPrice: true`.
+- 400 «دلیل را بنویسید» (reassign, unassign, respond, status).
+- 400 «مجری تحویل باید فعال باشد و امکان ارسال داشته باشد» · 400 «تحویل حضوری در محل این مجری مجاز نیست» ·
+  400 «روش تحویل انتخابی مشتری (ارسال یا تحویل حضوری) تغییر نمی‌کند» · 400 «روش تحویل این سفارش دیگر قابل تغییر نیست» (after `ready`).
+- 409 «وضعیت سفارش هم‌زمان تغییر کرد؛ دوباره تلاش کنید» (any lost compare-and-set).
+
+`PATCH /admin/orders/:id/assign { centerId }` (v1) delegates: a provider id → `assign` (or `reassign` with reason
+«تغییر از صفحه سفارش» when held) under the same checks and permissions (`dispatch_assign` / `dispatch_reassign`, 403
+«به این بخش دسترسی ندارید»); `centerId: null` → `unassign` with reason «لغو از صفحه سفارش». `courierId` keeps v1
+behaviour, except that assigning a courier to an order without home pickup does not add `confirmed`/`courier_assigned`.
+
+### Provider endpoints (`/provider/jobs`, role provider, `ProviderScopeGuard`)
+
+| Method | Path | Body → response |
+|---|---|---|
+| GET | `/provider/jobs?tab=&page=&limit=` | `{ items: (ProviderJobView \| ProviderWithdrawnView)[], total, page, limit, counts: Record<ProviderTab, number> }` |
+| GET | `/provider/jobs/:id` | `ProviderJobDetail` (the first open of an `assigned` job sets `assignment.seenAt`) |
+| POST | `/provider/jobs/:id/accept` | → `ProviderJobDetail` |
+| POST | `/provider/jobs/:id/reject` | `{ reasonCode: RejectReason, note? }` (note required for `other`: 400 «برای «سایر» توضیح بنویسید») → `{ ok: true }` |
+| POST | `/provider/jobs/:id/status` | `{ status: 'in_production'\|'ready'\|'out_for_delivery'\|'ready_for_pickup'\|'delivered'\|'failed', reasonCode?, note? }` → `ProviderJobDetail` (`failed` needs `reasonCode`; then `{ ok: true }`) |
+| PATCH | `/provider/jobs/:id/qc` | `{ index, done }` → `ProviderJobDetail` (production provider, while `accepted`/`in_production`) |
+
+```ts
+type ProviderTab = 'new' | 'pending' | 'accepted' | 'in_production' | 'ready' | 'delivery' | 'completed' | 'cancelled';
+// سفارش‌های جدید (assigned, unopened) · در انتظار پاسخ (assigned, opened) · پذیرفته‌شده · در حال تولید · آماده (ready, ready_for_pickup)
+// · تحویل (out_for_delivery; a delivery provider's ready jobs too) · تکمیل‌شده (delivered, completed) · لغوشده (§57)
+interface ProviderJobView {
+  id: string; orderCode: string; status: JobStatus; statusLabel: string; roles: ('production' | 'delivery')[];
+  priority: JobPriority; deadline: string; late: boolean; assignedAt?: string; respondBy?: string;
+  services: ProviderService[]; summary: string; delivery: { method: DeliveryMethod; label: string; pickupAt?: PickupAt };
+  providerSubtotal: number | null;   // the caller's own snapshot (production role); never customer prices
+}
+interface ProviderWithdrawnView { id: string; orderCode: string; withdrawn: true; at: string; label: string }   // only the code + time
+interface ProviderJobLine { kind: 'child' | 'service'; label: string; detail: string; quantity: number;
+  options: Record<string, string | number | boolean>; childName?: string; note?: string }
+interface ProviderJobDetail extends ProviderJobView {
+  lines: ProviderJobLine[];             // production role (§57: service, options, quantity, paper, size, colour, side, binding)
+  files: Upload[];                      // production role: the order's line files (never courier pickup photos)
+  qc: { labels: string[]; done: boolean[] } | null;     // production role
+  pricing: { lines: { label: string; unitPrice: number; quantity: number; subtotal: number }[]; missing: string[]; subtotal: number | null } | null;
+  contact: { name: string; phone: string; address: string; note: string } | null;  // delivery role, or production role handing over at its shop (§62)
+  collectFrom: { name: string; address: string; phone: string } | null;           // delivery-only role: where to collect
+  homePickup: boolean; itemsReceived: boolean;   // false while a home-pickup order is not collected yet
+  history: { at: string; status: JobStatus; label: string; note?: string }[];      // the caller's own events only
+}
+```
+- A job is the caller's when `providerId` = caller (production) or `deliveryProviderId` = caller and status ∈
+  `ready, out_for_delivery, delivered, completed` (delivery). Anything else — another provider's job, a job taken
+  away, an unknown id — answers **404 «سفارش یافت نشد»**.
+- `accept`/`reject` only while `assigned` (400 «این سفارش منتظر پاسخ شما نیست»); reject requires a `reasonCode`
+  (400 «دلیل رد را انتخاب کنید»).
+- Provider responses never contain customer prices, the quote, `chargedAmount`, margins, other providers' prices or
+  names (except `collectFrom` for a delivery-only provider), admin names, admin notes or other history.
+
+### Courier additions
+
+- `CourierTask` gains `from?: { name; address; phone }` (delivery task of a `courier` job that is `ready` at the
+  provider — collect it there) and `dropoff?: { name; address; phone }` (pickup task of an order whose job has a
+  provider — bring the items there). Pickup tasks exist only for orders with `homePickup`. Delivery tasks also list
+  `packing` orders whose job is `ready` with method `courier`.
+- `POST /courier/orders/:id/collected` → `Order` — the courier took the parcel at the provider: job `ready →
+  out_for_delivery`, order `packing → out_for_delivery` (400 «این سفارش هنوز آماده تحویل نیست» otherwise).
+- `POST /courier/orders/:id/delivered` additionally sets the job `delivered`.
+
+### Files (§65)
+
+`GET /uploads/:id` for role `provider`: allowed only for the linked provider of a job that references the upload's
+order, with job `providerId` = caller and status ∈ `assigned, accepted, in_production, ready, ready_for_pickup`, and
+never for `pickup`-purpose uploads (courier photos). Otherwise 403 «به این فایل دسترسی ندارید».
+
+### Notifications (§68, D19)
+
+- `NotificationTemplate.event` and `UserNotification.event` accept `NotificationEvent = OrderStatus | DispatchEvent`:
+  provider — `job_assigned` «سفارش جدیدی به شما سپرده شد؛ لطفاً بررسی و پاسخ دهید.», `job_delivery_assigned`
+  «ارسال یک سفارش به شما سپرده شد.», `job_withdrawn` «تخصیص این سفارش به شما لغو شد.», `job_cancelled` «این سفارش لغو
+  شد؛ کار روی آن را متوقف کنید.», `job_changed` «جزئیات این سفارش (تحویل یا مهلت) تغییر کرد.», `job_deadline` «مهلت
+  انجام این سفارش نزدیک است.»; admin — `job_rejected` «مجری سفارش را رد کرد؛ سفارش به تخصیص‌نیافته‌ها برگشت.»,
+  `job_timeout` «مجری در مهلت پاسخ نداد؛ سفارش به تخصیص‌نیافته‌ها برگشت.», `job_failed` «مجری اعلام کرد سفارش قابل
+  انجام نیست؛ سفارش به تخصیص‌نیافته‌ها برگشت.», `job_late` «مهلت سفارش گذشته و هنوز آماده نشده است.»,
+  `provider_unavailable` «مجری این سفارش در دسترس نیست؛ تخصیص را بررسی کنید.»; customer — `assigned` «سفارش شما به
+  واحد تولید سپرده شد.», `ready_for_pickup` «سفارش شما آماده تحویل حضوری است.» (the place is appended:
+  « — <name>، <address>»). Customer «received / in production / ready / out for delivery / completed» reuse the
+  `registered`, `preparing`, `packing`, `out_for_delivery`, `delivered` templates. `seed:base` inserts the missing
+  templates (`on: true`).
+- `UserNotification` gains `audience: 'customer' | 'provider' | 'admin'` (absent = customer), `url: string`, `jobId?`.
+  Provider rows: url `/provider/jobs/<jobId>`, push title «سرو مجری»; admin rows (every admin with `dispatch_view`, or
+  a super-admin): url `/admin/dispatch?job=<jobId>`, push title «دیجیتال سرو · مدیریت». Customer rows unchanged.
+- `GET /notifications/mine`, `POST /notifications/mine/read`, `POST /notifications/push/subscribe|unsubscribe` accept
+  roles `customer`, `provider`, `admin`; each role sees only its own audience. SMS stays OTP-only.
+- Alerts are sent once per job and cause: `deadlineNotifiedAt`, `lateAlertedAt`, `unavailableAlertedAt` guard them.
+- Admin «اعلان‌ها» lists and edits every template, grouped by audience.
+
+### Settings («تنظیمات»)
+
+```ts
+interface DispatchSettings {
+  responseTimeoutMinutes: number;   // 10..1440, default 120 (D21)
+  leadHours: number;                // 1..720, default 48
+  urgentLeadHours: number;          // 1..720, default 24
+  deadlineReminderMinutes: number;  // 0..1440, default 120 (0 = no reminder)
+  autoCompleteHours: number;        // 0..720, default 24 (0 = admins complete by hand)
+}
+```
+`GET /admin/settings` / `PUT /admin/settings` gain `dispatch: DispatchSettings` and `pickupPoints: PickupPoint[]`
+(≤ 30; replaced as a whole; a point without `id` (an empty id counts as absent) gets one; 400 «شناسه محل تحویل تکراری است», «نام محل تحویل را
+وارد کنید», «آدرس محل تحویل را وارد کنید», «شماره تماس محل تحویل معتبر نیست»). A timeout change applies to
+assignments made afterwards.
+
+### Permissions (§81)
+
+`dispatch_view` (dispatch center, eligibility, admin alerts), `dispatch_assign` (assign, delivery, priority, deadline),
+`dispatch_reassign` (reassign, unassign), `provider_order_view` (provider performance and workload),
+`provider_order_accept` (accept/reject on behalf of a provider), `provider_order_status` (production/delivery status
+and completion on behalf of a provider) — all admin permissions, shown in «کارکنان و دسترسی‌ها».
+
+### M4 reads (no money in M3)
+
+`Order.providerPricing.payoutBasis` (+ `delivery.fee` of a separate delivery provider), `Job.deliveredAt`,
+`Job.cancel.stage` (`before_production` → no provider credit; `in_production`/`after_production` → admin decides) and
+the `stage` on `reassigned`/`unassigned`/`failed` history entries (the previous provider's stage).
+
+### Seed (dev)
+
+Demo `seed`: «چاپ نگین» also does school binding and docs and allows pickup at its shop; «پرینت لند» = colour A3/A4 on
+تحریر ۸۰; «کپی‌سنتر پارس» = delivery-only (`canDeliver`, no capabilities); one pickup point «دفتر مرکزی دیجیتال
+سرو»; چاپ نگین's provider price for `color|A4|full|glossy200|single`. Jobs of the demo orders are created by the
+reconcile pass when the API starts.
+
+### Admin menu and apps
+
+Admin: «مرکز تخصیص سفارش» (`/admin/dispatch`, after «سفارش‌ها»; tabs + «عملکرد مجریان»; alerts bell). Provider app:
+«سفارش‌ها» becomes the home tab (`/provider` → jobs, `/provider/jobs/:id`), «قیمت‌ها» moves to `/provider/prices`,
+new «اعلان‌ها» (`/provider/notifications`, browser push toggle). Customer: «روش و آدرس تحویل» step for orders without
+home pickup; the track screen shows `fulfillment` and the pickup place. Courier: «دریافت از مجری» step.
