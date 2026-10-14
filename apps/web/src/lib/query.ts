@@ -7,7 +7,13 @@ import { useAuth } from '@/stores/auth'
 export const queryClient = new QueryClient({
   // Every failed mutation surfaces its (Persian) server message as a toast.
   mutationCache: new MutationCache({
-    onError: (error) => toast.error(error instanceof Error ? error.message : 'خطای ناشناخته'),
+    // A mutation may opt out for specific server error codes (`meta: { quietCodes: ['PRICE_CHANGED'] }`) it handles in its own UI.
+    onError: (error, _vars, _ctx, mutation) => {
+      const quiet = mutation.meta?.quietCodes
+      const code = error instanceof ApiError ? (error.data as { code?: string } | undefined)?.code : undefined
+      if (code && Array.isArray(quiet) && quiet.includes(code)) return
+      toast.error(error instanceof Error ? error.message : 'خطای ناشناخته')
+    },
   }),
   defaultOptions: {
     queries: {

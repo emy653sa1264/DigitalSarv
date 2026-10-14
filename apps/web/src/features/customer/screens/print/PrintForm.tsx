@@ -56,7 +56,9 @@ export function PrintForm({ kind }: { kind: Kind }) {
   }
 
   const papers = (catalog.data?.papers ?? []).filter((p) => p.colorPrint)
-  const paper = papers.find((p) => p.key === spec.paper) ?? papers[0]
+  // An edited saved line whose paper is now off/unknown keeps its key (shown «ناموجود», CTA disabled) instead of silently swapping.
+  const paperGone = isColor && isEditing && !!catalog.data && !!spec.paper && !papers.some((p) => p.key === spec.paper)
+  const paper = papers.find((p) => p.key === spec.paper) ?? (paperGone ? undefined : papers[0])
   const paperTypes = [...new Set(papers.map((p) => p.type))]
   const colors = catalog.data?.colors ?? []
   const spiralColor = colors.find((c) => c.key === spec.spiralColor) ?? colors[0]
@@ -111,7 +113,7 @@ export function PrintForm({ kind }: { kind: Kind }) {
     from: isRange ? from : undefined,
     to: isRange ? to : undefined,
     copies: Math.max(1, spec.copies),
-    paper: paper?.key ?? '',
+    paper: paper?.key ?? (paperGone ? spec.paper : ''),
     binding,
     spiralColor: binding === 'spiral' ? spiralColor?.key : undefined,
     staple: stapleAllowed && spec.staple,
@@ -234,6 +236,7 @@ export function PrintForm({ kind }: { kind: Kind }) {
               </Chip>
             ))}
           </div>
+          {paperGone && <div className="mt-2 rounded-2xl bg-pink-soft px-3.5 py-3 text-[12.5px] font-bold text-pink-ink">کاغذ انتخاب‌شده ناموجود است؛ کاغذ دیگری انتخاب کنید.</div>}
           <span className={cn(subLabel, 'mt-3.5')}>گرماژ</span>
           <div className="flex flex-wrap gap-2">
             {papers.filter((p) => p.type === paper?.type).map((p) => {
@@ -358,7 +361,7 @@ export function PrintForm({ kind }: { kind: Kind }) {
       <TotalsPanel className="mt-3.5" meta={`${fa(pagesN)} صفحه · ${fa(sheets)} برگ × ${fa(normalized.copies)} نسخه`}
         metaEnd={[spec.size, SIDES_LABEL[spec.sides], isColor ? COLOR_LABEL[spec.colorType] : '', isColor ? paper?.name : ''].filter(Boolean).join(' · ')}
         label={`هزینه ${title}`} amount={row ? (row.unavailable ? 'ناموجود' : money(row.price)) : quote.isError ? '—' : '…'} />
-      <CtaButton tone={tone} className="mt-3" disabled={!row || !!row.unavailable}
+      <CtaButton tone={tone} className="mt-3" disabled={!row || !!row.unavailable || paperGone}
         onClick={() => (uploader.busy ? notify('صبر کنید تا بارگذاری فایل تمام شود') : save((isColor ? normalized : bwSpec) as never))}>
         {isEditing ? `ذخیره تغییرات ${title}` : `افزودن ${title} به سفارش`}
       </CtaButton>

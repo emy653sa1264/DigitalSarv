@@ -48,6 +48,8 @@ export function PayScreen() {
 
   const submit = (expectedTotal: number | undefined = shownTotal) => {
     if (empty) return notify('سفارش شما خالی است')
+    // never send an order without the total the customer saw: the server's stale-price guard needs it
+    if (expectedTotal === undefined) return notify('قیمت سفارش هنوز محاسبه نشده است')
     const p = pickup
     if (!p.address.trim() || !p.phone || !p.date || !p.slot) {
       notify('ابتدا زمان و آدرس تحویل‌گیری را تعیین کنید')
@@ -174,7 +176,7 @@ export function PayScreen() {
           />
         </>
       )}
-      <CtaButton className="mt-[13px]" disabled={(empty && !leaving) || createOrder.isPending || leaving} onClick={() => submit()}>
+      <CtaButton className="mt-[13px]" disabled={(empty && !leaving) || createOrder.isPending || leaving || !quote.data || quote.isError} onClick={() => submit()}>
         {leaving
           ? 'در حال انتقال به درگاه پرداخت…'
           : createOrder.isPending

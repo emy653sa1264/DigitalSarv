@@ -652,6 +652,8 @@ export interface MatrixRow {
   label: string
   current: PriceVersionView | null
   next: PriceVersionView | null
+  /** false = this combination has never been priced («بدون قیمت») */
+  hasVersions: boolean
 }
 export type BulkOp = 'inc_pct' | 'dec_pct' | 'inc_fixed' | 'dec_fixed' | 'replace'
 export interface BulkBody {

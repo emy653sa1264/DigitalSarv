@@ -26,7 +26,7 @@ const WEEKDAYS: { day: number; label: string }[] = [
 type ChecklistTab = QcListKey | 'pickup'
 const CHECKLIST_TABS: { key: ChecklistTab; label: string }[] = [
   { key: 'school', label: 'فنری کتاب' },
-  { key: 'print', label: 'چاپ اسناد' },
+  { key: 'print', label: 'چاپ سیاه‌وسفید و رنگی' },
   { key: 'docs', label: 'پایان‌نامه' },
   { key: 'flyer', label: 'تراکت' },
   { key: 'cart', label: 'کارتریج' },

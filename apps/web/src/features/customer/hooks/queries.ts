@@ -84,6 +84,8 @@ export function useOrder(id: string | undefined) {
 export function useCreateOrder() {
   return useMutation({
     mutationFn: (draft: OrderDraft) => api.post<CreatedOrder>('/orders', draft),
+    // the pay screen shows its own price-changed dialog
+    meta: { quietCodes: ['PRICE_CHANGED'] },
     onSuccess: (order) => {
       queryClient.setQueryData(customerKeys.order(order.id), order)
       void queryClient.invalidateQueries({ queryKey: customerKeys.orders })

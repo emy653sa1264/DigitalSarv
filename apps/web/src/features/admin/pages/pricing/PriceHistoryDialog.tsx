@@ -60,7 +60,7 @@ function VersionItem({ v }: { v: PriceVersionView }) {
       { id: v.id, reason: reason.trim() },
       {
         onSuccess: () => {
-          notify(ACTION_DONE[action])
+          notify(action === 'disable' && v.status === 'scheduled' ? 'زمان‌بندی لغو شد' : ACTION_DONE[action])
           setAction(null)
           setReason('')
         },
@@ -96,14 +96,14 @@ function VersionItem({ v }: { v: PriceVersionView }) {
         <div className="mt-2 flex flex-wrap gap-2">
           {actions.map((a) => (
             <Button key={a} type="button" size="sm" variant={a === 'disable' ? 'destructive' : 'outline'} onClick={() => setAction(a)}>
-              {ACTION_LABEL[a]}
+              {a === 'disable' && v.status === 'scheduled' ? 'لغو زمان‌بندی' : ACTION_LABEL[a]}
             </Button>
           ))}
         </div>
       )}
       {action && (
         <div className="mt-2.5 grid gap-2 rounded-[16px] bg-shell p-3">
-          <div className="text-[12.5px] font-extrabold">{ACTION_LABEL[action]} — دلیل را بنویسید</div>
+          <div className="text-[12.5px] font-extrabold">{action === 'disable' && v.status === 'scheduled' ? 'لغو زمان‌بندی' : ACTION_LABEL[action]} — دلیل را بنویسید</div>
           <Textarea value={reason} onChange={(e) => setReason(e.target.value)} className="min-h-[64px]" aria-label="دلیل" />
           <div className="flex gap-2">
             <Button type="button" size="sm" onClick={confirm} disabled={pending}>

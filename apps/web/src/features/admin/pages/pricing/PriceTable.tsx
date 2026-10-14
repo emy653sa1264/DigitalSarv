@@ -63,7 +63,7 @@ export function PriceTable({ rows, onEdit, onHistory }: { rows: MatrixRow[]; onE
             )}
             <span>
               <Tag bg={t.soft} fg={t.ink}>
-                {STATUS_LABEL[status]}
+                {row.hasVersions ? STATUS_LABEL[status] : 'بدون قیمت'}
               </Tag>
             </span>
             <div className="flex items-center gap-2">

@@ -1,6 +1,6 @@
 import { Chip } from '@/components/brand'
 import { notify, toast } from '@/components/ui/sonner'
-import { fa, money } from '@/lib/format'
+import { fa, money, toNum } from '@/lib/format'
 import { useState } from 'react'
 import type { Extra, Paper, PrintSize } from '@/lib/types'
 import {
@@ -17,7 +17,7 @@ import {
   usePapers,
 } from '../api'
 import { CatalogCard, type CatalogItem } from '../components/CatalogCard'
-import { AdminSelect, NumInput } from '../components/controls'
+import { AdminSelect, NumInput, RowInput } from '../components/controls'
 import { PageHeader } from '../components/kit'
 
 const bySort = <T extends { sort: number }>(a: T, b: T) => (a.sort ?? 0) - (b.sort ?? 0)
@@ -210,7 +210,9 @@ const PAPER_SIZES: PrintSize[] = ['A3', 'A4', 'A5', 'A6']
 function PaperFields({ paper }: { paper: Paper }) {
   const m = usePaperMutations()
   const [weight, setWeight] = useState(paper.weight)
-  const [cost, setCost] = useState(paper.paperCost ?? 0)
+  const costText = (c?: number) => (c === undefined || c === null ? '' : fa(c))
+  // empty = unset (null); an explicit 0 is a real value
+  const [cost, setCost] = useState(costText(paper.paperCost))
   const saved = () => notify('تغییرات ذخیره شد')
   const patch = (body: Partial<PaperBody>) =>
     m.update.mutate({ id: paper.id, ...body }, { onSuccess: saved })
@@ -233,7 +235,7 @@ function PaperFields({ paper }: { paper: Paper }) {
         </label>
         <label className="flex items-center gap-1.5 text-[12px] font-bold text-muted-1">
           هزینه کاغذ (تومان، اختیاری)
-          <NumInput aria-label="هزینه کاغذ" value={cost} onValueChange={setCost} onBlur={() => cost !== (paper.paperCost ?? 0) && patch({ paperCost: cost > 0 ? cost : null })} className="w-[96px] py-1.5" />
+          <RowInput aria-label="هزینه کاغذ" inputMode="numeric" value={cost} onChange={(e) => setCost(e.target.value.trim() === '' ? '' : fa(toNum(e.target.value)))} onBlur={() => cost !== costText(paper.paperCost) && patch({ paperCost: cost === '' ? null : toNum(cost) })} className="w-[96px] py-1.5 text-center font-extrabold" />
         </label>
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
