@@ -37,6 +37,7 @@ function setup(orderDocs: Doc[] = [pendingOrder()], driver: PaymentDriver = new 
   const notifications = { dispatch: vi.fn(async (_event: string, _order: unknown) => undefined) };
   const config = { getOrThrow: () => ({ webPublicUrl: WEB, apiPublicUrl: API, payment: { driver: driver.name, timeoutMinutes: 30 } }) };
   const redis = new FakeRedis();
+  const jobs = { ensureJob: vi.fn(async () => null) };
   const svc = new PaymentsService(
     orders as never,
     users as never,
@@ -46,8 +47,9 @@ function setup(orderDocs: Doc[] = [pendingOrder()], driver: PaymentDriver = new 
     driver,
     config as never,
     fakeRedisService(redis),
+    jobs as never,
   );
-  return { svc, orders, users, rules, campaigns, notifications, redis, order: orders.docs[0], user: users.docs[0] };
+  return { svc, jobs, orders, users, rules, campaigns, notifications, redis, order: orders.docs[0], user: users.docs[0] };
 }
 
 const ok = (o: Doc) => `${WEB}/app/pay/return?order=${String(o._id)}&status=ok`;
@@ -56,6 +58,12 @@ const mismatchUrl = (o: Doc) => `${WEB}/app/pay/return?order=${String(o._id)}&st
 const pending = (o: Doc) => `${WEB}/app/pay/return?order=${String(o._id)}&status=pending`;
 
 describe('PaymentsService.handleCallback (verify idempotency)', () => {
+  it('v4.2: a verified payment creates the order’s job exactly once, however many callbacks race', async () => {
+    const { svc, jobs, order } = setup();
+    await Promise.all(Array.from({ length: 5 }, () => svc.handleCallback('mock', AUTH, 'OK')));
+    expect(jobs.ensureJob).toHaveBeenCalledTimes(1);
+    expect(jobs.ensureJob).toHaveBeenCalledWith(expect.objectContaining({ _id: order._id, status: 'registered' }));
+  });
   it('10 parallel successful callbacks → one transition, one set of side effects, all redirect ok', async () => {
     const driver = new MockPaymentDriver(API);
     const verify = vi.spyOn(driver, 'verify');

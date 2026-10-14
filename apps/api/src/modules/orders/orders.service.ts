@@ -27,7 +27,8 @@ import { saveOrConflict } from '../../common/utils/save-or-conflict.js';
 import { normalizePhone, toAsciiDigits } from '../../common/utils/phone.js';
 import { CampaignsService } from '../campaigns/campaigns.service.js';
 import { defaultChecklists, defaultOps } from '../catalog/catalog.defaults.js';
-import { Center } from '../centers/center.schema.js';
+import { DispatchService } from '../dispatch/dispatch.service.js';
+import { JobsService } from '../dispatch/jobs.service.js';
 import { Courier } from '../courier/courier.schema.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import { PaymentsService } from '../payments/payments.service.js';
@@ -53,7 +54,7 @@ import {
   refundableAmount,
   timelineEntry,
 } from './order-helpers.js';
-import { needsHomePickup, resolveDelivery } from './delivery-rules.js';
+import { deliveryOf, needsHomePickup, resolveDelivery } from './delivery-rules.js';
 import { Order, OrderDocument, type DeferredEffects } from './order.schema.js';
 import { pickupProblem } from './pickup-rules.js';
 
@@ -63,7 +64,6 @@ export class OrdersService {
     @InjectModel(Order.name) private readonly orders: Model<Order>,
     @InjectModel(User.name) private readonly users: Model<User>,
     @InjectModel(Courier.name) private readonly couriers: Model<Courier>,
-    @InjectModel(Center.name) private readonly centers: Model<Center>,
     private readonly pricing: PricingService,
     private readonly rules: RulesService,
     private readonly campaigns: CampaignsService,
@@ -71,6 +71,8 @@ export class OrdersService {
     private readonly redis: RedisService,
     private readonly payments: PaymentsService,
     private readonly uploads: UploadsService,
+    private readonly jobs: JobsService,
+    private readonly dispatch: DispatchService,
   ) {}
 
   // ------------------------------------------------------------ order codes
@@ -240,16 +242,16 @@ export class OrdersService {
           code: order.code,
         });
       }
-      return { ...customerOrderJson(await this.findById(String(order._id))), paymentUrl };
+      return { ...(await this.customerView(await this.findById(String(order._id)))), paymentUrl };
     }
     // choosing another plan at checkout activates it (membership payment is stubbed) — only once the
     // order exists, i.e. the wallet check passed and the insert succeeded
     await applyPlacementEffects(
-      { users: this.users, rules: this.rules, campaigns: this.campaigns, notifications: this.notifications },
+      { users: this.users, rules: this.rules, campaigns: this.campaigns, notifications: this.notifications, jobs: this.jobs },
       order,
       deferred,
     );
-    return customerOrderJson(order);
+    return this.customerView(order);
   }
 
   /** Opens a new gateway attempt for the customer's own unpaid order. */
@@ -259,9 +261,15 @@ export class OrdersService {
     return { paymentUrl: await this.payments.start(order) };
   }
 
+  /** The customer's JSON of an order, with its fulfilment (v4.2; customer-safe fields only). */
+  private async customerView(order: OrderDocument) {
+    return customerOrderJson(order, (await this.jobs.fulfillmentFor([order])).get(String(order._id)));
+  }
+
   async mine(userId: string) {
     const list = await this.orders.find({ customerId: new Types.ObjectId(userId) }).sort({ createdAt: -1 });
-    return list.map((o) => customerOrderJson(o));
+    const f = await this.jobs.fulfillmentFor(list);
+    return list.map((o) => customerOrderJson(o, f.get(String(o._id))));
   }
 
   async findById(id: string): Promise<OrderDocument> {
@@ -274,7 +282,7 @@ export class OrdersService {
   async getForUser(id: string, user: AuthUser): Promise<OrderDocument | Record<string, unknown>> {
     const order = await this.findById(id);
     if (user.role === 'admin') return order;
-    if (user.role === 'customer' && String(order.customerId) === user.id) return customerOrderJson(order);
+    if (user.role === 'customer' && String(order.customerId) === user.id) return this.customerView(order);
     if (user.role === 'courier' && order.courierId) {
       const courier = await this.couriers.findOne({ userId: new Types.ObjectId(user.id) }, { _id: 1 });
       if (courier && String(courier._id) === String(order.courierId)) return order;
@@ -315,8 +323,8 @@ export class OrdersService {
     for (let attempt = 0; attempt < 3; attempt++) {
       const order = await this.ownOrder(id, user);
       if (!CUSTOMER_CANCELLABLE.includes(order.status)) throw tooLate();
-      const cancelled = await this.cancelAndRefund(order, { customerId: order.customerId, status: { $in: CUSTOMER_CANCELLABLE } });
-      if (cancelled) return customerOrderJson(cancelled);
+      const cancelled = await this.cancelAndRefund(order, { customerId: order.customerId, status: { $in: CUSTOMER_CANCELLABLE } }, 'customer');
+      if (cancelled) return this.customerView(cancelled);
     }
     throw tooLate();
   }
@@ -327,7 +335,7 @@ export class OrdersService {
    * set in the same update, so however many cancels race, exactly one wins and the wallet is credited
    * `chargedAmount` exactly once. Returns null when the guard no longer matches (the order changed first).
    */
-  private async cancelAndRefund(order: OrderDocument, guard: QueryFilter<Order>): Promise<OrderDocument | null> {
+  private async cancelAndRefund(order: OrderDocument, guard: QueryFilter<Order>, byRole: 'customer' | 'admin'): Promise<OrderDocument | null> {
     // chargedAmount / paidVia are only set together with `paid`, so guarding on `paid` makes the pre-read safe
     const amount = refundableAmount(order);
     const updated = await this.orders.findOneAndUpdate(
@@ -342,6 +350,8 @@ export class OrdersService {
     if (!updated) return null;
     if (amount > 0) await this.users.updateOne({ _id: updated.customerId }, { $inc: { walletBalance: amount } });
     await this.notifications.dispatch('cancelled', updated);
+    // v4.2: the job follows (best-effort; records the stage it was cancelled at)
+    await this.jobs.cancelForOrder(updated, byRole);
     return updated;
   }
 
@@ -377,14 +387,14 @@ export class OrdersService {
    * leaving production (`picked_up … qc`) for packing / out_for_delivery / delivered needs every QC item
    * done — checked again atomically in the update, so an item unticked meanwhile makes it a 409.
    */
-  async setStatus(id: string, status: OrderStatus): Promise<OrderDocument> {
+  async setStatus(id: string, status: OrderStatus, _by?: string): Promise<OrderDocument> {
     const order = await this.findById(id);
     if (order.status === status) return order;
     if (!canAdminTransition(order.status, status)) {
       throw new BadRequestException(`تغییر وضعیت از «${STATUS_LABELS[order.status]}» به «${STATUS_LABELS[status]}» مجاز نیست`);
     }
     if (status === 'cancelled') {
-      const cancelled = await this.cancelAndRefund(order, { status: order.status });
+      const cancelled = await this.cancelAndRefund(order, { status: order.status }, 'admin');
       if (!cancelled) throw OrdersService.raced();
       return cancelled;
     }
@@ -405,31 +415,39 @@ export class OrdersService {
     );
     if (!updated) throw OrdersService.raced();
     await this.notifications.dispatch(status, updated);
+    if (status === 'delivered') await this.jobs.onOrderDelivered(updated._id, 'admin');
+    if (status === 'out_for_delivery') await this.jobs.onOrderOutForDelivery(updated._id);
     return updated;
   }
 
   /** `null` unassigns (`''` is mapped to null by the DTO); assigning a courier moves registered/confirmed -> courier_assigned. */
-  async assign(id: string, dto: AssignDto): Promise<OrderDocument> {
+  async assign(id: string, dto: AssignDto, by?: string): Promise<OrderDocument> {
     const order = await this.findById(id);
     if (dto.courierId === undefined && dto.centerId === undefined) throw new BadRequestException('پیک یا مرکز چاپ را انتخاب کنید');
     if (TERMINAL_STATUSES.includes(order.status)) throw new BadRequestException('سفارش لغوشده یا تحویل‌شده قابل تخصیص نیست');
     if (order.status === 'pending_payment') throw new BadRequestException('این سفارش هنوز پرداخت نشده است');
 
+    // v4.2: the provider is assigned through the dispatch center (eligibility, snapshot, acceptance — contract «v1 centre select»)
+    if (dto.centerId !== undefined) {
+      if (!by) throw new BadRequestException('تخصیص مجری از «مرکز تخصیص سفارش» انجام می‌شود');
+      await this.dispatch.assignFromOrder(id, dto.centerId, by);
+      if (dto.courierId === undefined) return this.findById(id);
+    }
+
     const $set: Record<string, unknown> = {};
     const $unset: Record<string, 1> = {};
     const steps: OrderStatus[] = [];
-    if (dto.centerId === null) $unset.centerId = 1;
-    else if (dto.centerId) {
-      if (!(await this.centers.exists({ _id: dto.centerId }))) throw new NotFoundException('مرکز چاپ یافت نشد');
-      $set.centerId = new Types.ObjectId(dto.centerId);
-    }
     if (dto.courierId === null) $unset.courierId = 1;
     else if (dto.courierId) {
       if (!(await this.couriers.exists({ _id: dto.courierId }))) throw new NotFoundException('پیک یافت نشد');
       $set.courierId = new Types.ObjectId(dto.courierId);
-      if (order.status === 'registered') steps.push('confirmed');
-      if (order.status === 'registered' || order.status === 'confirmed') steps.push('courier_assigned');
+      // D12: an order without home pickup has no pickup steps; the courier only delivers
+      if (deliveryOf(order).homePickup) {
+        if (order.status === 'registered') steps.push('confirmed');
+        if (order.status === 'registered' || order.status === 'confirmed') steps.push('courier_assigned');
+      }
     }
+    if (!Object.keys($set).length && !Object.keys($unset).length) return order;
     if (steps.length) $set.status = steps[steps.length - 1];
     const now = new Date();
     const updated = await this.orders.findOneAndUpdate(
@@ -463,11 +481,12 @@ export class OrdersService {
     const orders = await this.orders
       .find({ status: { $in: PRODUCTION_COLUMNS.map((c) => c.status) } })
       .sort({ createdAt: 1 });
+    const info = await this.dispatch.boardInfo(orders.map((o) => o._id));
     return {
       columns: PRODUCTION_COLUMNS.map(({ status, label, tone }) => {
         const items = orders
           .filter((o) => o.status === status)
-          .map((o) => ({ id: o.id as string, code: o.code, label: `${o.customerName} · ${orderSummary(o)}`, qcLabels: qcLabelsOf(o) }));
+          .map((o) => ({ id: o.id as string, code: o.code, label: `${o.customerName} · ${orderSummary(o)}`, qcLabels: qcLabelsOf(o), ...(info.get(o.id) ?? {}) }));
         return { status, label, tone, count: items.length, items };
       }),
       // v1/v2 board-level list (the school labels), kept for older clients

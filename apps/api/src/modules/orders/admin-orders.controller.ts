@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Patch, Query, UseGuards } from '@nestjs/common';
-import { Roles } from '../../common/auth/decorators.js';
+import type { AuthUser } from '../../common/auth/auth-user.js';
+import { CurrentUser, Roles } from '../../common/auth/decorators.js';
 import { JwtAuthGuard, RolesGuard } from '../../common/auth/guards.js';
 import { AdminOrdersQueryDto, AssignDto, QcDto, SetStatusDto } from './dto/orders.dto.js';
 import { OrdersService } from './orders.service.js';
@@ -21,13 +22,13 @@ export class AdminOrdersController {
   }
 
   @Patch('orders/:id/status')
-  setStatus(@Param('id') id: string, @Body() dto: SetStatusDto) {
-    return this.orders.setStatus(id, dto.status);
+  setStatus(@Param('id') id: string, @Body() dto: SetStatusDto, @CurrentUser() user: AuthUser) {
+    return this.orders.setStatus(id, dto.status, user.id);
   }
 
   @Patch('orders/:id/assign')
-  assign(@Param('id') id: string, @Body() dto: AssignDto) {
-    return this.orders.assign(id, dto);
+  assign(@Param('id') id: string, @Body() dto: AssignDto, @CurrentUser() user: AuthUser) {
+    return this.orders.assign(id, dto, user.id);
   }
 
   @Patch('orders/:id/qc')

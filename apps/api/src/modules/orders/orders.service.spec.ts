@@ -104,7 +104,6 @@ function setup(order: Doc = {}, quoteTotal = 300000) {
   ]);
   const users = collection([{ _id: customerId, planId: 'bronze', walletBalance: 0, name: 'x', phone: '09123456789' }]);
   const couriers = collection([{ _id: courierId }]);
-  const centers = collection([]);
   const pricing = {
     context: vi.fn(async () => ({ grades: [] })),
     quote: vi.fn(async () => ({
@@ -122,11 +121,15 @@ function setup(order: Doc = {}, quoteTotal = 300000) {
     applyToDraft: vi.fn(async (draft: unknown) => ({ draft, uploadIds: [] as string[] })),
     attach: vi.fn(async () => undefined),
   };
+  const jobs = {
+    ensureJob: vi.fn(async () => null), cancelForOrder: vi.fn(async () => undefined), onOrderDelivered: vi.fn(async () => undefined),
+    onOrderOutForDelivery: vi.fn(async () => undefined), fulfillmentFor: vi.fn(async () => new Map()),
+  };
+  const dispatch = { assignFromOrder: vi.fn(async () => undefined), boardInfo: vi.fn(async () => new Map()) };
   const svc = new OrdersService(
     orders as never,
     users as never,
     couriers as never,
-    centers as never,
     pricing as never,
     noop as never,
     noop as never,
@@ -134,8 +137,10 @@ function setup(order: Doc = {}, quoteTotal = 300000) {
     fakeRedisService(new FakeRedis()),
     payments as never,
     uploads as never,
+    jobs as never,
+    dispatch as never,
   );
-  return { svc, orders, users, noop, payments, uploads, order: orders.docs[0], user: users.docs[0] };
+  return { svc, orders, users, noop, payments, uploads, jobs, dispatch, order: orders.docs[0], user: users.docs[0] };
 }
 
 const walletRefunds = (users: ReturnType<typeof collection>) =>
@@ -253,12 +258,13 @@ describe('OrdersService.production', () => {
 });
 
 describe('OrdersService.assign', () => {
-  it('null unassigns the courier / center with $unset', async () => {
-    const { svc, orders, order } = setup({ centerId: new Types.ObjectId() });
-    await svc.assign(String(orderId), { courierId: null, centerId: null });
-    expect(orders.findOneAndUpdate.mock.calls[0][1]).toMatchObject({ $unset: { courierId: 1, centerId: 1 } });
+  it('null unassigns the courier with $unset; the centre goes through the dispatch center (v4.2)', async () => {
+    const admin = String(new Types.ObjectId());
+    const { svc, orders, order, dispatch } = setup({ centerId: new Types.ObjectId() });
+    await svc.assign(String(orderId), { courierId: null, centerId: null }, admin);
+    expect(dispatch.assignFromOrder).toHaveBeenCalledWith(String(orderId), null, admin);
+    expect(orders.findOneAndUpdate.mock.calls[0][1]).toMatchObject({ $unset: { courierId: 1 } });
     expect(order.courierId).toBeUndefined();
-    expect(order.centerId).toBeUndefined();
   });
 
   it("AssignDto maps '' to null and still rejects garbage ids", async () => {
@@ -515,5 +521,49 @@ describe('OrdersService.create — v4.2 delivery (D12, D17)', () => {
     expect(view).toMatchObject({ delivery: { method: 'courier', homePickup: true } });
     const admin = await svc.getForUser(String(orderId), { ...customer, role: 'admin' } as AuthUser);
     expect(admin).toHaveProperty('centerId');
+  });
+});
+
+describe('v4.2 orders ↔ jobs', () => {
+  const tomorrow = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tehran' }).format(new Date(Date.now() + 86_400_000));
+  const schoolDraft = { children: [{ name: 'a', grade: 'g', color: 'blue', books: 1 }], services: [], payMethod: 'wallet', pickup: { address: 'addr', phone: '09123456789', date: tomorrow, slot: '۱۰ تا ۱۲' } } as unknown as OrderDraftDto;
+
+  it('a wallet order gets its job when it is placed', async () => {
+    const { svc, user, jobs } = setup();
+    user.walletBalance = 1_000_000;
+    await svc.create(customer, schoolDraft);
+    expect(jobs.ensureJob).toHaveBeenCalledTimes(1);
+  });
+  it('a gateway order gets no job before its payment is verified', async () => {
+    const { svc, jobs } = setup();
+    await svc.create(customer, { ...schoolDraft, payMethod: 'gateway' } as OrderDraftDto);
+    expect(jobs.ensureJob).not.toHaveBeenCalled();
+  });
+  it('cancel during production records the stage: the admin cancel cancels the job (by admin), the customer cancel by customer', async () => {
+    const a = setup({ status: 'preparing' });
+    await a.svc.setStatus(String(orderId), 'cancelled', 'admin-id');
+    expect(a.jobs.cancelForOrder).toHaveBeenCalledWith(expect.objectContaining({ status: 'cancelled' }), 'admin');
+    const c = setup();
+    await c.svc.cancel(String(orderId), customer);
+    expect(c.jobs.cancelForOrder).toHaveBeenCalledWith(expect.objectContaining({ status: 'cancelled' }), 'customer');
+  });
+  it('an admin delivery / dispatch moves the job too', async () => {
+    const d = setup({ status: 'out_for_delivery' });
+    await d.svc.setStatus(String(orderId), 'delivered');
+    expect(d.jobs.onOrderDelivered).toHaveBeenCalledWith(orderId, 'admin');
+    const o = setup({ status: 'packing', qc: Array(9).fill(true) });
+    await o.svc.setStatus(String(orderId), 'out_for_delivery');
+    expect(o.jobs.onOrderOutForDelivery).toHaveBeenCalledWith(orderId);
+  });
+  it('a courier on an order without home pickup adds no pickup steps', async () => {
+    const { svc, order } = setup({ status: 'registered', delivery: { method: 'courier', homePickup: false, note: '' }, courierId: undefined });
+    await svc.assign(String(orderId), { courierId: String(courierId) });
+    expect(order).toMatchObject({ status: 'registered' });
+    expect(String(order.courierId)).toBe(String(courierId));
+  });
+  it('the customer view carries the fulfilment', async () => {
+    const { svc, jobs } = setup();
+    jobs.fulfillmentFor.mockResolvedValueOnce(new Map([[String(orderId), { status: 'in_production', label: 'در حال تولید' }]]));
+    expect(await svc.getForUser(String(orderId), customer)).toMatchObject({ fulfillment: { status: 'in_production', label: 'در حال تولید' } });
   });
 });

@@ -18,6 +18,7 @@ import { NotificationsService } from '../notifications/notifications.service.js'
 import { applyPlacementEffects } from '../orders/order-effects.js';
 import { timelineEntry } from '../orders/order-helpers.js';
 import { Order, OrderDocument, type DeferredEffects, type OrderPayment } from '../orders/order.schema.js';
+import { JobsService } from '../dispatch/jobs.service.js';
 import { RulesService } from '../rules/rules.service.js';
 import { User } from '../users/user.schema.js';
 import type { PaymentDriver } from './payment-driver.js';
@@ -45,6 +46,7 @@ export class PaymentsService {
     @Inject(PAYMENT_DRIVER) readonly driver: PaymentDriver,
     config: ConfigService,
     private readonly redis: RedisService,
+    private readonly jobs: JobsService,
   ) {
     this.app = config.getOrThrow<AppConfig>('app');
   }
@@ -275,7 +277,7 @@ export class PaymentsService {
       const withEffects = await this.orders.findOne({ _id: order._id }, { deferred: 1 });
       const deferred: DeferredEffects = withEffects?.deferred ?? { ruleIds: [] };
       await applyPlacementEffects(
-        { users: this.users, rules: this.rules, campaigns: this.campaigns, notifications: this.notifications },
+        { users: this.users, rules: this.rules, campaigns: this.campaigns, notifications: this.notifications, jobs: this.jobs },
         order,
         deferred,
       );

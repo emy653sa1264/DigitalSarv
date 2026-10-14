@@ -460,6 +460,13 @@ export class DispatchService {
     return this.result(job._id, by);
   }
 
+  /** Production board (kept, D10): each order's job status and provider name. */
+  async boardInfo(orderIds: unknown[]): Promise<Map<string, { jobStatus: JobStatus; providerName?: string }>> {
+    const jobs = orderIds.length ? ((await this.jobModel.find({ orderId: { $in: orderIds as Types.ObjectId[] }, seq: 1 }, { orderId: 1, status: 1, providerId: 1 }).lean()) as JobRow[]) : [];
+    const names = await this.namesFor(jobs);
+    return new Map(jobs.map((j) => [String(j.orderId), { jobStatus: j.status, ...(j.providerId ? { providerName: names.get(String(j.providerId)) } : {}) }]));
+  }
+
   /** v1 `PATCH /admin/orders/:id/assign { centerId }` — delegated with the dispatch permissions (the v1 route has none). */
   async assignFromOrder(orderId: string, centerId: string | null, by: string): Promise<void> {
     assertObjectId(orderId, 'سفارش');

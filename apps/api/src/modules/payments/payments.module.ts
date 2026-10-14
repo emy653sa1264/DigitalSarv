@@ -2,6 +2,7 @@ import { Controller, Get, Header, Logger, Module, Param, Query, Redirect } from 
 import { ConfigService } from '@nestjs/config';
 import type { AppConfig } from '../../config/configuration.js';
 import { CampaignsModule } from '../campaigns/campaigns.module.js';
+import { DispatchModule } from '../dispatch/dispatch.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
 import { RulesModule } from '../rules/rules.module.js';
 import { MockPaymentDriver, readCallback, ZarinpalPaymentDriver, ZibalPaymentDriver, type PaymentDriver } from './payment-driver.js';
@@ -38,7 +39,7 @@ export class PaymentsController {
 }
 
 @Module({
-  imports: [RulesModule, CampaignsModule, NotificationsModule],
+  imports: [RulesModule, CampaignsModule, NotificationsModule, DispatchModule],
   controllers: [PaymentsController],
   providers: [
     PaymentsService,
