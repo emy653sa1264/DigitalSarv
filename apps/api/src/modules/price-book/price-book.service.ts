@@ -1,11 +1,13 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
+import { randomUUID } from 'node:crypto';
 import { Model, Types } from 'mongoose';
 import type { Permission } from '../../common/permissions.js';
 import { CatalogService } from '../catalog/catalog.service.js';
 import { Paper } from '../catalog/schemas/paper.schema.js';
 import { User } from '../users/user.schema.js';
 import { COLOR_TYPES, comboKey, parseCombo, PRINT_ADDONS, PRINT_SIZES, SIDES, singleSideKey, type ComboOptions, type ComboService } from './combo.js';
+import { bulkValue, type BulkOp } from './bulk.js';
 import { validateFormula } from './formula.js';
 import { comboLabel, type LabelNames } from './labels.js';
 import { CUSTOMER_FORMULA_VARS, ROUNDINGS, type DisplayStatus, type PriceLayer, type PriceMode } from './price-book.constants.js';
@@ -29,6 +31,16 @@ export interface VersionView {
   reason: string; createdBy?: { id: string; name: string }; createdAt: string; unitPrice: number | null;
 }
 export interface MatrixRow { comboKey: string; service: ComboService; options: ComboOptions; label: string; current: VersionView | null; next: VersionView | null }
+
+export interface BulkInput {
+  layer: 'customer';
+  filter: { service?: ComboService; size?: string; colorType?: string; paper?: string; side?: string; comboKeys?: string[] };
+  op: BulkOp; value: number; rounding?: number; effectiveFrom?: string;
+}
+export interface BulkPreview {
+  rows: { comboKey: string; label: string; current: number; next: number }[];
+  skipped: { comboKey: string; label: string; reason: string }[];
+}
 
 type Row = PriceVersion & { _id: Types.ObjectId };
 const MAX_PRICE = 1_000_000_000;
@@ -187,6 +199,50 @@ export class PriceBookService {
       })),
       total, page, limit,
     };
+  }
+
+  // ------------------------------------------------------------ bulk
+
+  async bulkPreview(input: BulkInput): Promise<BulkPreview> {
+    if (input.layer !== 'customer') throw new BadRequestException('در هر عملیات فقط یک لایه قیمت (مشتری) مجاز است');
+    if (!Number.isInteger(input.value) || input.value < 0) throw new BadRequestException('مقدار باید عدد صحیح و نامنفی باشد');
+    if ((input.op === 'inc_pct' || input.op === 'dec_pct') && input.value > 1000) throw new BadRequestException('درصد معتبر نیست');
+    const f = input.filter ?? {};
+    const rows = (await this.matrix('customer', f.service)).filter((r) => {
+      const o = r.options as unknown as Record<string, unknown>;
+      return (!f.size || o.size === f.size) && (!f.colorType || o.colorType === f.colorType) && (!f.paper || o.paper === f.paper)
+        && (!f.side || o.side === f.side) && (!f.comboKeys?.length || f.comboKeys.includes(r.comboKey));
+    });
+    const out: BulkPreview = { rows: [], skipped: [] };
+    for (const r of rows) {
+      const cur = r.current;
+      if (!cur) { out.skipped.push({ comboKey: r.comboKey, label: r.label, reason: 'قیمت فعالی ندارد' }); continue; }
+      if (cur.mode !== 'manual' || cur.price === undefined) { out.skipped.push({ comboKey: r.comboKey, label: r.label, reason: 'قیمت فرمولی است' }); continue; }
+      const next = bulkValue(cur.price, input.op, input.value, input.rounding ?? 0);
+      if (next === null) { out.skipped.push({ comboKey: r.comboKey, label: r.label, reason: 'نتیجه منفی می‌شود' }); continue; }
+      out.rows.push({ comboKey: r.comboKey, label: r.label, current: cur.price, next });
+    }
+    return out;
+  }
+
+  async bulkApply(input: BulkInput & { reason: string }, by: string) {
+    const why = this.reason(input.reason);
+    const preview = await this.bulkPreview(input);
+    const bulkId = randomUUID();
+    const effectiveFrom = input.effectiveFrom ? new Date(input.effectiveFrom) : new Date();
+    if (Number.isNaN(effectiveFrom.getTime())) throw new BadRequestException('تاریخ معتبر نیست');
+    const docs = [];
+    for (const row of preview.rows) {
+      docs.push(await this.insertVersion({
+        layer: 'customer', providerId: null, comboKey: row.comboKey, mode: 'manual', price: row.next,
+        rounding: 0, effectiveFrom, state: 'published', reason: why, createdBy: new Types.ObjectId(by), bulkId,
+      }));
+    }
+    if (docs.length) {
+      await this.audit('bulk', docs, why, by, { op: input.op, value: input.value, rounding: input.rounding ?? 0, filter: input.filter }, preview.rows);
+      await this.catalog.invalidate();
+    }
+    return { bulkId, created: docs.length, skipped: preview.skipped };
   }
 
   // ------------------------------------------------------------ spiral ranges

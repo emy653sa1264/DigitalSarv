@@ -107,3 +107,22 @@ describe('PriceBookService', () => {
     await expect(svc.rollback(draft.id, 'x', by)).rejects.toThrow(/قابل بازگردانی/);
   });
 });
+
+describe('bulk', () => {
+  it('previews and applies one layer, skipping formula and unpriced combos', async () => {
+    const { svc, by } = setup();
+    await svc.create(base, by);                                                           // 3500
+    await svc.create({ ...base, comboKey: 'bw|A4|double', mode: 'formula', price: undefined, formula: 'base_price + 300' }, by);
+    const body = { layer: 'customer' as const, filter: { service: 'bw' as const, size: 'A4' as const }, op: 'inc_pct' as const, value: 10, rounding: 100 as const };
+    const pre = await svc.bulkPreview(body);
+    expect(pre.rows).toEqual([expect.objectContaining({ comboKey: 'bw|A4|single', current: 3500, next: 3900 })]);
+    expect(pre.skipped.map((s) => s.comboKey)).toEqual(['bw|A4|double']);
+    const res = await svc.bulkApply({ ...body, reason: 'تورم' }, by);
+    expect(res.created).toBe(1);
+    expect((await svc.history('customer', 'bw|A4|single'))[0]).toMatchObject({ price: 3900, status: 'active' });
+  });
+  it('rejects a non-customer layer', async () => {
+    const { svc } = setup();
+    await expect(svc.bulkPreview({ layer: 'provider' as never, filter: {}, op: 'replace', value: 1 })).rejects.toThrow();
+  });
+});

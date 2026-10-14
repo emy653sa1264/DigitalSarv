@@ -23,6 +23,7 @@ import { HealthModule } from './modules/health/health.module.js';
 import { NotificationsModule } from './modules/notifications/notifications.module.js';
 import { OrdersModule } from './modules/orders/orders.module.js';
 import { PaymentsModule } from './modules/payments/payments.module.js';
+import { PriceBookModule } from './modules/price-book/price-book.module.js';
 import { PricingModule } from './modules/pricing/pricing.module.js';
 import { RulesModule } from './modules/rules/rules.module.js';
 import { SmsModule } from './modules/sms/sms.module.js';
@@ -67,6 +68,7 @@ export const infraImports = [
     UsersModule,
     CatalogModule,
     PricingModule,
+    PriceBookModule,
     RulesModule,
     CampaignsModule,
     NotificationsModule,
