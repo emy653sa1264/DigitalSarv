@@ -16,20 +16,24 @@ export function PricesSection() {
       {isPending ? (
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           {PRICE_ITEMS.map((i) => (
-            <Skeleton key={i.key} className="h-[92px] rounded-[20px] bg-white/80" />
+            <Skeleton key={i.key ?? i.printing} className="h-[92px] rounded-[20px] bg-white/80" />
           ))}
         </div>
       ) : isError ? (
         <ErrorState error={error} onRetry={() => void refetch()} />
       ) : (
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          {PRICE_ITEMS.map((item) => (
-            <div key={item.key} className="rounded-[20px] p-4" style={{ background: TONES[item.tone].soft, color: TONES[item.tone].ink }}>
+          {PRICE_ITEMS.map((item) => {
+            const price = item.printing ? catalog.printing?.prices[item.printing] : item.key ? catalog.prices[item.key] : undefined
+            if (price === undefined || price === null) return null
+            return (
+            <div key={item.key ?? item.printing} className="rounded-[20px] p-4" style={{ background: TONES[item.tone].soft, color: TONES[item.tone].ink }}>
               <div className="text-[11.5px] font-bold opacity-70">{item.group}</div>
               <div className="mt-0.5 text-[12.5px] opacity-85">{item.label}</div>
-              <div className="mt-1.5 text-lg font-black sm:text-xl">{money(catalog.prices[item.key])}</div>
+              <div className="mt-1.5 text-lg font-black sm:text-xl">{money(price)}</div>
             </div>
-          ))}
+            )
+          })}
         </div>
       )}
     </section>

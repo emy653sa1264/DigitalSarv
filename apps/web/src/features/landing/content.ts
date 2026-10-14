@@ -1,4 +1,4 @@
-import { ClipboardList, FileText, Newspaper, Printer, Wrench, type LucideIcon } from 'lucide-react'
+import { ClipboardList, FileText, Newspaper, Palette, Printer, Wrench, type LucideIcon } from 'lucide-react'
 import type { BrandTone } from '@/components/brand'
 import type { Prices } from '@/lib/types'
 
@@ -41,7 +41,8 @@ export interface ServiceCard {
 }
 
 export const SERVICE_CARDS: ServiceCard[] = [
-  { key: 'print', title: 'چاپ اسناد', body: 'فایل را بفرستید؛ اندازه، رنگ و صحافی را خودتان انتخاب کنید.', cta: 'سفارش چاپ', icon: FileText, tone: 'cyan', to: '/app/print' },
+  { key: 'print', title: 'چاپ سیاه‌وسفید', body: 'فایل را بفرستید؛ A3 تا A6، یک‌رو یا دورو، با قیمت هر برگ.', cta: 'سفارش چاپ', icon: FileText, tone: 'cyan', to: '/app/print/bw' },
+  { key: 'print', title: 'چاپ رنگی', body: 'متن رنگی یا تمام‌رنگی، روی تحریر، گلاسه یا مقوا.', cta: 'سفارش چاپ رنگی', icon: Palette, tone: 'violet', to: '/app/print/color' },
   { key: 'docs', title: 'پایان‌نامه و صحافی', body: 'دانشجو، اداره و شرکت: فایل را بفرستید، چاپ و صحافی‌شده تحویل بگیرید.', cta: 'چاپ و صحافی', icon: ClipboardList, tone: 'pink', to: '/app/docs' },
   { key: 'flyer', title: 'تراکت', body: 'طراحی دارید یا نه، هر دو مسیر هست.', cta: 'شروع کنید', icon: Newspaper, tone: 'violet', to: '/app/flyer' },
   { key: 'cartridge', title: 'شارژ کارتریج', body: 'کارتریج را می‌گیریم، پر می‌کنیم، برمی‌گردانیم.', cta: 'درخواست سرویس', icon: Printer, tone: 'amber', to: '/app/cart' },
@@ -60,17 +61,18 @@ export const FAQ = [
   { q: 'کتاب‌ها را چطور انتخاب کنم؟', a: 'لازم نیست. فقط پایه تحصیلی را از اول ابتدایی تا سوم دبیرستان انتخاب کنید؛ کتاب‌های همان پایه خودکار در نظر گرفته می‌شود.' },
   { q: 'چند فرزند می‌توانم اضافه کنم؟', a: 'محدودیتی نیست؛ هر فرزند پایه، رنگ فنری و خدمات اضافی مستقل خودش را دارد.' },
   {
-    q: 'می‌توانم چاپ اسناد را هم به همین سفارش اضافه کنم؟',
-    a: 'بله. چاپ اسناد، پایان‌نامه و صحافی، تراکت، شارژ کارتریج و تعمیر پرینتر همه در همان سفارش خانوادگی و همان تحویل‌گیری جمع می‌شوند.',
+    q: 'می‌توانم چاپ سیاه‌وسفید یا رنگی را هم به همین سفارش اضافه کنم؟',
+    a: 'بله. چاپ سیاه‌وسفید، چاپ رنگی، پایان‌نامه و صحافی، تراکت، شارژ کارتریج و تعمیر پرینتر همه در همان سفارش خانوادگی و همان تحویل‌گیری جمع می‌شوند.',
   },
   { q: 'اگر تعداد کتاب‌ها با ثبت سفارش فرق داشت؟', a: 'پیک در محل شمارش می‌کند؛ مغایرت ثبت و مبلغ بازمحاسبه و برای تأیید شما ارسال می‌شود.' },
 ]
 
 /** Unit prices shown by the optional "قیمت‌ها" section (labels from the admin price groups). */
-export const PRICE_ITEMS: { key: keyof Prices; label: string; group: string; tone: BrandTone }[] = [
+export const PRICE_ITEMS: { key?: keyof Prices; printing?: string; label: string; group: string; tone: BrandTone }[] = [
   { key: 'bindPerBook', label: 'فنری هر کتاب', group: 'فنری کتاب مدرسه', tone: 'blue' },
   { key: 'linedSheet', label: 'هر برگ کاغذ خط‌دار', group: 'فنری کتاب مدرسه', tone: 'blue' },
-  { key: 'printBw', label: 'هر صفحه سیاه‌وسفید', group: 'چاپ اسناد', tone: 'cyan' },
+  { printing: 'bw|A4|single', label: 'هر برگ سیاه‌وسفید A4', group: 'چاپ سیاه‌وسفید', tone: 'cyan' },
+  { printing: 'color|A4|full|tahrir80|single', label: 'هر برگ تمام‌رنگی A4', group: 'چاپ رنگی', tone: 'violet' },
   { key: 'docBw', label: 'هر صفحه سیاه‌وسفید', group: 'پایان‌نامه و صحافی', tone: 'pink' },
   { key: 'docBind', label: 'صحافی هر جلد', group: 'پایان‌نامه و صحافی', tone: 'pink' },
   { key: 'flyerA5', label: 'هر برگ A5', group: 'تراکت', tone: 'violet' },
