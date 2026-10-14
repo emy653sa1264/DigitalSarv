@@ -16,7 +16,9 @@ import { OrdersScreen } from './screens/OrdersScreen'
 import { PayReturnScreen } from './screens/PayReturnScreen'
 import { PayScreen } from './screens/PayScreen'
 import { PickupScreen } from './screens/PickupScreen'
-import { PrintScreen } from './screens/PrintScreen'
+import { BwPrintScreen } from './screens/print/BwPrintScreen'
+import { ColorPrintScreen } from './screens/print/ColorPrintScreen'
+import { PrintChooserScreen } from './screens/print/PrintChooserScreen'
 import { ProfileScreen } from './screens/ProfileScreen'
 import { RepairScreen } from './screens/RepairScreen'
 import { SummaryScreen } from './screens/SummaryScreen'
@@ -46,7 +48,9 @@ export const customerRoutes: RouteObject[] = [
               { path: 'done/:id', element: <DoneScreen /> },
               { path: 'track', element: <TrackLatestScreen /> },
               { path: 'track/:id', element: <TrackScreen /> },
-              { path: 'print', element: <PrintScreen /> },
+              { path: 'print', element: <PrintChooserScreen /> },
+              { path: 'print/bw', element: <BwPrintScreen /> },
+              { path: 'print/color', element: <ColorPrintScreen /> },
               { path: 'docs', element: <DocsScreen /> },
               { path: 'flyer', element: <FlyerScreen /> },
               { path: 'cart', element: <CartScreen /> },

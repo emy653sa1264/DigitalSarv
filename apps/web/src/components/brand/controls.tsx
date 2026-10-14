@@ -46,18 +46,23 @@ export function Chip({
   selected = false,
   size = 'md',
   className,
+  disabled = false,
+  onClick,
   ...props
 }: ComponentProps<'button'> & { selected?: boolean; size?: 'sm' | 'md' }) {
   return (
     <button
       type="button"
       aria-pressed={selected}
+      aria-disabled={disabled || undefined}
+      onClick={disabled ? undefined : onClick}
       className={cn(
-        'cursor-pointer rounded-full border text-[13px] font-bold transition-colors',
+        disabled ? 'cursor-not-allowed opacity-45' : 'cursor-pointer',
+        'rounded-full border text-[13px] font-bold transition-colors',
         size === 'md' ? 'px-4 py-[11px]' : 'px-[13px] py-2',
         selected
           ? 'border-accent bg-accent text-white shadow-glow-sm'
-          : 'border-line-input bg-white text-[#3a4257] hover:bg-accent-soft',
+          : cn('border-line-input bg-white text-[#3a4257]', !disabled && 'hover:bg-accent-soft'),
         className,
       )}
       {...props}

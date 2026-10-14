@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
+import { migrateLegacyPrint } from '@/features/customer/lib/printing'
 import type { ChildDraft, OrderDraft, PayMethod, Pickup, PlanId, ServiceDraft, Tone, Upload } from '@/lib/types'
 
 /** Rotating avatar tones for new children (prototype `addChild`). */
@@ -109,7 +110,7 @@ export const useDraft = create<DraftState>()(
         set({
           ...initial(),
           children: draft.children ?? [],
-          services: draft.services ?? [],
+          services: (draft.services ?? []).map(migrateLegacyPrint),
           planId: draft.planId,
           coupon: draft.coupon,
           urgent: !!draft.urgent,
@@ -120,7 +121,12 @@ export const useDraft = create<DraftState>()(
     }),
     {
       name: 'sarv-draft',
-      version: 1,
+      version: 2,
+      migrate: (persisted, version) => {
+        const s = persisted as DraftData
+        if (version < 2 && Array.isArray(s?.services)) s.services = s.services.map(migrateLegacyPrint)
+        return s
+      },
       partialize: (s): DraftData => ({
         children: s.children,
         services: s.services,

@@ -82,6 +82,8 @@ export const PAY_LABEL: Record<PayMethod, string> = {
 
 export const SERVICE_LABEL: Record<ServiceKind, string> = {
   print: 'چاپ اسناد',
+  black_white_printing: 'چاپ سیاه‌وسفید',
+  color_printing: 'چاپ رنگی',
   docs: 'پایان‌نامه و صحافی',
   flyer: 'تراکت',
   cart: 'کارتریج',
@@ -136,6 +138,8 @@ export function orderFiles(order: Order): { id: string; label: string; photo: bo
     const who = s.childName ? ` — ${s.childName}` : ''
     switch (s.kind) {
       case 'print':
+      case 'black_white_printing':
+      case 'color_printing':
         if (s.spec.fileId) files.push({ id: s.spec.fileId, label: `${s.spec.fileName || 'فایل چاپ اسناد'}${who}`, photo: false })
         break
       case 'docs':
@@ -156,7 +160,7 @@ export function orderFiles(order: Order): { id: string; label: string; photo: bo
   return files
 }
 
-const SERVICE_SHORT: Record<ServiceKind, string> = { print: 'چاپ', docs: 'صحافی', flyer: 'تراکت', cart: 'کارتریج', repair: 'تعمیر' }
+const SERVICE_SHORT: Record<ServiceKind, string> = { print: 'چاپ', black_white_printing: 'چاپ', color_printing: 'چاپ رنگی', docs: 'صحافی', flyer: 'تراکت', cart: 'کارتریج', repair: 'تعمیر' }
 
 /** "فنری + چاپ + کارتریج" style summary for the orders table. */
 export function serviceSummary(order: Order): string {

@@ -4,6 +4,7 @@ import {
   FileText,
   House,
   Newspaper,
+  Palette,
   Printer,
   Route,
   User,
@@ -24,6 +25,8 @@ export interface ServiceMeta {
 
 export const SERVICE_META: Record<ServiceKind, ServiceMeta> = {
   print: { kind: 'print', label: 'چاپ اسناد', tone: 'cyan', icon: FileText, path: '/app/print' },
+  black_white_printing: { kind: 'black_white_printing', label: 'چاپ سیاه‌وسفید', tone: 'cyan', icon: FileText, path: '/app/print/bw' },
+  color_printing: { kind: 'color_printing', label: 'چاپ رنگی', tone: 'violet', icon: Palette, path: '/app/print/color' },
   docs: { kind: 'docs', label: 'پایان‌نامه و صحافی', tone: 'pink', icon: ClipboardList, path: '/app/docs' },
   flyer: { kind: 'flyer', label: 'تراکت', tone: 'violet', icon: Newspaper, path: '/app/flyer' },
   cart: { kind: 'cart', label: 'شارژ کارتریج', tone: 'amber', icon: Printer, path: '/app/cart' },
@@ -32,7 +35,8 @@ export const SERVICE_META: Record<ServiceKind, ServiceMeta> = {
 
 /** Family screen "افزودن …" buttons (prototype `addServiceButtons`). */
 export const ADD_SERVICE_BUTTONS: { kind: ServiceKind; label: string }[] = [
-  { kind: 'print', label: 'چاپ اسناد' },
+  { kind: 'black_white_printing', label: 'چاپ سیاه‌وسفید' },
+  { kind: 'color_printing', label: 'چاپ رنگی' },
   { kind: 'docs', label: 'پایان‌نامه و صحافی' },
   { kind: 'flyer', label: 'تراکت' },
   { kind: 'cart', label: 'شارژ کارتریج' },
@@ -41,7 +45,8 @@ export const ADD_SERVICE_BUTTONS: { kind: ServiceKind; label: string }[] = [
 
 /** Child editor "سفارش دیگری برای این فرزند" tiles (prototype `childServiceTiles`). */
 export const CHILD_SERVICE_TILES: { kind: ServiceKind; label: string; sub: string }[] = [
-  { kind: 'print', label: 'چاپ اسناد', sub: 'جزوه، مدرک، برگه' },
+  { kind: 'black_white_printing', label: 'چاپ سیاه‌وسفید', sub: 'جزوه، مدرک، برگه' },
+  { kind: 'color_printing', label: 'چاپ رنگی', sub: 'گلاسه، مقوا، متن رنگی' },
   { kind: 'docs', label: 'پایان‌نامه و صحافی', sub: 'جلد، زرکوب، متن روی جلد' },
   { kind: 'flyer', label: 'تراکت', sub: 'طراحی و چاپ' },
   { kind: 'cart', label: 'شارژ کارتریج', sub: 'درب منزل' },
@@ -51,7 +56,8 @@ export const CHILD_SERVICE_TILES: { kind: ServiceKind; label: string; sub: strin
 /** Header "+" bottom sheet (prototype `pickerServices`). */
 export const PICKER_SERVICES: { path: string; label: string; sub: string; tone: BrandTone; icon: LucideIcon }[] = [
   { path: '/app/family', label: 'فنری کتاب مدرسه', sub: 'پایه را انتخاب کن، کتاب‌ها خودکار', tone: 'blue', icon: Book },
-  { path: '/app/print', label: 'چاپ اسناد', sub: 'جزوه، مدرک اداری، برگه', tone: 'cyan', icon: FileText },
+  { path: '/app/print/bw', label: 'چاپ سیاه‌وسفید', sub: 'جزوه، مدرک، برگه', tone: 'cyan', icon: FileText },
+  { path: '/app/print/color', label: 'چاپ رنگی', sub: 'گلاسه، مقوا، متن رنگی', tone: 'violet', icon: Palette },
   { path: '/app/docs', label: 'پایان‌نامه و صحافی', sub: 'پایان‌نامه، گزارش و جزوه با جلد', tone: 'pink', icon: ClipboardList },
   { path: '/app/flyer', label: 'تراکت', sub: 'طراحی و چاپ از ۵۰۰ عدد', tone: 'violet', icon: Newspaper },
   { path: '/app/cart', label: 'شارژ کارتریج', sub: 'دریافت و تحویل درب منزل', tone: 'amber', icon: Printer },
@@ -62,7 +68,8 @@ export const PICKER_SERVICES: { path: string; label: string; sub: string; tone: 
 export const HOME_SERVICES: { path: string; title: string; cta: string; tone: BrandTone; icon: LucideIcon }[] = [
   // Pickup/delivery is part of every order, so it is not a tile; school books open the order screen.
   { path: '/app/family', title: 'فنری کتاب مدرسه', cta: 'ثبت سفارش', tone: 'blue', icon: Book },
-  { path: '/app/print', title: 'چاپ اسناد', cta: 'سفارش چاپ', tone: 'cyan', icon: FileText },
+  { path: '/app/print/bw', title: 'چاپ سیاه‌وسفید', cta: 'سفارش چاپ', tone: 'cyan', icon: FileText },
+  { path: '/app/print/color', title: 'چاپ رنگی', cta: 'سفارش چاپ', tone: 'violet', icon: Palette },
   { path: '/app/docs', title: 'پایان‌نامه و صحافی', cta: 'چاپ و صحافی', tone: 'pink', icon: ClipboardList },
   { path: '/app/flyer', title: 'تراکت', cta: 'طراحی و چاپ', tone: 'violet', icon: Newspaper },
   { path: '/app/cart', title: 'شارژ کارتریج', cta: 'درخواست سرویس', tone: 'amber', icon: Printer },

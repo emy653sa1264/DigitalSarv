@@ -41,7 +41,24 @@ export interface Extra {
 }
 export interface Grade { id: string; name: string; books: number; on: boolean; sort: number }
 /** «نوع کاغذ» of چاپ اسناد (v3); `price` = toman per A4 sheet. */
-export interface Paper { id: string; key: string; name: string; price: number; on: boolean; sort: number }
+export interface Paper {
+  id: string
+  key: string
+  name: string
+  price: number
+  on: boolean
+  sort: number
+  /** v4 */
+  type: 'plain' | 'glossy' | 'cardstock'
+  /** gsm */
+  weight: number
+  paperCost?: number
+  /** Offered in چاپ رنگی. */
+  colorPrint: boolean
+  supportedSizes: PrintSize[]
+  supportsSingle: boolean
+  supportsDouble: boolean
+}
 /** v3.3: bind colours are an admin collection — any `BindColor.key`. */
 export type BindColorKey = string
 export interface BindColor { id: string; key: BindColorKey; name: string; hex: string; css: string; extra: number; on: boolean; sort: number }
@@ -139,6 +156,54 @@ export interface Catalog {
   campaign: Campaign | null
   /** v3.3 «تنظیمات» (public part). */
   ops: OpsSettings
+  /** v4: effective customer unit prices (optional so older cached catalogs don't crash). */
+  printing?: {
+    sizes: PrintSize[]
+    addons: PrintAddons
+    prices: Record<string, number>
+    spiralRanges: { id: string; minPages: number; maxPages: number; price: number }[]
+  }
+}
+
+// ── v4 printing ────────────────────────────────────────────────────────────
+export type PrintSize = 'A3' | 'A4' | 'A5' | 'A6'
+export type ColorType = 'text' | 'full'
+export interface PrintV4Base {
+  fileId?: string
+  fileName?: string
+  pages: number
+  scope: 'all' | 'range'
+  from?: number
+  to?: number
+  size: PrintSize
+  sides: 'single' | 'double'
+  copies: number
+  binding: 'none' | 'spiral' | 'glue' | 'hardcover'
+  spiralColor?: string
+  staple: boolean
+  laminate: 'none' | 'cover' | 'all'
+  extras?: string[]
+  desc?: string
+}
+export type BwPrintSpec = PrintV4Base
+export interface ColorPrintSpec extends PrintV4Base {
+  colorType: ColorType
+  /** Paper.key with colorPrint; '' = the first `on` colorPrint paper. */
+  paper: string
+  mixed?: boolean
+  colorRanges?: { from: number; to: number }[]
+  colorPages?: string
+}
+export interface PrintAddons {
+  mixed: boolean
+  spiral: boolean
+  glue: boolean
+  hardcover: boolean
+  staple: boolean
+  lamCover: boolean
+  lamAll: boolean
+  extras: boolean
+  docsSpiral: boolean
 }
 
 // ── Draft / quote ──────────────────────────────────────────────────────────
@@ -203,8 +268,11 @@ export interface DocsSpec {
   ink: 'bw' | 'color' | 'mixed'
   sides: 'single' | 'double'
   copies: number
-  bindColor: BindColorKey
-  stamp: 'gold' | 'silver'
+  /** v4: `hardcover` (default) or `spiral` (spiral carries no bindColor/stamp). */
+  binding?: 'hardcover' | 'spiral'
+  spiralColor?: string
+  bindColor?: BindColorKey
+  stamp?: 'gold' | 'silver'
   colorRanges?: { from: number; to: number }[]
   colorPages?: string
   desc?: string
@@ -246,9 +314,11 @@ export interface RepairSpec {
   device?: 'laser' | 'inkjet' | 'mfp' | 'copier'
   warranty?: boolean
 }
-export type ServiceKind = 'print' | 'docs' | 'flyer' | 'cart' | 'repair'
+export type ServiceKind = 'print' | 'black_white_printing' | 'color_printing' | 'docs' | 'flyer' | 'cart' | 'repair'
 export type ServiceDraft =
   | { kind: 'print'; childIndex?: number; spec: PrintSpec }
+  | { kind: 'black_white_printing'; childIndex?: number; spec: BwPrintSpec }
+  | { kind: 'color_printing'; childIndex?: number; spec: ColorPrintSpec }
   | { kind: 'docs'; childIndex?: number; spec: DocsSpec }
   | { kind: 'flyer'; childIndex?: number; spec: FlyerSpec }
   | { kind: 'cart'; childIndex?: number; spec: CartSpec }
@@ -267,7 +337,7 @@ export interface OrderDraft {
 export interface QuoteLine { key: string; label: string; amount: number; accent?: boolean }
 export interface Quote {
   children: { index: number; total: number; books: number }[]
-  services: { index: number; price: number; label: string; detail: string }[]
+  services: { index: number; price: number; label: string; detail: string; unavailable?: string }[]
   totalBooks: number
   bindingTotal: number
   servicesTotal: number
@@ -346,7 +416,7 @@ export interface Order {
   customerName: string
   customerPhone: string
   children: (ChildDraft & { total: number })[]
-  services: (ServiceDraft & { price: number; label: string; detail: string; childName?: string })[]
+  services: (ServiceDraft & { price: number; label: string; detail: string; childName?: string; pricing?: OrderPricing })[]
   quote: Quote
   pickup: Pickup
   payMethod: PayMethod
@@ -374,6 +444,14 @@ export interface Order {
   payment?: OrderPayment
   createdAt: string
   updatedAt: string
+}
+
+/** v4 price snapshot of a service line. */
+export interface OrderPricing {
+  calculatedAt: string
+  currency: 'toman'
+  lines: { comboKey: string; versionId: string; version: number; unitPrice: number; quantity: number; subtotal: number }[]
+  customerSubtotal: number
 }
 
 export interface OrderPayment {
@@ -537,4 +615,5 @@ export interface AdminSettings {
   ops: OpsSettings
   courier: CourierPaySettings
   checklists: ChecklistSettings
+  printAddons: PrintAddons
 }
