@@ -65,3 +65,10 @@ export function jalaliDayTime(iso: string | Date): string {
 export function pct(ratio: number): string {
   return `${fa(Math.round(ratio * 100))}٪`
 }
+
+/** Date + time in Tehran, Persian numerals: "۱۴ شهریور ۱۴۰۵، ۱۴:۰۲". Shared helper — import, never duplicate. */
+export function when(iso: string | Date): string {
+  return new Intl.DateTimeFormat('fa-IR-u-ca-persian', {
+    day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Tehran',
+  }).format(new Date(iso))
+}

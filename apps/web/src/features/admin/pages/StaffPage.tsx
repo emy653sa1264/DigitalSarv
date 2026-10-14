@@ -41,7 +41,7 @@ export function StaffPage() {
           <AdminTable columns={COLUMNS} minWidth={820} head={['نام', 'موبایل', 'دسترسی', 'نوع', '']}>
             {list.map((m) => {
               const shown = (m.permissions ?? []).filter((p) => LABEL.has(p))
-              const hidden = (m.permissions?.length ?? 0) - shown.length // permissions without a label here (dispatch / provider orders, M3)
+              const hidden = (m.permissions?.length ?? 0) - shown.length // permissions without a label here (unknown future permissions)
               return (
                 <AdminRow key={m.id} className="py-3">
                   <span className="truncate font-bold">{m.name || '—'}{m.id === user?.id && <span className="ms-1.5 text-[11.5px] text-muted-2">(شما)</span>}</span>
@@ -78,7 +78,7 @@ function StaffDialog({ open, onOpenChange, item }: { open: boolean; onOpenChange
   const [phone, setPhone] = useState(item?.phone ?? '')
   const [name, setName] = useState(item?.name ?? '')
   const [superAdmin, setSuperAdmin] = useState(item?.superAdmin ?? false)
-  // permissions not shown here (dispatch / provider orders, M3) are kept as they are
+  // permissions not shown here (unknown future permissions) are kept as they are
   const [perms, setPerms] = useState<Permission[]>(item?.permissions ?? [])
   const toggle = (p: Permission) => setPerms((list) => (list.includes(p) ? list.filter((x) => x !== p) : [...list, p]))
   const locked = !!item?.bootstrap
@@ -124,7 +124,7 @@ function StaffDialog({ open, onOpenChange, item }: { open: boolean; onOpenChange
               </div>
             </div>
           ))}
-          <div className="text-[12px] leading-6 text-muted-2">بخش‌های عمومی پنل (سفارش‌ها، تولید، مشتریان، …) برای همه مدیران باز است؛ این فهرست قیمت‌گذاری و مجریان را محدود می‌کند.</div>
+          <div className="text-[12px] leading-6 text-muted-2">بخش‌های عمومی پنل (سفارش‌ها، تولید، مشتریان، …) برای همه مدیران باز است؛ این فهرست قیمت‌گذاری، مجریان و تخصیص سفارش را محدود می‌کند.</div>
         </div>
       )}
     </FormDialog>

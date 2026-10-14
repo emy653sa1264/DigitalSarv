@@ -2,8 +2,8 @@ import { useState } from 'react'
 import { DsSwitch, InfoBanner } from '@/components/brand'
 import { notify, toast } from '@/components/ui/sonner'
 import { Textarea } from '@/components/ui/textarea'
-import type { NotificationTemplate, OrderStatus } from '@/lib/types'
-import { ORDER_STATUS_LABEL } from '@/lib/types'
+import { NOTIFICATION_EVENT_LABEL } from '@/lib/dispatch-labels'
+import type { NotificationEvent, NotificationTemplate } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { useNotificationMutations, useNotificationTemplates } from '../api'
 import { AddButton, AdminSelect, ConfirmDelete } from '../components/controls'
@@ -18,7 +18,7 @@ const CHANNEL = {
 } as const
 
 /** Events the server dispatches (everything except the unpaid state). */
-const EVENTS: OrderStatus[] = ORDER_STATUSES.filter((s) => s !== 'pending_payment')
+const EVENTS: NotificationEvent[] = ORDER_STATUSES.filter((s) => s !== 'pending_payment')
 
 export function NotificationsPage() {
   const query = useNotificationTemplates()
@@ -51,7 +51,7 @@ export function NotificationsPage() {
                     <span className={cn('shrink-0 rounded-full px-[11px] py-[5px] text-center text-[11px] font-extrabold', ch.className)}>{ch.label}</span>
                     <div className="min-w-0 flex-1 basis-[200px]">
                       <div className={cn('text-sm font-semibold', !n.on && 'text-muted-3')}>{n.text}</div>
-                      <div className="text-[11.5px] text-muted-3">{ORDER_STATUS_LABEL[n.event] ?? n.event}</div>
+                      <div className="text-[11.5px] text-muted-3">{NOTIFICATION_EVENT_LABEL(n.event)}</div>
                     </div>
                     <button
                       type="button"
@@ -61,7 +61,7 @@ export function NotificationsPage() {
                       ویرایش متن
                     </button>
                     <ConfirmDelete
-                      title={`حذف اعلان «${ORDER_STATUS_LABEL[n.event] ?? n.event}»؟`}
+                      title={`حذف اعلان «${NOTIFICATION_EVENT_LABEL(n.event)}»؟`}
                       description="برای این مرحله دیگر اعلانی ارسال نمی‌شود تا دوباره آن را اضافه کنید."
                       onConfirm={() => remove.mutate(n.id, { onSuccess: () => notify('اعلان حذف شد') })}
                     />
@@ -106,7 +106,7 @@ function EditTextDialog({ template, onClose }: { template?: NotificationTemplate
       open={!!template}
       onOpenChange={(o) => !o && onClose()}
       title="ویرایش متن اعلان"
-      description={template ? `${(CHANNEL[template.channel] ?? CHANNEL.push).label} · ${ORDER_STATUS_LABEL[template.event] ?? template.event}` : undefined}
+      description={template ? `${(CHANNEL[template.channel] ?? CHANNEL.push).label} · ${NOTIFICATION_EVENT_LABEL(template.event)}` : undefined}
       pending={update.isPending}
       onSubmit={submit}
     >
@@ -117,8 +117,8 @@ function EditTextDialog({ template, onClose }: { template?: NotificationTemplate
   )
 }
 
-function AddNotificationDialog({ open, events, onOpenChange }: { open: boolean; events: OrderStatus[]; onOpenChange: (o: boolean) => void }) {
-  const [event, setEvent] = useState<OrderStatus | undefined>(events[0])
+function AddNotificationDialog({ open, events, onOpenChange }: { open: boolean; events: NotificationEvent[]; onOpenChange: (o: boolean) => void }) {
+  const [event, setEvent] = useState<NotificationEvent | undefined>(events[0])
   const [text, setText] = useState('')
   const [on, setOn] = useState(true)
   const { create } = useNotificationMutations()
@@ -136,7 +136,7 @@ function AddNotificationDialog({ open, events, onOpenChange }: { open: boolean; 
       { event, text: text.trim(), on },
       {
         onSuccess: () => {
-          notify(`اعلان «${ORDER_STATUS_LABEL[event]}» اضافه شد`)
+          notify(`اعلان «${NOTIFICATION_EVENT_LABEL(event)}» اضافه شد`)
           onOpenChange(false)
         },
       },
@@ -149,9 +149,9 @@ function AddNotificationDialog({ open, events, onOpenChange }: { open: boolean; 
         <AdminSelect
           ariaLabel="مرحله سفارش"
           value={event}
-          onValueChange={(v) => setEvent(v as OrderStatus)}
+          onValueChange={(v) => setEvent(v as NotificationEvent)}
           placeholder="انتخاب مرحله"
-          options={events.map((e) => ({ value: e, label: ORDER_STATUS_LABEL[e] }))}
+          options={events.map((e) => ({ value: e, label: NOTIFICATION_EVENT_LABEL(e) }))}
         />
       </Field>
       <Field label="متن اعلان">

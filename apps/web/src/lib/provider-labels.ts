@@ -30,7 +30,7 @@ export const COLOR_TYPE_LABEL = { text: 'متن رنگی', full: 'تمام‌ر�
 export const SIDE_LABEL = { single: 'یک‌رو', double: 'دورو' } as const
 export const NO_PROVIDER_PRICE = 'قیمت مجری تنظیم نشده'
 
-/** §81 permissions that guard something in v4.1 (dispatch / provider-order permissions arrive with M3 and are kept untouched). */
+/** All §81 permissions guard something since v4.2. */
 export const PERMISSION_GROUPS: { title: string; items: { key: Permission; label: string }[] }[] = [
   { title: 'قیمت مشتری', items: [
     { key: 'customer_price_view', label: 'مشاهده' }, { key: 'customer_price_edit', label: 'ویرایش و پیش‌نویس' },
@@ -44,5 +44,11 @@ export const PERMISSION_GROUPS: { title: string; items: { key: Permission; label
   ] },
   { title: 'مدیریت مجریان', items: [
     { key: 'provider_view', label: 'مشاهده' }, { key: 'provider_edit', label: 'ویرایش پروفایل' }, { key: 'provider_manage', label: 'افزودن، حذف و ورود مجری' },
+  ] },
+  { title: 'مرکز تخصیص سفارش', items: [
+    { key: 'dispatch_view', label: 'مشاهده و هشدارها' }, { key: 'dispatch_assign', label: 'تخصیص، تحویل و مهلت' }, { key: 'dispatch_reassign', label: 'تغییر و لغو تخصیص' },
+  ] },
+  { title: 'سفارش‌های مجریان', items: [
+    { key: 'provider_order_view', label: 'عملکرد و بار کاری' }, { key: 'provider_order_accept', label: 'پذیرش/رد از طرف مجری' }, { key: 'provider_order_status', label: 'ثبت وضعیت و تکمیل' },
   ] },
 ]

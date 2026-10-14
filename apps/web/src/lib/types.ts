@@ -157,6 +157,7 @@ export interface Catalog {
   plans: Plan[]
   prices: Prices
   urgentEnabled: boolean
+  pickupPoints?: Omit<PickupPoint, 'on'>[]
   campaign: Campaign | null
   /** v3.3 «تنظیمات» (public part). */
   ops: OpsSettings
@@ -337,6 +338,7 @@ export interface OrderDraft {
   urgent?: boolean
   pickup?: Pickup
   payMethod?: PayMethod
+  delivery?: { method: 'courier' | 'customer_pickup'; pickupPointId?: string; note?: string }
   /** v4: the total the customer saw; the server answers 409 PRICE_CHANGED when it no longer matches. */
   expectedTotal?: number
 }
@@ -430,6 +432,8 @@ export interface Order {
   chargedAmount?: number
   paidVia?: PayMethod
   refunded?: boolean
+  delivery?: OrderDelivery
+  fulfillment?: CustomerFulfillment
   planId: PlanId
   coupon?: string
   urgent: boolean
@@ -516,6 +520,8 @@ export interface CourierTask {
   status: OrderStatus
   totalBooks: number
   done: boolean
+  from?: { name: string; address: string; phone: string }
+  dropoff?: { name: string; address: string; phone: string }
   lat?: number
   lng?: number
 }
@@ -550,7 +556,7 @@ export interface ProductionColumn {
   count: number
   tone: ProductionTone
   /** v3.3: items carry their order's `qcLabels`. */
-  items: { id: string; code: string; label: string; qcLabels?: string[] }[]
+  items: { id: string; code: string; label: string; qcLabels?: string[]; providerName?: string; jobStatus?: JobStatus }[]
 }
 export interface ProductionBoard {
   columns: ProductionColumn[]
@@ -574,10 +580,10 @@ export interface PricingRule {
   effectLabel: string
 }
 export interface CmsSection { id: string; key: string; label: string; on: boolean; order: number }
-export interface NotificationTemplate { id: string; event: OrderStatus; channel: 'sms' | 'push'; text: string; on: boolean }
+export interface NotificationTemplate { id: string; event: NotificationEvent; channel: 'sms' | 'push'; text: string; on: boolean }
 
 /** v3.3 in-app notification (inbox); order events never send SMS. */
-export interface UserNotification { id: string; orderId: string; orderCode: string; event: OrderStatus; text: string; read: boolean; createdAt: string }
+export interface UserNotification { id: string; orderId: string; orderCode: string; event: NotificationEvent; text: string; read: boolean; createdAt: string; audience: NotificationAudience; url: string; jobId?: string }
 
 /** v3.3 «تنظیمات» — public operations settings (`GET /catalog` → `ops`). */
 export interface OpsSettings {
@@ -614,6 +620,8 @@ export interface AdminSettings {
   courier: CourierPaySettings
   checklists: ChecklistSettings
   printAddons: PrintAddons
+  dispatch: DispatchSettings
+  pickupPoints: PickupPoint[]
 }
 
 // ── Admin price book (contract v4.0) ───────────────────────────────────────
@@ -729,3 +737,79 @@ export interface ProviderPriceRow {
   current: ProviderPriceView | null; next: ProviderPriceView | null; pending: ProviderPriceView | null; lastRejected: ProviderPriceView | null
 }
 export interface StaffMember { id: string; name: string; phone: string; superAdmin: boolean; bootstrap: boolean; permissions: Permission[] | null; createdAt: string }
+
+// ── v4.2 dispatch & fulfillment (contract «v4.2») ──────────────────────────
+export type JobStatus = 'unassigned' | 'assigned' | 'accepted' | 'in_production' | 'ready' | 'out_for_delivery' | 'ready_for_pickup' | 'delivered' | 'completed' | 'rejected' | 'cancelled' | 'failed'
+export type DeliveryMethod = 'courier' | 'provider' | 'customer_pickup'
+export type PickupAt = 'point' | 'provider'
+export type JobPriority = 'normal' | 'high' | 'urgent'
+export type RejectReason = 'equipment_unavailable' | 'paper_unavailable' | 'capacity_full' | 'machine_problem' | 'outside_hours' | 'other'
+export type CancelStage = 'before_production' | 'in_production' | 'after_production'
+export type DispatchTab = 'new' | 'unassigned' | 'assigned' | 'in_progress' | 'ready' | 'delivery' | 'completed' | 'cancelled'
+export type ProviderTab = 'new' | 'pending' | 'accepted' | 'in_production' | 'ready' | 'delivery' | 'completed' | 'cancelled'
+export type DeliveryStatus = 'pending' | 'ready' | 'on_the_way' | 'done'
+export interface PickupPoint { id: string; name: string; address: string; phone: string; hours: string; on: boolean }
+export interface PlaceSnapshot { id: string; name: string; address: string; phone: string; hours: string; kind: 'point' | 'provider' }
+export interface OrderDelivery { method: DeliveryMethod; homePickup: boolean; pickupAt?: PickupAt; pickupPoint?: PlaceSnapshot; providerShop?: PlaceSnapshot; note: string }
+export interface CustomerFulfillment { status: JobStatus; label: string; place?: PlaceSnapshot }
+export interface DispatchSettings { responseTimeoutMinutes: number; leadHours: number; urgentLeadHours: number; deadlineReminderMinutes: number; autoCompleteHours: number }
+export type DispatchEvent = 'job_assigned' | 'job_delivery_assigned' | 'job_withdrawn' | 'job_cancelled' | 'job_changed' | 'job_deadline'
+  | 'job_rejected' | 'job_timeout' | 'job_failed' | 'job_late' | 'provider_unavailable' | 'assigned' | 'ready_for_pickup'
+export type NotificationEvent = OrderStatus | DispatchEvent
+export type NotificationAudience = 'customer' | 'provider' | 'admin'
+export interface ProviderPricingSnapshot {
+  providerId: string; snapshotAt: string; currency: 'toman'
+  lines: { serviceIndex: number; comboKey: string; label: string; versionId: string; version: number; unitPrice: number; quantity: number; subtotal: number }[]
+  missing: { serviceIndex?: number; childIndex?: number; comboKey: string | null; label: string }[]
+  providerSubtotal: number | null; delivery: { providerId: string; fee: number } | null; payoutBasis: number | null; confirmedMissing: boolean
+}
+export interface DispatchJobRow {
+  id: string; orderId: string; orderCode: string; customerName: string; zone?: string; services: ProviderService[]; summary: string
+  status: JobStatus; orderStatus: OrderStatus; priority: JobPriority; deadline: string; late: boolean; attempts: number
+  provider: { id: string; name: string } | null; deliveryProvider: { id: string; name: string } | null
+  deliveryMethod: DeliveryMethod; pickupAt?: PickupAt; respondBy?: string
+  lastException?: { kind: 'rejected' | 'timeout' | 'failed' | 'unassigned'; reason: string; providerName: string; at: string }
+  createdAt: string
+}
+export type JobAction = 'created' | 'migrated' | 'assigned' | 'reassigned' | 'accepted' | 'rejected' | 'timeout' | 'unassigned' | 'status' | 'failed' | 'delivery_changed' | 'updated' | 'cancelled' | 'completed'
+export interface JobHistoryView {
+  at: string; action: JobAction; status: JobStatus; label: string; providerName?: string; deliveryProviderName?: string; byName?: string
+  byRole: 'admin' | 'provider' | 'courier' | 'customer' | 'system'; reason?: string; reasonCode?: RejectReason; override?: boolean; stage?: CancelStage
+}
+export interface AssignmentView {
+  providerId: string; providerName: string; assignedByName?: string; assignedAt: string; acceptedAt?: string; rejectedAt?: string; completedAt?: string; endedAt?: string
+  reason?: string; reasonCode?: RejectReason; override?: boolean; outcome: 'pending' | 'active' | 'rejected' | 'timeout' | 'withdrawn' | 'failed' | 'cancelled' | 'completed'
+}
+export interface DispatchJobDetail extends DispatchJobRow {
+  homePickup: boolean; sheets: number; units: Partial<Record<ProviderService, number>>; requirements: string[]
+  order: { status: OrderStatus; urgent: boolean; payMethod: PayMethod; paid: boolean; total: number; delivery: OrderDelivery; pickup: { address: string; phone: string; date?: string; slot?: string }; qcDone: boolean; courierId?: string }
+  providerPricing: ProviderPricingSnapshot | null; history: JobHistoryView[]; assignments: AssignmentView[]; cancel?: { at: string; stage: CancelStage; providerName?: string }
+}
+export interface DispatchList { items: DispatchJobRow[]; total: number; page: number; limit: number; counts: Record<DispatchTab, number> }
+export interface ProviderCheck { key: 'capability' | 'status' | 'available' | 'hours' | 'zone' | 'capacity' | 'delivery'; ok: boolean; hard: boolean; message: string }
+export interface EligibilityRow {
+  providerId: string; name: string; businessName: string; status: ProviderStatus; current: boolean; eligible: boolean; assignable: boolean; checks: ProviderCheck[]
+  price: { subtotal: number | null; missing: string[]; lines: { label: string; unitPrice: number; quantity: number; subtotal: number }[] }
+  capacityLeft: { sheets: number | null; jobs: number | null; perService: { service: ProviderService; left: number }[] }
+  hourlySheets?: number; openNow: boolean | null; activeJobs: number; hasLogin: boolean; canDeliver: boolean; deliveryFee: number; allowCustomerPickup: boolean
+}
+export interface Eligibility { jobId: string; requirements: string[]; eligible: EligibilityRow[]; others: EligibilityRow[]; deliveryProviders: { id: string; name: string; deliveryFee: number; zoneOk: boolean }[] }
+export interface ProviderPerformance {
+  providerId: string; name: string; assigned: number; accepted: number; rejected: number; timeouts: number; failed: number
+  rejectReasons: { code: RejectReason; label: string; count: number }[]; completed: number; cancelled: number; late: number
+  avgResponseMinutes: number | null; avgProductionMinutes: number | null; avgDeliveryMinutes: number | null; activeJobs: number; todaySheets: number
+}
+export interface ProviderJobView {
+  id: string; orderCode: string; status: JobStatus; statusLabel: string; roles: ('production' | 'delivery')[]; priority: JobPriority; deadline: string; late: boolean
+  assignedAt?: string; respondBy?: string; services: ProviderService[]; summary: string; delivery: { method: DeliveryMethod; label: string; pickupAt?: PickupAt }
+  providerSubtotal: number | null
+}
+export interface ProviderWithdrawnView { id: string; orderCode: string; withdrawn: true; at: string; label: string }
+export interface ProviderJobLine { kind: 'child' | 'service'; label: string; detail: string; quantity: number; options: Record<string, string | number | boolean>; childName?: string; note?: string }
+export interface ProviderJobDetail extends ProviderJobView {
+  lines: ProviderJobLine[]; files: Upload[]; qc: { labels: string[]; done: boolean[] } | null
+  pricing: { lines: { label: string; unitPrice: number; quantity: number; subtotal: number }[]; missing: string[]; subtotal: number | null } | null
+  contact: { name: string; phone: string; address: string; note: string } | null; collectFrom: { name: string; address: string; phone: string } | null
+  homePickup: boolean; itemsReceived: boolean; history: { at: string; status: JobStatus; label: string; note?: string }[]
+}
+export interface ProviderJobList { items: (ProviderJobView | ProviderWithdrawnView)[]; total: number; page: number; limit: number; counts: Record<ProviderTab, number> }

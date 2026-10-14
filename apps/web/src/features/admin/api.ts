@@ -16,6 +16,7 @@ import type {
   Grade,
   NotificationTemplate,
   Order,
+  NotificationEvent,
   OrderStatus,
   Paged,
   Paper,
@@ -98,7 +99,7 @@ export type CenterBody = Omit<Center, 'id' | 'status' | 'availableForOrders'>
 export interface CmsBody { label?: string; on?: boolean; order?: number }
 export interface NotificationBody { text?: string; on?: boolean }
 /** v3.3 `POST /admin/notifications` (409 when the event already has a template). */
-export interface NotificationCreateBody { event: OrderStatus; text: string; on?: boolean }
+export interface NotificationCreateBody { event: NotificationEvent; text: string; on?: boolean }
 export interface SettingsPatch { ops?: Partial<AdminSettings['ops']>; courier?: Partial<AdminSettings['courier']>; checklists?: Partial<AdminSettings['checklists']>; printAddons?: Partial<PrintAddons> }
 
 // ── Generic list + CRUD ────────────────────────────────────────────────────

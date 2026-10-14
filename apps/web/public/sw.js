@@ -85,14 +85,15 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
-  const target = new URL((event.notification.data && event.notification.data.url) || '/app/notifications', self.location.origin).href
+  const target = new URL((event.notification.data && event.notification.data.url) || '/app/notifications', self.location.origin)
+  const app = '/' + (target.pathname.split('/')[1] || '')   // '/app' | '/provider' | '/admin'
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windows) => {
-      const exact = windows.find((w) => w.url === target)
+      const exact = windows.find((w) => w.url === target.href)
       if (exact) return exact.focus()
-      const appWindow = windows.find((w) => new URL(w.url).pathname.startsWith('/app'))
-      if (appWindow && 'navigate' in appWindow) return appWindow.navigate(target).then((w) => (w || appWindow).focus())
-      return self.clients.openWindow(target)
+      const appWindow = windows.find((w) => new URL(w.url).pathname.startsWith(app))
+      if (appWindow && 'navigate' in appWindow) return appWindow.navigate(target.href).then((w) => (w || appWindow).focus())
+      return self.clients.openWindow(target.href)
     }),
   )
 })
