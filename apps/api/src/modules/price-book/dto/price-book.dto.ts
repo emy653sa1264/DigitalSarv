@@ -1,10 +1,11 @@
 import { Type } from 'class-transformer';
-import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsISO8601, IsOptional, IsString, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsISO8601, IsMongoId, IsOptional, IsString, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import { BULK_OPS, type BulkOp } from '../bulk.js';
 import { COLOR_TYPES, PRINT_SIZES, SIDES } from '../combo.js';
-import { PRICE_MODES, ROUNDINGS, type PriceMode } from '../price-book.constants.js';
+import { PRICE_LAYERS, PRICE_MODES, ROUNDINGS, type PriceLayer, type PriceMode } from '../price-book.constants.js';
 
-export class PreviewVersionDto {
+/** The value fields of a version (shared by preview and create). */
+export class VersionValueDto {
   @IsString() @MaxLength(120) comboKey: string;
   @IsIn(PRICE_MODES) mode: PriceMode;
   @IsOptional() @IsInt() @Min(0) price?: number;
@@ -12,9 +13,15 @@ export class PreviewVersionDto {
   @IsOptional() @IsInt() @Min(0) markup?: number;
   @IsOptional() @IsInt() @Min(0) discount?: number;
   @IsOptional() @IsIn(ROUNDINGS) rounding?: number;
+  /** Customer `fixed_markup` / `percent_markup` / `provider_price` formulas: whose provider price the version is based on. */
+  @IsOptional() @IsMongoId() baseProviderId?: string;
 }
-export class CreateVersionDto extends PreviewVersionDto {
-  @IsIn(['customer'], { message: 'در این مرحله فقط قیمت مشتری قابل ثبت است' }) layer: 'customer';
+export class PreviewVersionDto extends VersionValueDto {
+  @IsOptional() @IsIn(PRICE_LAYERS) layer?: PriceLayer;
+}
+export class CreateVersionDto extends VersionValueDto {
+  @IsIn(PRICE_LAYERS, { message: 'لایه قیمت معتبر نیست' }) layer: PriceLayer;
+  @IsOptional() @IsMongoId() providerId?: string;
   @IsOptional() @IsISO8601() effectiveFrom?: string;
   @IsOptional() @IsISO8601() effectiveUntil?: string;
   @IsBoolean() publish: boolean;
@@ -53,10 +60,12 @@ export class UpdateRangeDto {
   @IsOptional() @IsBoolean() on?: boolean;
 }
 export class MatrixQueryDto {
-  @IsIn(['customer']) layer: 'customer';
+  @IsIn(PRICE_LAYERS) layer: PriceLayer;
+  @IsOptional() @IsMongoId() providerId?: string;
   @IsOptional() @IsIn(['bw', 'color', 'spiral', 'addon']) service?: 'bw' | 'color' | 'spiral' | 'addon';
 }
 export class HistoryQueryDto {
-  @IsIn(['customer']) layer: 'customer';
+  @IsIn(PRICE_LAYERS) layer: PriceLayer;
+  @IsOptional() @IsMongoId() providerId?: string;
   @IsString() @MaxLength(120) comboKey: string;
 }

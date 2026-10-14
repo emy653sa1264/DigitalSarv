@@ -8,29 +8,35 @@ import { Paper } from '../catalog/schemas/paper.schema.js';
 import { User } from '../users/user.schema.js';
 import { COLOR_TYPES, comboKey, parseCombo, PRINT_ADDONS, PRINT_SIZES, SIDES, singleSideKey, type ComboOptions, type ComboService } from './combo.js';
 import { bulkValue, type BulkOp } from './bulk.js';
-import { validateFormula } from './formula.js';
+import { Center } from '../centers/center.schema.js';
+import { formulaVariables, parseFormula, validateFormula } from './formula.js';
 import { comboLabel, type LabelNames } from './labels.js';
-import { CUSTOMER_FORMULA_VARS, ROUNDINGS, type DisplayStatus, type PriceLayer, type PriceMode } from './price-book.constants.js';
+import { CUSTOMER_FORMULA_VARS, layerPermission, PRICE_LAYERS, PRICE_MODES, ROUNDINGS, type DisplayStatus, type PriceLayer, type PriceMode } from './price-book.constants.js';
 import { rangeProblem } from './ranges.js';
 import { displayStatus, pickEffective, unitPrice, type VersionLike } from './resolve.js';
 import { BindingRange } from './schemas/binding-range.schema.js';
 import { PriceAudit, type PriceAuditAction } from './schemas/price-audit.schema.js';
 import { PriceVersion } from './schemas/price-version.schema.js';
-import { toVersionLike } from './snapshot.js';
+import { effectiveProviderPrices, toVersionLike } from './snapshot.js';
 
-export interface CreateVersionInput {
-  layer: 'customer'; comboKey: string; mode: PriceMode;
-  price?: number; formula?: string; markup?: number; discount?: number; rounding?: number;
+export interface VersionValue {
+  mode: PriceMode; price?: number; formula?: string; markup?: number; discount?: number; rounding?: number; baseProviderId?: string;
+}
+export interface CreateVersionInput extends VersionValue {
+  layer: PriceLayer; providerId?: string; comboKey: string;
   effectiveFrom?: string; effectiveUntil?: string; publish: boolean; reason: string;
 }
-export type PreviewInput = Pick<CreateVersionInput, 'comboKey' | 'mode' | 'price' | 'formula' | 'markup' | 'discount' | 'rounding'>;
+export type PreviewInput = VersionValue & { comboKey: string; layer?: PriceLayer };
 export interface VersionView {
   id: string; layer: PriceLayer; providerId: string | null; comboKey: string; version: number; mode: PriceMode;
-  price?: number; formula?: string; markup?: number; discount?: number; rounding: number;
+  price?: number; formula?: string; markup?: number; discount?: number; rounding: number; baseProviderId?: string;
   effectiveFrom: string; effectiveUntil?: string; state: VersionLike['state']; status: DisplayStatus;
-  reason: string; createdBy?: { id: string; name: string }; createdAt: string; unitPrice: number | null;
+  reason: string; reviewNote?: string; reviewedAt?: string; createdBy?: { id: string; name: string }; createdAt: string; unitPrice: number | null;
 }
-export interface MatrixRow { comboKey: string; service: ComboService; options: ComboOptions; label: string; current: VersionView | null; next: VersionView | null; hasVersions: boolean }
+export interface MatrixRow {
+  comboKey: string; service: ComboService; options: ComboOptions; label: string;
+  current: VersionView | null; next: VersionView | null; pending: VersionView | null; lastRejected: VersionView | null; hasVersions: boolean;
+}
 
 export interface BulkInput {
   layer: 'customer';
@@ -46,6 +52,8 @@ type Row = PriceVersion & { _id: Types.ObjectId };
 const MAX_PRICE = 1_000_000_000;
 const PAST_GRACE_MS = 60_000;
 const PAST_MSG = 'زمان اعمال نمی‌تواند در گذشته باشد';
+const DENIED = 'به این بخش دسترسی ندارید';
+type ProviderPrices = Record<string, Record<string, number>>;
 
 @Injectable()
 export class PriceBookService {
@@ -56,41 +64,40 @@ export class PriceBookService {
     @InjectModel(Paper.name) private readonly papers: Model<Paper>,
     @InjectModel(User.name) private readonly users: Model<User>,
     private readonly catalog: CatalogService,
+    @InjectModel(Center.name) private readonly centers: Model<Center>,
   ) {}
 
   /** Throws unless the admin holds `permission` (absent `User.permissions` = every permission). */
   async assertCan(userId: string, permission: Permission): Promise<void> {
     const user = Types.ObjectId.isValid(userId) ? await this.users.findById(userId).lean() : null;
     if (!user || user.role !== 'admin' || (user.permissions && !user.permissions.includes(permission))) {
-      throw new ForbiddenException('به این بخش دسترسی ندارید');
+      throw new ForbiddenException(DENIED);
     }
+  }
+
+  /** The layers whose prices the admin may view (403 when none). */
+  async viewableLayers(userId: string): Promise<PriceLayer[]> {
+    const user = Types.ObjectId.isValid(userId) ? await this.users.findById(userId).lean() : null;
+    if (!user || user.role !== 'admin') throw new ForbiddenException(DENIED);
+    const layers = PRICE_LAYERS.filter((l) => !user.permissions || user.permissions.includes(layerPermission(l, 'view')));
+    if (!layers.length) throw new ForbiddenException(DENIED);
+    return [...layers];
   }
 
   // ------------------------------------------------------------ reads
 
-  async matrix(layer: 'customer', service?: ComboService, at = new Date()): Promise<MatrixRow[]> {
+  async matrix(layer: PriceLayer, service?: ComboService, at = new Date(), providerId: string | null = null): Promise<MatrixRow[]> {
+    const scope = this.scope(layer, providerId);
     const [papers, ranges, rows] = await Promise.all([
       this.papers.find().sort({ sort: 1, _id: 1 }).lean(),
       this.ranges.find().sort({ minPages: 1 }).lean(),
-      this.versions.find({ layer, providerId: null }).lean() as Promise<Row[]>,
+      this.versions.find(scope).lean() as Promise<Row[]>,
     ]);
     const names = this.names(papers, ranges);
-    const keys: string[] = [];
-    for (const size of PRINT_SIZES) for (const side of SIDES) keys.push(comboKey({ service: 'bw', size, side }));
-    for (const size of PRINT_SIZES) for (const colorType of COLOR_TYPES) for (const p of papers.filter((x) => x.colorPrint)) for (const side of SIDES) {
-      keys.push(comboKey({ service: 'color', size, colorType, paper: p.key, side }));
-    }
-    for (const r of ranges) keys.push(comboKey({ service: 'spiral', rangeId: String(r._id) }));
-    for (const addon of PRINT_ADDONS) {
-      if (addon === 'lam_sheet') for (const size of PRINT_SIZES) keys.push(comboKey({ service: 'addon', addon, size }));
-      else keys.push(comboKey({ service: 'addon', addon }));
-    }
-    for (const r of rows) if (!keys.includes(r.comboKey)) keys.push(r.comboKey);
-
     const users = await this.userNames(rows);
     const vars = await this.varsLoader(rows, papers, at);
     const out: MatrixRow[] = [];
-    for (const key of keys) {
+    for (const key of this.knownKeys(papers, ranges, rows)) {
       const options = parseCombo(key);
       if (!options || (service && options.service !== service)) continue;
       const list = rows.filter((r) => r.comboKey === key);
@@ -99,46 +106,60 @@ export class PriceBookService {
       const future = likes
         .filter((v) => v.state === 'published' && v.effectiveFrom.getTime() > at.getTime())
         .sort((a, b) => a.effectiveFrom.getTime() - b.effectiveFrom.getTime())[0];
-      const view = (id?: string) => {
-        const r = id ? list.find((x) => String(x._id) === id) : undefined;
-        return r ? this.view(r, eff?.id ?? null, at, users, vars(key)) : null;
-      };
-      out.push({ comboKey: key, service: options.service, options, label: comboLabel(options, names), current: view(eff?.id), next: view(future?.id), hasVersions: list.length > 0 });
+      const byId = (id?: string) => list.find((x) => String(x._id) === id);
+      const latest = (state: PriceVersion['state']) => list.filter((r) => r.state === state).sort((a, b) => b.version - a.version)[0];
+      const view = (r?: Row) => (r ? this.view(r, eff?.id ?? null, at, users, vars(key, r.baseProviderId)) : null);
+      const rejected = latest('rejected');
+      const newest = Math.max(0, ...list.filter((r) => r.state !== 'rejected').map((r) => r.version));
+      out.push({
+        comboKey: key, service: options.service, options, label: comboLabel(options, names),
+        current: view(byId(eff?.id)), next: view(byId(future?.id)), pending: view(latest('pending_approval')),
+        lastRejected: rejected && rejected.version > newest ? view(rejected) : null,
+        hasVersions: list.length > 0,
+      });
     }
     return out;
   }
 
-  async history(layer: 'customer', comboKey: string, at = new Date()): Promise<VersionView[]> {
-    const rows = (await this.versions.find({ layer, providerId: null, comboKey }).lean()) as Row[];
+  async history(layer: PriceLayer, comboKey: string, at = new Date(), providerId: string | null = null): Promise<VersionView[]> {
+    const sibling = singleSideKey(comboKey);
+    // the single-sided sibling is loaded too, so a formula's `base_price` evaluates in the history view
+    const all = (await this.versions.find({ ...this.scope(layer, providerId), comboKey: { $in: sibling ? [comboKey, sibling] : [comboKey] } }).lean()) as Row[];
+    const rows = all.filter((r) => r.comboKey === comboKey);
     const eff = pickEffective(rows.map(toVersionLike), at);
     const users = await this.userNames(rows);
-    const papers = await this.papers.find().lean();
-    const vars = await this.varsLoader(rows, papers, at);
-    return rows
-      .sort((a, b) => b.version - a.version)
-      .map((r) => this.view(r, eff?.id ?? null, at, users, vars(comboKey)));
+    const vars = await this.varsLoader(all, await this.papers.find().lean(), at);
+    return rows.sort((a, b) => b.version - a.version).map((r) => this.view(r, eff?.id ?? null, at, users, vars(comboKey, r.baseProviderId)));
   }
 
   async preview(input: PreviewInput): Promise<{ unitPrice: number | null; error?: string }> {
-    const problem = this.valueProblem(input);
+    const layer = input.layer ?? 'customer';
+    const problem = this.valueProblem(input, layer);
     if (problem) return { unitPrice: null, error: problem };
+    const at = new Date();
     const papers = await this.papers.find().lean();
-    const rows = (await this.versions.find({ layer: 'customer', providerId: null }).lean()) as Row[];
-    const vars = (await this.varsLoader(rows, papers, new Date()))(input.comboKey);
-    const value = unitPrice(
-      { id: 'preview', version: 0, state: 'published', effectiveFrom: new Date(), mode: input.mode, price: input.price, formula: input.formula, markup: input.markup, discount: input.discount, rounding: input.rounding ?? 0 },
-      vars,
-    );
-    return value === null ? { unitPrice: null, error: 'با مقادیر فعلی قابل محاسبه نیست (قیمت پایه یا هزینه کاغذ را بررسی کنید)' } : { unitPrice: value };
+    const rows = layer === 'customer' ? ((await this.versions.find({ layer: 'customer', providerId: null }).lean()) as Row[]) : [];
+    const vars = (await this.varsLoader(rows, papers, at, !!input.baseProviderId))(input.comboKey, input.baseProviderId);
+    const value = unitPrice(this.candidate(input, at), vars);
+    if (value !== null) return { unitPrice: value };
+    const noBase = !!input.baseProviderId && vars.provider_price === undefined;
+    return { unitPrice: null, error: noBase ? 'مجری پایه برای این ترکیب قیمت فعال ندارد' : 'با مقادیر فعلی قابل محاسبه نیست (قیمت پایه یا هزینه کاغذ را بررسی کنید)' };
   }
 
   // ------------------------------------------------------------ writes
 
   async create(input: CreateVersionInput, by: string): Promise<VersionView> {
-    if (input.layer !== 'customer') throw new BadRequestException('در این مرحله فقط قیمت مشتری قابل ثبت است');
+    const layer = input.layer;
+    if (!(PRICE_LAYERS as readonly string[]).includes(layer)) throw new BadRequestException('لایه قیمت معتبر نیست');
+    await this.assertCan(by, layerPermission(layer, 'edit'));
+    if (input.publish) await this.assertCan(by, layerPermission(layer, 'publish'));
+    const scope = this.scope(layer, input.providerId);
+    if (scope.providerId) await this.assertProvider(scope.providerId);
     if (!parseCombo(input.comboKey)) throw new BadRequestException('ترکیب قیمت معتبر نیست');
-    const problem = this.valueProblem(input);
+    const problem = this.valueProblem(input, layer);
     if (problem) throw new BadRequestException(problem);
+    const base = input.baseProviderId && input.mode !== 'manual' ? this.oid(input.baseProviderId) : null;
+    if (base) await this.assertProvider(base);
     const reason = (input.reason ?? '').trim();
     if (!reason) throw new BadRequestException('دلیل تغییر قیمت را بنویسید');
     const effectiveFrom = input.effectiveFrom ? new Date(input.effectiveFrom) : new Date();
@@ -146,39 +167,48 @@ export class PriceBookService {
     if (Number.isNaN(effectiveFrom.getTime()) || (effectiveUntil && Number.isNaN(effectiveUntil.getTime()))) throw new BadRequestException('تاریخ معتبر نیست');
     if (effectiveUntil && effectiveUntil.getTime() <= effectiveFrom.getTime()) throw new BadRequestException('تاریخ پایان باید بعد از تاریخ شروع باشد');
     if (input.publish && input.effectiveFrom && effectiveFrom.getTime() < Date.now() - PAST_GRACE_MS) throw new BadRequestException(PAST_MSG);
-    if (input.publish && input.effectiveFrom && (await this.versions.exists({ layer: 'customer', providerId: null, comboKey: input.comboKey, state: 'published', effectiveFrom }))) {
+    if (input.publish && input.effectiveFrom && (await this.versions.exists({ ...scope, comboKey: input.comboKey, state: 'published', effectiveFrom }))) {
       throw new ConflictException('قیمت دیگری با همین زمان شروع (هم‌زمان) منتشر شده است');
     }
     const doc = await this.insertVersion({
-      layer: 'customer', providerId: null, comboKey: input.comboKey, mode: input.mode,
-      ...(input.mode === 'manual' ? { price: input.price } : { formula: input.formula!.trim() }),
+      ...scope, comboKey: input.comboKey, mode: input.mode,
+      ...(input.mode === 'manual' ? { price: input.price } : {}),
+      ...(input.mode === 'formula' ? { formula: input.formula!.trim() } : {}),
       ...(input.markup !== undefined ? { markup: input.markup } : {}),
       ...(input.discount !== undefined ? { discount: input.discount } : {}),
-      rounding: input.rounding ?? 0, effectiveFrom, ...(effectiveUntil ? { effectiveUntil } : {}),
+      ...(base ? { baseProviderId: base } : {}),
+      rounding: layer === 'provider' ? 0 : (input.rounding ?? 0), effectiveFrom, ...(effectiveUntil ? { effectiveUntil } : {}),
       state: input.publish ? 'published' : 'draft', reason, createdBy: new Types.ObjectId(by),
     });
     const action: PriceAuditAction = !input.publish ? 'create' : effectiveFrom.getTime() > Date.now() ? 'schedule' : 'publish';
     await this.audit(action, [doc], reason, by, undefined, this.plain(doc));
+    // markup customer prices depend on provider prices, so every published write invalidates the catalog
     if (input.publish) await this.catalog.invalidate();
     return this.viewOne(doc);
   }
 
   async publish(id: string, reason: string, by: string): Promise<VersionView> {
-    return this.transition(id, 'draft', 'published', 'publish', reason, by);
+    const before = await this.findVersion(id);
+    await this.assertCan(by, layerPermission(before.layer, 'publish'));
+    return this.transition(before, 'draft', 'published', 'publish', reason, by);
   }
 
   async disable(id: string, reason: string, by: string): Promise<VersionView> {
-    return this.transition(id, 'published', 'disabled', 'disable', reason, by);
+    const before = await this.findVersion(id);
+    await this.assertCan(by, layerPermission(before.layer, 'publish'));
+    return this.transition(before, 'published', 'disabled', 'disable', reason, by);
   }
 
   async rollback(id: string, reason: string, by: string): Promise<VersionView> {
-    const src = (await this.findVersion(id)) as Row;
+    const src = await this.findVersion(id);
+    await this.assertCan(by, layerPermission(src.layer, 'rollback'));
     const why = this.reason(reason);
     if (src.state !== 'published' && src.state !== 'disabled') throw new BadRequestException('فقط نسخه‌های منتشرشده قابل بازگردانی هستند');
     const doc = await this.insertVersion({
       layer: src.layer, providerId: src.providerId, comboKey: src.comboKey, mode: src.mode,
       ...(src.price !== undefined ? { price: src.price } : {}), ...(src.formula ? { formula: src.formula } : {}),
       ...(src.markup !== undefined ? { markup: src.markup } : {}), ...(src.discount !== undefined ? { discount: src.discount } : {}),
+      ...(src.baseProviderId ? { baseProviderId: src.baseProviderId } : {}),
       rounding: src.rounding ?? 0, effectiveFrom: new Date(), state: 'published', reason: why,
       createdBy: new Types.ObjectId(by), rollbackOf: src._id,
     });
@@ -187,17 +217,18 @@ export class PriceBookService {
     return this.viewOne(doc);
   }
 
-  async auditLog(page = 1, limit = 20) {
+  async auditLog(page = 1, limit = 20, layers: PriceLayer[] = [...PRICE_LAYERS]) {
     const skip = (Math.max(1, page) - 1) * limit;
+    const filter = { layer: { $in: layers } };
     const [items, total] = await Promise.all([
-      this.audits.find().sort({ at: -1 }).skip(skip).limit(limit).lean(),
-      this.audits.countDocuments(),
+      this.audits.find(filter).sort({ at: -1 }).skip(skip).limit(limit).lean(),
+      this.audits.countDocuments(filter),
     ]);
     const names = await this.namesOf(items.map((a) => a.by).filter(Boolean) as Types.ObjectId[]);
     return {
       items: items.map((a) => ({
-        id: String(a._id), action: a.action, layer: a.layer, comboKeys: a.comboKeys, reason: a.reason,
-        at: new Date(a.at).toISOString(), before: a.before, after: a.after,
+        id: String(a._id), action: a.action, layer: a.layer, providerId: a.providerId ? String(a.providerId) : null,
+        comboKeys: a.comboKeys, reason: a.reason, at: new Date(a.at).toISOString(), before: a.before, after: a.after,
         ...(a.by ? { by: { id: String(a.by), name: names.get(String(a.by)) ?? '' } } : {}),
       })),
       total, page, limit,
@@ -297,18 +328,56 @@ export class PriceBookService {
   // ------------------------------------------------------------ helpers
 
   /** Persian problem with a version's value fields, or null. */
-  valueProblem(i: PreviewInput): string | null {
-    if (i.mode !== 'manual' && i.mode !== 'formula') return 'این روش قیمت‌گذاری در مرحله بعد (قیمت مجریان) فعال می‌شود';
+  valueProblem(i: PreviewInput, layer: PriceLayer = 'customer'): string | null {
+    if (!(PRICE_MODES as readonly string[]).includes(i.mode)) return 'روش قیمت‌گذاری معتبر نیست';
+    if (layer === 'provider' && i.mode !== 'manual') return 'قیمت مجری فقط به‌صورت دستی ثبت می‌شود';
     if (i.rounding !== undefined && !(ROUNDINGS as readonly number[]).includes(i.rounding)) return 'گرد کردن معتبر نیست';
     if (i.mode === 'manual') {
       if (!Number.isInteger(i.price) || (i.price as number) < 0 || (i.price as number) > MAX_PRICE) return 'قیمت باید عدد صحیح و نامنفی (تومان) باشد';
       return null;
     }
+    const baseOk = !!i.baseProviderId && Types.ObjectId.isValid(i.baseProviderId);
+    if (i.mode === 'fixed_markup' || i.mode === 'percent_markup') {
+      if (!baseOk) return 'مجری پایه را انتخاب کنید';
+      const pct = i.mode === 'percent_markup';
+      if (!Number.isInteger(i.markup) || (i.markup as number) < 0 || (i.markup as number) > (pct ? 1000 : MAX_PRICE)) {
+        return pct ? 'درصد سود باید عدد صحیح بین ۰ تا ۱۰۰۰ باشد' : 'مبلغ سود باید عدد صحیح و نامنفی (تومان) باشد';
+      }
+      return null;
+    }
     if (!i.formula?.trim()) return 'فرمول را بنویسید';
     const bad = validateFormula(i.formula, CUSTOMER_FORMULA_VARS);
     if (bad) return bad;
+    if (formulaVariables(parseFormula(i.formula)).includes('provider_price') && !baseOk) return 'برای استفاده از provider_price مجری پایه را انتخاب کنید';
     for (const n of [i.markup, i.discount]) if (n !== undefined && (!Number.isInteger(n) || n < 0)) return 'مقادیر فرمول باید عدد صحیح و نامنفی باشند';
     return null;
+  }
+
+  /** `{ layer, providerId }` filter of one price list; the provider layer needs a valid provider id. */
+  private scope(layer: PriceLayer, providerId?: string | null): { layer: PriceLayer; providerId: Types.ObjectId | null } {
+    if (layer === 'customer') return { layer, providerId: null };
+    if (!providerId || !Types.ObjectId.isValid(providerId)) throw new BadRequestException('مجری را انتخاب کنید');
+    return { layer, providerId: new Types.ObjectId(providerId) };
+  }
+
+  private async assertProvider(id: Types.ObjectId) {
+    if (!(await this.centers.exists({ _id: id }))) throw new NotFoundException('مجری یافت نشد');
+  }
+
+  /** Every known combination (sizes x sides; x colour types x colorPrint papers; ranges; add-ons) + any combo with versions. */
+  private knownKeys(papers: { key: string; colorPrint?: boolean }[], ranges: { _id: unknown }[], rows: { comboKey: string }[]): string[] {
+    const keys: string[] = [];
+    for (const size of PRINT_SIZES) for (const side of SIDES) keys.push(comboKey({ service: 'bw', size, side }));
+    for (const size of PRINT_SIZES) for (const colorType of COLOR_TYPES) for (const p of papers.filter((x) => x.colorPrint)) for (const side of SIDES) {
+      keys.push(comboKey({ service: 'color', size, colorType, paper: p.key, side }));
+    }
+    for (const r of ranges) keys.push(comboKey({ service: 'spiral', rangeId: String(r._id) }));
+    for (const addon of PRINT_ADDONS) {
+      if (addon === 'lam_sheet') for (const size of PRINT_SIZES) keys.push(comboKey({ service: 'addon', addon, size }));
+      else keys.push(comboKey({ service: 'addon', addon }));
+    }
+    for (const r of rows) if (!keys.includes(r.comboKey)) keys.push(r.comboKey);
+    return keys;
   }
 
   private async insertVersion(fields: Omit<PriceVersion, 'version' | 'createdAt' | 'updatedAt'>) {
@@ -317,14 +386,17 @@ export class PriceBookService {
       try {
         return await this.versions.create({ ...fields, version: (last?.version ?? 0) + 1 });
       } catch (err) {
-        if ((err as { code?: number }).code !== 11000 || attempt >= 4) throw err;
+        const e = err as { code?: number; keyPattern?: Record<string, unknown> };
+        if (e.code !== 11000) throw err;
+        // a duplicate on another unique index (e.g. one pending submission per combo) is a real conflict, not a version race
+        if (e.keyPattern && !('version' in e.keyPattern)) throw new ConflictException('نسخه دیگری برای این ترکیب در انتظار تأیید است');
+        if (attempt >= 4) throw err;
       }
     }
   }
 
-  private async transition(id: string, from: PriceVersion['state'], to: PriceVersion['state'], action: PriceAuditAction, reason: string, by: string) {
+  private async transition(before: Row, from: PriceVersion['state'], to: PriceVersion['state'], action: PriceAuditAction, reason: string, by: string) {
     const why = this.reason(reason);
-    const before = await this.findVersion(id);
     const now = new Date();
     const future = new Date(before.effectiveFrom).getTime() > now.getTime();
     if (to === 'published' && future && (await this.versions.exists({ _id: { $ne: before._id }, layer: before.layer, providerId: before.providerId, comboKey: before.comboKey, state: 'published', effectiveFrom: before.effectiveFrom }))) {
@@ -333,11 +405,24 @@ export class PriceBookService {
     if (to === 'published' && before.effectiveUntil && new Date(before.effectiveUntil).getTime() <= now.getTime()) {
       throw new BadRequestException('این پیش‌نویس منقضی شده است');
     }
+    // A past draft starts now, but strictly after the latest already-started published version, so it deterministically wins.
+    let startsAt = now;
+    if (to === 'published' && !future) {
+      const latest = await this.versions
+        .findOne({ _id: { $ne: before._id }, layer: before.layer, providerId: before.providerId, comboKey: before.comboKey, state: 'published', effectiveFrom: { $lte: now } })
+        .sort({ effectiveFrom: -1 })
+        .lean();
+      if (latest && new Date(latest.effectiveFrom).getTime() >= now.getTime()) {
+        startsAt = new Date(new Date(latest.effectiveFrom).getTime() + 1);
+        // never leave it scheduled for the next millisecond: wait (at most ~1 ms) until it has started
+        while (Date.now() < startsAt.getTime()) await new Promise((r) => setTimeout(r, 1));
+      }
+    }
     // Disabling a version that has not started yet cancels it (zero-length window); an active one stops selling now.
     const cancel = to === 'disabled' && future;
     const doc = await this.versions.findOneAndUpdate(
       { _id: before._id, state: from },
-      { $set: { state: to, updatedBy: new Types.ObjectId(by), ...(to === 'published' && !future ? { effectiveFrom: now } : {}), ...(cancel ? { effectiveUntil: before.effectiveFrom } : {}) } },
+      { $set: { state: to, updatedBy: new Types.ObjectId(by), ...(to === 'published' && !future ? { effectiveFrom: startsAt } : {}), ...(cancel ? { effectiveUntil: before.effectiveFrom } : {}) } },
       { returnDocument: 'after' },
     );
     if (!doc) throw new ConflictException('وضعیت این نسخه تغییر کرده است؛ صفحه را تازه کنید');
@@ -365,12 +450,15 @@ export class PriceBookService {
 
   private plain(d: unknown) {
     const o = JSON.parse(JSON.stringify(d)) as Record<string, unknown>;
-    return { version: o.version, mode: o.mode, price: o.price, formula: o.formula, rounding: o.rounding, effectiveFrom: o.effectiveFrom, effectiveUntil: o.effectiveUntil, state: o.state };
+    return {
+      version: o.version, mode: o.mode, price: o.price, formula: o.formula, markup: o.markup, baseProviderId: o.baseProviderId,
+      rounding: o.rounding, effectiveFrom: o.effectiveFrom, effectiveUntil: o.effectiveUntil, state: o.state,
+    };
   }
 
-  private async audit(action: PriceAuditAction, docs: { _id: unknown; comboKey: string; layer: string }[], reason: string, by: string, before?: unknown, after?: unknown) {
+  private async audit(action: PriceAuditAction, docs: { _id: unknown; comboKey: string; layer: string; providerId?: unknown }[], reason: string, by: string, before?: unknown, after?: unknown) {
     await this.audits.create({
-      action, layer: docs[0]?.layer ?? 'customer', providerId: null,
+      action, layer: docs[0]?.layer ?? 'customer', providerId: (docs[0]?.providerId ?? null) as Types.ObjectId | null,
       comboKeys: [...new Set(docs.map((d) => d.comboKey))], versionIds: docs.map((d) => d._id as Types.ObjectId),
       reason, by: new Types.ObjectId(by), ...(before !== undefined ? { before } : {}), ...(after !== undefined ? { after } : {}),
     });
@@ -401,23 +489,50 @@ export class PriceBookService {
     return this.namesOf(rows.map((r) => r.createdBy).filter(Boolean) as Types.ObjectId[]);
   }
 
-  /** Formula variables for a combo at quantity 1: `paper_cost` of its paper, `base_price` of its single sibling. */
-  private async varsLoader(rows: Row[], papers: { key: string; paperCost?: number }[], at: Date) {
+  /** Variables of a combo at quantity 1: `paper_cost`, `base_price` (single sibling) and `provider_price` (base provider). */
+  private varsFor(rows: Row[], papers: { key: string; paperCost?: number }[], at: Date, providerPrices: ProviderPrices) {
     const likes = rows.map(toVersionLike);
-    return (key: string): Record<string, number> => {
+    const fn = (key: string, baseProviderId?: unknown): Record<string, number> => {
       const o = parseCombo(key);
       const vars: Record<string, number> = { quantity: 1 };
       if (o?.service === 'color') {
         const cost = papers.find((p) => p.key === o.paper)?.paperCost;
         if (typeof cost === 'number') vars.paper_cost = cost;
       }
+      if (baseProviderId) {
+        const p = providerPrices[String(baseProviderId)]?.[key];
+        if (typeof p === 'number') vars.provider_price = p;
+      }
       const sibling = singleSideKey(key);
       if (sibling) {
         const eff = pickEffective(likes.filter((v) => v.comboKey === sibling), at);
-        const base = eff ? unitPrice(eff, { ...vars }) : null;
+        const base = eff ? unitPrice(eff, fn(sibling, eff.baseProviderId)) : null;
         if (base !== null) vars.base_price = base;
       }
       return vars;
+    };
+    return fn;
+  }
+
+  /** `varsFor` with the effective provider prices loaded when any row (or the caller) needs a base provider. */
+  private async varsLoader(rows: Row[], papers: { key: string; paperCost?: number }[], at: Date, withProviders = false) {
+    const needed = withProviders || rows.some((r) => r.baseProviderId);
+    const providerPrices = needed ? effectiveProviderPrices((await this.versions.find({ layer: 'provider', state: { $in: ['published', 'disabled'] } }).lean()) as Row[], at) : {};
+    return this.varsFor(rows, papers, at, providerPrices);
+  }
+
+  /** A version-like for evaluating values that are not stored (preview, what-if checks). */
+  private candidate(v: VersionValue, at: Date): VersionLike {
+    return {
+      id: 'candidate', version: 0, state: 'published', effectiveFrom: at, mode: v.mode, price: v.price, formula: v.formula,
+      markup: v.markup, discount: v.discount, rounding: v.rounding ?? 0, baseProviderId: v.baseProviderId ?? null,
+    };
+  }
+
+  private valueOf(r: Row): VersionValue {
+    return {
+      mode: r.mode, price: r.price, formula: r.formula, markup: r.markup, discount: r.discount, rounding: r.rounding ?? 0,
+      ...(r.baseProviderId ? { baseProviderId: String(r.baseProviderId) } : {}),
     };
   }
 
@@ -428,16 +543,18 @@ export class PriceBookService {
       version: r.version, mode: r.mode, rounding: r.rounding ?? 0,
       ...(r.price !== undefined ? { price: r.price } : {}), ...(r.formula ? { formula: r.formula } : {}),
       ...(r.markup !== undefined ? { markup: r.markup } : {}), ...(r.discount !== undefined ? { discount: r.discount } : {}),
+      ...(r.baseProviderId ? { baseProviderId: String(r.baseProviderId) } : {}),
       effectiveFrom: new Date(r.effectiveFrom).toISOString(),
       ...(r.effectiveUntil ? { effectiveUntil: new Date(r.effectiveUntil).toISOString() } : {}),
       state: r.state, status: displayStatus(like, effectiveId, at), reason: r.reason,
+      ...(r.reviewNote ? { reviewNote: r.reviewNote } : {}), ...(r.reviewedAt ? { reviewedAt: new Date(r.reviewedAt).toISOString() } : {}),
       ...(r.createdBy ? { createdBy: { id: String(r.createdBy), name: users.get(String(r.createdBy)) ?? '' } } : {}),
       createdAt: new Date(r.createdAt ?? r.effectiveFrom).toISOString(),
       unitPrice: unitPrice(like, vars),
     };
   }
 
-  private async viewOne(doc: { _id: unknown; comboKey: string }): Promise<VersionView> {
-    return (await this.history('customer', doc.comboKey)).find((v) => v.id === String(doc._id))!;
+  private async viewOne(doc: { _id: unknown; comboKey: string; layer: PriceLayer; providerId?: unknown }): Promise<VersionView> {
+    return (await this.history(doc.layer, doc.comboKey, new Date(), doc.providerId ? String(doc.providerId) : null)).find((v) => v.id === String(doc._id))!;
   }
 }

@@ -13,7 +13,7 @@ function setup() {
   const admin = new Types.ObjectId();
   const users = fakeModel([{ _id: admin, name: 'مدیر', role: 'admin' }, { _id: new Types.ObjectId(), name: 'محدود', role: 'admin', permissions: ['customer_price_view'] }]);
   const catalog = { invalidate: vi.fn(async () => undefined) };
-  const svc = new PriceBookService(versions as never, audits as never, ranges as never, papers as never, users as never, catalog as never);
+  const svc = new PriceBookService(versions as never, audits as never, ranges as never, papers as never, users as never, catalog as never, fakeModel([]) as never);
   return { svc, versions, audits, ranges, catalog, users, by: String(admin) };
 }
 const base = { layer: 'customer' as const, comboKey: 'bw|A4|single', mode: 'manual' as const, price: 3500, publish: true, reason: 'اولیه' };

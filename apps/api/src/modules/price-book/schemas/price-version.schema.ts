@@ -25,6 +25,10 @@ export class PriceVersion {
   @Prop({ type: MongooseSchema.Types.ObjectId }) updatedBy?: Types.ObjectId;
   @Prop({ type: MongooseSchema.Types.ObjectId }) rollbackOf?: Types.ObjectId;
   @Prop({ type: String }) bulkId?: string;
+  /** Approve/reject note (the rejection reason the provider sees). */
+  @Prop({ type: String }) reviewNote?: string;
+  @Prop({ type: MongooseSchema.Types.ObjectId }) reviewedBy?: Types.ObjectId;
+  @Prop({ type: Date }) reviewedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }

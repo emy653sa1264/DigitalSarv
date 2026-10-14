@@ -128,7 +128,7 @@ describe('exactness regressions', () => {
     expect(margin(1999, 2000).marginPct).toBe(-0.1);
     expect(margin(2001, 2000).marginPct).toBe(0.1);
     expect(Object.is(margin(2000, 2000).marginPct, 0)).toBe(true);
-    expect(Object.is(margin(1, 1000000).marginPct, 0)).toBe(false);
+    expect(margin(1, 1000000).marginPct).toBe(-100);
     expect(Object.is(margin(999999, 1000000).marginPct, -0)).toBe(false);
   });
 });
