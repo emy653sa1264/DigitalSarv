@@ -15,6 +15,7 @@ import { AuthModule } from './modules/auth/auth.module.js';
 import { CampaignsModule } from './modules/campaigns/campaigns.module.js';
 import { CatalogModule } from './modules/catalog/catalog.module.js';
 import { CentersModule } from './modules/centers/centers.module.js';
+import { StaffModule } from './modules/staff/staff.module.js';
 import { CmsModule } from './modules/cms/cms.module.js';
 import { CourierModule } from './modules/courier/courier.module.js';
 import { CustomersModule } from './modules/customers/customers.module.js';
@@ -78,6 +79,7 @@ export const infraImports = [
     CourierModule,
     ZonesModule,
     CentersModule,
+    StaffModule,
     CmsModule,
     CustomersModule,
     DashboardModule,

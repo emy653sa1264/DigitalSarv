@@ -101,6 +101,14 @@ describe('loadAppConfig', () => {
     expect(() => loadAppConfig({ NODE_ENV: 'development', UPLOAD_MAX_MB: 'lots' })).toThrow(/UPLOAD_MAX_MB/);
   });
 
+  it('JWT_EXPIRES_IN must not exceed the session revocation TTL (30 days)', () => {
+    const dev = { NODE_ENV: 'development' };
+    expect(loadAppConfig(dev).jwtExpiresIn).toBe('7d');
+    for (const ok of ['30d', '720h', '2592000', '12h']) expect(loadAppConfig({ ...dev, JWT_EXPIRES_IN: ok }).jwtExpiresIn).toBe(ok);
+    for (const bad of ['31d', '90d', '1y', '800h', '5184000s']) expect(() => loadAppConfig({ ...dev, JWT_EXPIRES_IN: bad })).toThrow(/JWT_EXPIRES_IN.*SESSION_REVOKE_TTL_S/);
+    expect(() => loadAppConfig({ ...dev, JWT_EXPIRES_IN: 'soon' })).toThrow(/JWT_EXPIRES_IN is not a valid duration/);
+  });
+
   it('web push (VAPID) is optional: both keys or neither; a subject is required in production', () => {
     expect(loadAppConfig({ NODE_ENV: 'development' }).vapid).toBeNull();
     expect(loadAppConfig({ NODE_ENV: 'development', VAPID_PUBLIC_KEY: 'pub', VAPID_PRIVATE_KEY: 'priv' }).vapid)

@@ -1,5 +1,5 @@
 import { isIP } from 'node:net';
-import { PAYMENT_DRIVERS, type PaymentDriverName } from '../common/constants.js';
+import { PAYMENT_DRIVERS, SESSION_REVOKE_TTL_S, type PaymentDriverName } from '../common/constants.js';
 import { normalizePhone } from '../common/utils/phone.js';
 
 export const SMS_DRIVERS = ['log', 'kavenegar'] as const;
@@ -133,6 +133,20 @@ function trustProxy(env: NodeJS.ProcessEnv, errors: string[]): TrustProxy {
   return list;
 }
 
+const DURATION_UNITS: Record<string, number> = {
+  ms: 0.001, msec: 0.001, s: 1, sec: 1, m: 60, min: 60, h: 3600, hr: 3600, d: 86_400, day: 86_400, w: 604_800, y: 31_557_600, yr: 31_557_600,
+};
+
+/** `jsonwebtoken` `expiresIn` (number of seconds, or an `ms`-style string such as `7d`; a bare numeric string is milliseconds) → seconds. */
+export function jwtLifetimeSeconds(raw: string): number | null {
+  const m = /^\s*(\d+(?:\.\d+)?)\s*([a-z]*)\s*$/i.exec(raw);
+  if (!m) return null;
+  if (!m[2]) return Number(m[1]) / 1000;
+  const unit = m[2].toLowerCase();
+  const factor = DURATION_UNITS[unit] ?? DURATION_UNITS[unit.replace(/s$/, '')];
+  return factor === undefined ? null : Number(m[1]) * factor;
+}
+
 /**
  * Reads and validates the environment. Throws one error listing every problem, so a misconfigured
  * deployment fails fast at boot instead of at the first payment/SMS.
@@ -185,6 +199,14 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const bodyLimit = (env.BODY_LIMIT ?? '').trim() || '1mb';
   if (!/^\d+(b|kb|mb)$/i.test(bodyLimit)) errors.push(`BODY_LIMIT must look like 1mb / 512kb (got "${bodyLimit}")`);
 
+  // revocation markers expire after SESSION_REVOKE_TTL_S; a longer-lived token would outlive its revocation
+  const jwtExpiresIn = env.JWT_EXPIRES_IN ?? '7d';
+  const lifetime = jwtLifetimeSeconds(jwtExpiresIn);
+  if (lifetime === null) errors.push(`JWT_EXPIRES_IN is not a valid duration (got "${jwtExpiresIn}"; use e.g. 7d, 12h)`);
+  else if (lifetime > SESSION_REVOKE_TTL_S) {
+    errors.push(`JWT_EXPIRES_IN (${jwtExpiresIn}) must not exceed SESSION_REVOKE_TTL_S (${SESSION_REVOKE_TTL_S / 86_400} days), or revoked sessions would become valid again`);
+  }
+
   const config: AppConfig = {
     nodeEnv,
     isProduction,
@@ -192,7 +214,7 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     mongoUri: env.MONGO_URI?.trim() || 'mongodb://localhost:27017/digital_sarv',
     redisUrl: env.REDIS_URL?.trim() || 'redis://localhost:6379',
     jwtSecret,
-    jwtExpiresIn: env.JWT_EXPIRES_IN ?? '7d',
+    jwtExpiresIn,
     corsOrigin: (env.CORS_ORIGIN ?? 'http://localhost:5173')
       .split(',')
       .map((s) => trimSlash(s))
