@@ -7,7 +7,7 @@ import { CurrentProvider, ProviderScopeGuard } from '../centers/provider-scope.g
 import { QcDto } from '../orders/dto/orders.dto.js';
 import { ProviderJobsService } from './provider-jobs.service.js';
 import { DispatchService } from './dispatch.service.js';
-import { ProviderJobStatusDto, ProviderJobsQueryDto, RejectJobDto, AdminJobStatusDto, AssignJobDto, DeliveryChangeDto, DispatchQueryDto, EligibilityQueryDto, ReasonDto, RespondDto, UpdateJobDto } from './dto/dispatch.dto.js';
+import { ProviderJobStatusDto, ProviderJobsQueryDto, RejectJobDto, AdminJobStatusDto, AssignJobDto, DeliveryChangeDto, DispatchQueryDto, EligibilityQueryDto, PerformanceQueryDto, ReasonDto, RespondDto, UpdateJobDto } from './dto/dispatch.dto.js';
 
 /** «مرکز تخصیص سفارش» (contract v4.2 «Admin endpoints»). Provider prices and fees need `provider_price_view` too (Q18). */
 @Controller('admin/dispatch')
@@ -18,6 +18,9 @@ export class AdminDispatchController {
 
   @Get('jobs') @RequirePermissions('dispatch_view')
   list(@Query() q: DispatchQueryDto) { return this.dispatch.list(q); }
+
+  @Get('performance') @RequirePermissions('provider_order_view')
+  performance(@Query() q: PerformanceQueryDto) { return this.dispatch.performance(q); }
 
   @Get('jobs/:id') @RequirePermissions('dispatch_view')
   async get(@Param('id') id: string, @CurrentUser() user: AuthUser) { return this.dispatch.detail(id, await this.dispatch.canSeeProviderPrices(user.id)); }

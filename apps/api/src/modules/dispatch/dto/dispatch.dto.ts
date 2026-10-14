@@ -24,6 +24,11 @@ export class DispatchQueryDto extends PageQueryDto {
   @IsOptional() @Validate(YmdConstraint) to?: string;
 }
 
+export class PerformanceQueryDto {
+  @IsOptional() @Validate(YmdConstraint) from?: string;
+  @IsOptional() @Validate(YmdConstraint) to?: string;
+}
+
 export class EligibilityQueryDto {
   @IsOptional() @IsIn(DELIVERY_METHODS, { message: 'روش تحویل معتبر نیست' }) deliveryMethod?: DeliveryMethod;
 }

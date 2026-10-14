@@ -21,10 +21,11 @@ import { effectiveProviderEntries, type ProviderEntry, type SnapshotRow } from '
 import { User } from '../users/user.schema.js';
 import { Zone } from '../zones/zone.schema.js';
 import { DispatchNotifier } from './dispatch-notifier.js';
-import type { AdminJobStatusDto, AssignJobDto, DeliveryChangeDto, DispatchQueryDto, RespondDto, UpdateJobDto } from './dto/dispatch.dto.js';
+import type { AdminJobStatusDto, AssignJobDto, DeliveryChangeDto, DispatchQueryDto, PerformanceQueryDto, RespondDto, UpdateJobDto } from './dto/dispatch.dto.js';
 import { checkProvider, jobRequirements, type CheckResult, type ProviderCheck, type ProviderFacts, type Usage } from './eligibility.js';
 import { dispatchDetail, dispatchRow, type DispatchJobDetail, type DispatchJobRow, type JobRow, type Names } from './job-json.js';
 import { DISPATCH_TABS, HELD, LIVE, cancelStage, deliveryStatusFilter, dispatchTabFilter, type DispatchTab, type ProviderQuote } from './job-model.js';
+import { performanceRows, type ProviderPerformance } from './performance.js';
 import { Job, type JobDocument } from './job.schema.js';
 import { JobsService, raced } from './jobs.service.js';
 import { pricingSnapshot, providerLineLabel, providerQuote } from './provider-pricing.js';
@@ -75,6 +76,19 @@ export class DispatchService {
     private readonly catalog: CatalogService,
     private readonly notifier: DispatchNotifier,
   ) {}
+
+  /** §67 per-provider counters (default: the last 30 Tehran days). */
+  async performance(q: PerformanceQueryDto): Promise<ProviderPerformance[]> {
+    const now = new Date();
+    const todayStart = tehranDayStart(tehranYmd(now));
+    const to = q.to ? addDays(tehranDayStart(q.to), 1) : addDays(todayStart, 1);
+    const from = q.from ? tehranDayStart(q.from) : addDays(to, -30);
+    const [providers, jobs] = await Promise.all([
+      this.centers.find({}, { name: 1 }).sort({ name: 1 }).lean(),
+      this.jobModel.find({ $or: [{ updatedAt: { $gte: from } }, { status: { $in: LIVE } }] }, { status: 1, providerId: 1, deadline: 1, readyAt: 1, sheets: 1, 'assignment.assignedAt': 1, history: 1 }).lean(),
+    ]);
+    return performanceRows(jobs as never, providers.map((p) => ({ id: String(p._id), name: p.name })), { from, to }, now, todayStart);
+  }
 
   // ------------------------------------------------------------ list
 
