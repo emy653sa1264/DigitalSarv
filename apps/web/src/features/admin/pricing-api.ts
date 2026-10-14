@@ -29,7 +29,7 @@ export type PreviewBody = Omit<VersionBody, 'publish' | 'reason' | 'effectiveFro
 export interface BulkApplyResult {
   bulkId: string
   created: number
-  skipped: BulkPreview['skipped'] | number
+  skipped: BulkPreview['skipped']
 }
 
 export const usePriceMatrix = (service: PriceService) =>

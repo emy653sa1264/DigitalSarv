@@ -12,6 +12,7 @@ export function FormDialog({
   description,
   submitLabel = 'ذخیره',
   pending,
+  submitDisabled,
   onSubmit,
   extraActions,
   className,
@@ -23,6 +24,7 @@ export function FormDialog({
   description?: string
   submitLabel?: string
   pending?: boolean
+  submitDisabled?: boolean
   onSubmit: () => void
   /** Rendered at the start of the footer (e.g. delete). */
   extraActions?: ReactNode
@@ -52,7 +54,7 @@ export function FormDialog({
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 انصراف
               </Button>
-              <Button type="submit" disabled={pending}>
+              <Button type="submit" disabled={pending || submitDisabled}>
                 {pending ? 'در حال ذخیره…' : submitLabel}
               </Button>
             </div>

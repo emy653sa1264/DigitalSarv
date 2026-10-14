@@ -81,9 +81,8 @@ function ServiceTab({ service }: { service: PriceService }) {
   const match = (r: MatrixRow) => {
     if (search.trim() && !r.label.includes(search.trim())) return false
     if (!isColor) return true
-    // color|<size>|<colorType>|<paperKey>|<side>
-    const [, s, c, p, d] = r.comboKey.split('|')
-    return (size === ALL || s === size) && (colorType === ALL || c === colorType) && (paper === ALL || p === paper) && (side === ALL || d === side)
+    const o = r.options
+    return (size === ALL || o.size === size) && (colorType === ALL || o.colorType === colorType) && (paper === ALL || o.paper === paper) && (side === ALL || o.side === side)
   }
 
   return (

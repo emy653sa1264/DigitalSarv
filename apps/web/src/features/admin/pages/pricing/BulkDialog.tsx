@@ -84,7 +84,7 @@ function BulkForm({ open, onOpenChange, defaultService }: { open: boolean; onOpe
       { ...body, reason: reason.trim() },
       {
         onSuccess: (r) => {
-          const skipped = Array.isArray(r.skipped) ? r.skipped.length : (r.skipped ?? 0)
+          const skipped = r.skipped.length
           notify(`${fa(r.created)} قیمت تغییر کرد${skipped ? ` · ${fa(skipped)} ترکیب رد شد` : ''}`)
           onOpenChange(false)
         },

@@ -7,10 +7,25 @@ import { MODE_LABEL, STATUS_LABEL, STATUS_TONE, safeJalali } from './labels'
 
 const COLUMNS = 'minmax(200px,2.2fr) minmax(130px,1.2fr) minmax(130px,1.1fr) 112px 120px'
 
+const UNAVAILABLE = (
+  <Tag bg="#eef2fb" fg="#4a5268">
+    ناموجود
+  </Tag>
+)
+
 function PriceCell({ v }: { v: PriceVersionView | null }) {
-  if (!v) return <Tag bg="#eef2fb" fg="#4a5268">ناموجود</Tag>
+  if (!v) return UNAVAILABLE
   if (v.status === 'disabled' || v.unitPrice === null) {
-    return v.mode === 'formula' ? <FormulaCell v={v} /> : <Tag bg="#eef2fb" fg="#4a5268">ناموجود</Tag>
+    return (
+      <div className="min-w-0">
+        {UNAVAILABLE}
+        {v.mode === 'formula' && v.formula && (
+          <div dir="ltr" className="mt-1 truncate text-start font-mono text-[11px] text-muted-2" title={v.formula}>
+            {v.formula}
+          </div>
+        )}
+      </div>
+    )
   }
   if (v.mode === 'formula') return <FormulaCell v={v} />
   return <span className="font-extrabold">{money(v.unitPrice)}</span>
@@ -40,7 +55,7 @@ export function PriceTable({ rows, onEdit, onHistory }: { rows: MatrixRow[]; onE
             <PriceCell v={row.current} />
             {row.next ? (
               <div>
-                <div className="font-extrabold">{row.next.unitPrice === null ? 'ناموجود' : money(row.next.unitPrice)}</div>
+                <div className="font-extrabold">{row.next.status === 'disabled' || row.next.unitPrice === null ? UNAVAILABLE : money(row.next.unitPrice)}</div>
                 <div className="text-[11px] font-bold text-muted-2">{safeJalali(row.next.effectiveFrom)}</div>
               </div>
             ) : (

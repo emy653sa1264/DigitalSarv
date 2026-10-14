@@ -47,7 +47,7 @@ export function AuditCard() {
                 {e.comboKeys.length > 3 && <div className="text-muted-2">و {e.comboKeys.length - 3} مورد دیگر</div>}
               </div>
               <span className="text-[12.5px] leading-6 text-muted-1">{e.reason || '—'}</span>
-              <span className="text-[12.5px] font-bold">{e.by?.name ?? '—'}</span>
+              <span className="text-[12.5px] font-bold">{e.by?.name || '—'}</span>
             </AdminRow>
           ))}
         </AdminTable>

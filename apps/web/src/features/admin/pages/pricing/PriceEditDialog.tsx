@@ -4,9 +4,9 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { notify, toast } from '@/components/ui/sonner'
 import { Textarea } from '@/components/ui/textarea'
-import { fa, money } from '@/lib/format'
+import { fa, money, toNum } from '@/lib/format'
 import type { MatrixRow, PriceRounding } from '@/lib/types'
-import { AdminSelect, NumInput } from '../../components/controls'
+import { AdminSelect } from '../../components/controls'
 import { Field, FormDialog } from '../../components/FormDialog'
 import { usePriceBookMutations, type VersionBody } from '../../pricing-api'
 import { ROUNDING_OPTIONS, tehranInputJalali, tehranInputToIso, tomorrowTehranInput } from './labels'
@@ -25,7 +25,7 @@ function EditForm({ row, onClose }: { row: MatrixRow; onClose: () => void }) {
   const { create, preview } = usePriceBookMutations()
   const cur = row.current
   const [mode, setMode] = useState<'manual' | 'formula'>(cur?.mode === 'formula' ? 'formula' : 'manual')
-  const [price, setPrice] = useState(cur?.mode === 'manual' ? (cur.price ?? 0) : (cur?.unitPrice ?? 0))
+  const [price, setPrice] = useState<number | null>(cur?.mode === 'manual' ? (cur.price ?? null) : (cur?.unitPrice ?? null))
   const [formula, setFormula] = useState(cur?.formula ?? '')
   const [rounding, setRounding] = useState<PriceRounding>(cur?.rounding ?? 0)
   const [when, setWhen] = useState<'now' | 'schedule'>('now')
@@ -36,12 +36,12 @@ function EditForm({ row, onClose }: { row: MatrixRow; onClose: () => void }) {
   // Debounced server-side preview (300 ms) — the client never evaluates formulas itself.
   const { mutate: runPreview, reset: resetPreview } = preview
   useEffect(() => {
-    if (mode === 'formula' && !formula.trim()) {
+    if ((mode === 'formula' && !formula.trim()) || (mode === 'manual' && price === null)) {
       resetPreview()
       return
     }
     const t = setTimeout(() => {
-      runPreview({ comboKey: row.comboKey, mode, ...(mode === 'manual' ? { price } : { formula: formula.trim() }), rounding })
+      runPreview({ comboKey: row.comboKey, mode, ...(mode === 'manual' ? { price: price ?? 0 } : { formula: formula.trim() }), rounding })
     }, 300)
     return () => clearTimeout(t)
   }, [row.comboKey, mode, price, formula, rounding, runPreview, resetPreview])
@@ -56,10 +56,14 @@ function EditForm({ row, onClose }: { row: MatrixRow; onClose: () => void }) {
       toast.error('فرمول را وارد کنید')
       return
     }
+    if (mode === 'manual' && price === null) {
+      toast.error('قیمت را وارد کنید')
+      return
+    }
     const body: VersionBody = {
       comboKey: row.comboKey,
       mode,
-      ...(mode === 'manual' ? { price } : { formula: formula.trim() }),
+      ...(mode === 'manual' ? { price: price ?? 0 } : { formula: formula.trim() }),
       rounding,
       publish,
       reason: reason.trim(),
@@ -72,6 +76,11 @@ function EditForm({ row, onClose }: { row: MatrixRow; onClose: () => void }) {
       body.effectiveFrom = tehranInputToIso(from)
     }
     if (until) {
+      const fromMs = scheduled ? new Date(`${from}:00+03:30`).getTime() : Date.now()
+      if (new Date(`${until}:00+03:30`).getTime() <= fromMs) {
+        toast.error('زمان پایان باید بعد از زمان اعمال باشد')
+        return
+      }
       if (Number.isNaN(new Date(`${until}:00+03:30`).getTime())) {
         toast.error('زمان پایان نامعتبر است')
         return
@@ -88,7 +97,8 @@ function EditForm({ row, onClose }: { row: MatrixRow; onClose: () => void }) {
 
   const result = preview.data
   const computed = result && result.unitPrice !== null && !result.error ? result.unitPrice : null
-  const currentUnit = cur?.unitPrice ?? null
+  const currentUnit = cur && cur.status !== 'disabled' ? cur.unitPrice : null
+  const incomplete = mode === 'manual' ? price === null : !formula.trim()
 
   return (
     <FormDialog
@@ -98,9 +108,10 @@ function EditForm({ row, onClose }: { row: MatrixRow; onClose: () => void }) {
       description="تغییر قیمت با دلیل ثبت می‌شود و در تاریخچه می‌ماند."
       submitLabel={scheduled ? 'زمان‌بندی' : 'انتشار'}
       pending={create.isPending}
+      submitDisabled={incomplete}
       onSubmit={() => submit(true)}
       extraActions={
-        <Button type="button" variant="secondary" disabled={create.isPending} onClick={() => submit(false)}>
+        <Button type="button" variant="secondary" disabled={create.isPending || incomplete} onClick={() => submit(false)}>
           ذخیره پیش‌نویس
         </Button>
       }
@@ -116,7 +127,13 @@ function EditForm({ row, onClose }: { row: MatrixRow; onClose: () => void }) {
 
       {mode === 'manual' ? (
         <Field label="قیمت هر واحد (تومان)">
-          <NumInput value={price} onValueChange={setPrice} className="w-full" />
+          <Input
+            inputMode="numeric"
+            value={price === null ? '' : fa(price)}
+            onChange={(e) => setPrice(e.target.value.trim() === '' ? null : toNum(e.target.value))}
+            placeholder="قیمت را وارد کنید"
+            className="text-center font-extrabold"
+          />
         </Field>
       ) : (
         <Field
@@ -144,7 +161,7 @@ function EditForm({ row, onClose }: { row: MatrixRow; onClose: () => void }) {
             قیمت محاسبه‌شده: {money(computed)}
             {currentUnit !== null && currentUnit !== computed && (
               <span className="block text-[12px] font-semibold opacity-80">
-                از {fa(currentUnit)} به {money(computed)}
+                از {money(currentUnit)} به {money(computed)}
               </span>
             )}
           </>
