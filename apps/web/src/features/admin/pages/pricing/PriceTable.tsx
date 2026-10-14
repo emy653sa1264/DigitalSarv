@@ -37,8 +37,8 @@ function PriceCell({ v, layer, providerNames }: { v: PriceVersionView | null; la
   )
 }
 
-export function PriceTable({ rows, onEdit, onHistory, layer = 'customer', providerNames }: {
-  rows: MatrixRow[]; onEdit: (row: MatrixRow) => void; onHistory: (row: MatrixRow) => void; layer?: PriceLayer; providerNames?: Map<string, string>
+export function PriceTable({ rows, onEdit, onHistory, layer = 'customer', providerNames, canEdit = true }: {
+  rows: MatrixRow[]; onEdit: (row: MatrixRow) => void; onHistory: (row: MatrixRow) => void; layer?: PriceLayer; providerNames?: Map<string, string>; canEdit?: boolean
 }) {
   return (
     <AdminTable columns={COLUMNS} minWidth={780} head={['ترکیب', 'قیمت فعلی', 'قیمت بعدی', 'وضعیت', '']}>
@@ -62,7 +62,7 @@ export function PriceTable({ rows, onEdit, onHistory, layer = 'customer', provid
               {row.pending && <Tag bg={TONES.amber.soft} fg={TONES.amber.ink}>در انتظار تأیید{row.pending.unitPrice !== null ? `: ${money(row.pending.unitPrice)}` : ''}</Tag>}
             </span>
             <div className="flex items-center gap-2">
-              <IconAction kind="edit" label={`ویرایش قیمت ${row.label}`} onClick={() => onEdit(row)} />
+              {canEdit && <IconAction kind="edit" label={`ویرایش قیمت ${row.label}`} onClick={() => onEdit(row)} />}
               <button type="button" onClick={() => onHistory(row)} className="cursor-pointer text-[12.5px] font-extrabold text-blue-dark hover:underline">
                 تاریخچه
               </button>

@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react'
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
+import { toast } from '@/components/ui/sonner'
 import { ApiError } from '@/lib/api'
 import { fa, money } from '@/lib/format'
 import type { MarginConflict } from '@/lib/types'
@@ -22,7 +23,7 @@ export function useMarginGuard(labels?: Map<string, string>): { run: (attempt: (
     attempt(false).catch((e: unknown) => {
       if (isNegativeMargin(e)) {
         const conflicts = (e.data as { conflicts?: Conflict[] }).conflicts ?? []
-        setState({ conflicts, retry: () => void attempt(true).catch(() => undefined) })
+        setState({ conflicts, retry: () => void attempt(true).catch((err: unknown) => { if (isNegativeMargin(err)) toast.error(err.message) }) })
       }
     })
   }

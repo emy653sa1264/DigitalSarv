@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { notify, toast } from '@/components/ui/sonner'
 import { Textarea } from '@/components/ui/textarea'
 import { fa, money } from '@/lib/format'
+import { useCan } from '@/lib/permissions'
 import type { MatrixRow, PriceLayer, PriceVersionView } from '@/lib/types'
 import { Tag } from '../../components/controls'
 import { QueryView } from '../../components/kit'
@@ -30,7 +31,7 @@ export function PriceHistoryDialog({ row, onClose, layer = 'customer', providerI
           {(versions) => (
             <div className="grid gap-3">
               {versions.map((v) => (
-                <VersionItem key={v.id} v={v} label={row?.label ?? ''} />
+                <VersionItem key={v.id} v={v} label={row?.label ?? ''} layer={layer} />
               ))}
             </div>
           )}
@@ -40,7 +41,9 @@ export function PriceHistoryDialog({ row, onClose, layer = 'customer', providerI
   )
 }
 
-function VersionItem({ v, label }: { v: PriceVersionView; label: string }) {
+function VersionItem({ v, label, layer }: { v: PriceVersionView; label: string; layer: PriceLayer }) {
+  const canPublish = useCan(layer === 'provider' ? 'provider_price_publish' : 'customer_price_publish')
+  const canRollback = useCan(layer === 'provider' ? 'provider_price_rollback' : 'customer_price_rollback')
   const m = usePriceBookMutations()
   const guard = useMarginGuard(new Map([[v.comboKey, label]]))
   const [action, setAction] = useState<Action | null>(null)
@@ -53,6 +56,8 @@ function VersionItem({ v, label }: { v: PriceVersionView; label: string }) {
   if (v.status === 'draft') actions.push('publish')
   if (v.status === 'active' || v.status === 'scheduled') actions.push('disable')
   if (v.status !== 'draft' && v.status !== 'pending_approval' && v.status !== 'rejected') actions.push('rollback')
+
+  const allowed = actions.filter((a) => (a === 'rollback' ? canRollback : canPublish))
 
   const finish = () => {
     notify(action === 'disable' && v.status === 'scheduled' ? 'زمان‌بندی لغو شد' : ACTION_DONE[action!])
@@ -96,9 +101,9 @@ function VersionItem({ v, label }: { v: PriceVersionView; label: string }) {
       )}
       {guard.dialog}
 
-      {actions.length > 0 && !action && (
+      {allowed.length > 0 && !action && (
         <div className="mt-2 flex flex-wrap gap-2">
-          {actions.map((a) => (
+          {allowed.map((a) => (
             <Button key={a} type="button" size="sm" variant={a === 'disable' || a === 'reject' ? 'destructive' : 'outline'} onClick={() => setAction(a)}>
               {a === 'disable' && v.status === 'scheduled' ? 'لغو زمان‌بندی' : ACTION_LABEL[a]}
             </Button>

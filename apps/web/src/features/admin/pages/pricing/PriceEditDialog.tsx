@@ -7,10 +7,10 @@ import { Textarea } from '@/components/ui/textarea'
 import { fa, money, toNum } from '@/lib/format'
 import { useCan } from '@/lib/permissions'
 import type { MatrixRow, PriceLayer, PriceRounding, PriceVersionView } from '@/lib/types'
+import { useCenters } from '../../api'
 import { AdminSelect, NONE } from '../../components/controls'
 import { Field, FormDialog } from '../../components/FormDialog'
 import { usePriceBookMutations, type VersionBody } from '../../pricing-api'
-import { useProviders } from '../../providers-api'
 import { CUSTOMER_MODE_OPTIONS, ROUNDING_OPTIONS, tehranInputJalali, tehranInputToIso, tomorrowTehranInput } from './labels'
 import { useMarginGuard } from './MarginConfirm'
 
@@ -24,8 +24,8 @@ export function PriceEditDialog({ row, onClose, layer = 'customer', providerId }
 function EditForm({ row, onClose, layer, providerId }: { row: MatrixRow; onClose: () => void; layer: PriceLayer; providerId?: string }) {
   const { create, preview } = usePriceBookMutations()
   const isProvider = layer === 'provider'
-  const canSeeProviders = useCan('provider_view')
-  const providers = useProviders(!isProvider && canSeeProviders)
+  const canPublish = useCan(isProvider ? 'provider_price_publish' : 'customer_price_publish')
+  const providers = useCenters()
   const guard = useMarginGuard(new Map([[row.comboKey, row.label]]))
   const cur = row.current
   const [mode, setMode] = useState<Mode>(isProvider ? 'manual' : (cur?.mode ?? 'manual'))
@@ -42,7 +42,7 @@ function EditForm({ row, onClose, layer, providerId }: { row: MatrixRow; onClose
   const isMarkup = mode === 'fixed_markup' || mode === 'percent_markup'
   const baseId = base === NONE ? undefined : base
   const valueFields = useMemo<Pick<VersionBody, 'price' | 'formula' | 'markup' | 'baseProviderId'>>(
-    () => (mode === 'manual' ? { price: price ?? 0 } : mode === 'formula' ? { formula: formula.trim(), ...(baseId ? { baseProviderId: baseId } : {}) } : { markup, ...(baseId ? { baseProviderId: baseId } : {}) }),
+    () => (mode === 'manual' ? { price: price ?? 0 } : mode === 'formula' ? { formula: formula.trim(), ...(baseId && formula.includes('provider_price') ? { baseProviderId: baseId } : {}) } : { markup, ...(baseId ? { baseProviderId: baseId } : {}) }),
     [mode, price, formula, markup, baseId],
   )
   const incomplete = mode === 'manual' ? price === null : mode === 'formula' ? !formula.trim() : !baseId
@@ -99,7 +99,7 @@ function EditForm({ row, onClose, layer, providerId }: { row: MatrixRow; onClose
       description={isProvider ? 'قیمت مجری مبنای سهم مجری است و قیمت مشتری را تغییر نمی‌دهد.' : 'تغییر قیمت با دلیل ثبت می‌شود و در تاریخچه می‌ماند.'}
       submitLabel={scheduled ? 'زمان‌بندی' : 'انتشار'}
       pending={create.isPending}
-      submitDisabled={incomplete}
+      submitDisabled={incomplete || !canPublish}
       onSubmit={() => submit(true)}
       extraActions={<Button type="button" variant="secondary" disabled={create.isPending || incomplete} onClick={() => submit(false)}>ذخیره پیش‌نویس</Button>}
     >

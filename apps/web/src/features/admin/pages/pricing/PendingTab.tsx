@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { TONES } from '@/components/brand'
 import { Button } from '@/components/ui/button'
 import { notify, toast } from '@/components/ui/sonner'
@@ -18,6 +18,8 @@ import { useMarginGuard } from './MarginConfirm'
 export function PendingTab() {
   const [page, setPage] = useState(1)
   const query = usePendingPrices(page)
+  const lastPage = query.data ? Math.max(1, Math.ceil(query.data.total / query.data.limit)) : 1
+  useEffect(() => { if (page > lastPage) setPage(lastPage) }, [page, lastPage])
   return (
     <QueryView query={query} rows={4} isEmpty={(d) => d.items.length === 0}
       empty={{ title: 'درخواستی در انتظار تأیید نیست', hint: 'قیمت‌هایی که مجریان در «سرو مجری» ثبت کنند برای تأیید اینجا می‌آیند.' }}>
@@ -39,7 +41,8 @@ function PendingCard({ item }: { item: PendingItem }) {
   const [reason, setReason] = useState('')
   const v = item.version
   const above = item.customerPrice !== null && v.unitPrice !== null && v.unitPrice > item.customerPrice
-  const future = new Date(v.effectiveFrom).getTime() > Date.now()
+  const [now] = useState(() => Date.now())
+  const future = new Date(v.effectiveFrom).getTime() > now
 
   const confirm = () => {
     if (!reason.trim()) return toast.error(action === 'reject' ? 'دلیل رد را بنویسید؛ مجری آن را می‌بیند' : 'یادداشت تأیید را بنویسید')

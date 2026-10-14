@@ -4,12 +4,11 @@ import { Chip } from '@/components/brand'
 import { fa } from '@/lib/format'
 import { useCan } from '@/lib/permissions'
 import type { MatrixRow } from '@/lib/types'
-import { usePapers } from '../../api'
+import { usePapers, useCenters } from '../../api'
 import { AdminSelect, type SelectOption } from '../../components/controls'
 import { PageHeader, QueryView } from '../../components/kit'
 import { SearchInput } from '../../components/table'
 import { usePendingPrices, usePriceMatrix, type PriceService } from '../../pricing-api'
-import { useProviders } from '../../providers-api'
 import { AddonsCard } from './AddonsCard'
 import { AuditCard } from './AuditCard'
 import { BulkDialog } from './BulkDialog'
@@ -91,7 +90,8 @@ export function PricingCenterPage() {
 
 function ServiceTab({ service }: { service: PriceService }) {
   const query = usePriceMatrix(service)
-  const providers = useProviders(useCan('provider_view'))
+  const providers = useCenters()
+  const canEdit = useCan('customer_price_edit')
   const providerNames = new Map((providers.data ?? []).map((p) => [p.id, p.name]))
   const papers = usePapers()
   const [search, setSearch] = useState('')
@@ -136,7 +136,7 @@ function ServiceTab({ service }: { service: PriceService }) {
           return shown.length === 0 ? (
             <div className="rounded-[22px] border border-line bg-white px-5 py-8 text-center text-sm font-bold text-muted-2">موردی با این فیلتر پیدا نشد.</div>
           ) : (
-            <PriceTable rows={shown} onEdit={setEditing} onHistory={setHistory} providerNames={providerNames} />
+            <PriceTable rows={shown} onEdit={setEditing} onHistory={setHistory} providerNames={providerNames} canEdit={canEdit} />
           )
         }}
       </QueryView>

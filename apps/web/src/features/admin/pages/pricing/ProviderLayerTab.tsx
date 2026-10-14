@@ -3,11 +3,12 @@ import { useSearchParams } from 'react-router'
 import { Chip, InfoBanner } from '@/components/brand'
 import { PROVIDER_STATUS } from '@/lib/provider-labels'
 import type { MatrixRow } from '@/lib/types'
+import { useCan } from '@/lib/permissions'
+import { useCenters } from '../../api'
 import { AdminSelect } from '../../components/controls'
 import { QueryView } from '../../components/kit'
 import { SearchInput } from '../../components/table'
 import { usePriceMatrix, type PriceService } from '../../pricing-api'
-import { useProviders } from '../../providers-api'
 import { PriceEditDialog } from './PriceEditDialog'
 import { PriceHistoryDialog } from './PriceHistoryDialog'
 import { PriceTable } from './PriceTable'
@@ -19,8 +20,11 @@ const SERVICES: { key: PriceService; label: string }[] = [
 /** «قیمت مجریان»: one provider's price list, edited by the admin or approved from its submissions (separate from the customer layer). */
 export function ProviderLayerTab() {
   const [params, setParams] = useSearchParams()
-  const providers = useProviders()
-  const providerId = params.get('provider') || providers.data?.[0]?.id || ''
+  const providers = useCenters()
+  const canEdit = useCan('provider_price_edit')
+  const wanted = params.get('provider')
+  const list0 = providers.data ?? []
+  const providerId = (list0.some((p) => p.id === wanted) ? wanted : list0[0]?.id) ?? ''
   const [service, setService] = useState<PriceService>('bw')
   const [search, setSearch] = useState('')
   const [editing, setEditing] = useState<MatrixRow | null>(null)
@@ -48,7 +52,7 @@ export function ProviderLayerTab() {
             <QueryView query={query} rows={6} isEmpty={(d) => d.length === 0} empty={{ title: 'ترکیبی برای نمایش نیست' }}>
               {(rows) => {
                 const shown = rows.filter((r) => !search.trim() || r.label.includes(search.trim()))
-                return <PriceTable rows={shown} layer="provider" onEdit={setEditing} onHistory={setHistory} />
+                return <PriceTable rows={shown} layer="provider" canEdit={canEdit} onEdit={setEditing} onHistory={setHistory} />
               }}
             </QueryView>
           </>
