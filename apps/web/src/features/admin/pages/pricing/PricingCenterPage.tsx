@@ -12,6 +12,7 @@ import { usePendingPrices, usePriceMatrix, type PriceService } from '../../prici
 import { AddonsCard } from './AddonsCard'
 import { AuditCard } from './AuditCard'
 import { BulkDialog } from './BulkDialog'
+import { CompareTab } from './CompareTab'
 import { COLOR_TYPE_OPTIONS, SIDE_OPTIONS, SIZE_OPTIONS } from './labels'
 import { PendingTab } from './PendingTab'
 import { PriceEditDialog } from './PriceEditDialog'
@@ -30,7 +31,7 @@ const TABS: { key: Tab; label: string }[] = [
 ]
 const ALL = '__all'
 
-type View = 'customer' | 'provider' | 'pending'
+type View = 'customer' | 'provider' | 'pending' | 'compare'
 
 export function PricingCenterPage() {
   const [params, setParams] = useSearchParams()
@@ -40,6 +41,7 @@ export function PricingCenterPage() {
   const views: { key: View; label: string; show: boolean }[] = [
     { key: 'customer', label: 'قیمت مشتری', show: canCustomer },
     { key: 'provider', label: 'قیمت مجریان', show: canProvider },
+    { key: 'compare', label: 'مقایسه و حاشیه سود', show: canCustomer && canProvider },
     { key: 'pending', label: `درخواست‌های مجریان${pending.data?.total ? ` (${fa(pending.data.total)})` : ''}`, show: canProvider },
   ]
   const visible = views.filter((v) => v.show)
@@ -56,7 +58,7 @@ export function PricingCenterPage() {
       <PageHeader
         title="مرکز مدیریت قیمت"
         subtitle="قیمت مشتری و قیمت مجریان — دو لایه جدا، با نسخه‌بندی، زمان‌بندی، تأیید و تاریخچه"
-        actions={view === 'customer' ? (
+        actions={view === 'customer' || view === 'provider' ? (
           <button type="button" onClick={() => setBulkOpen(true)} className="cursor-pointer rounded-full border-[1.5px] border-line bg-white px-[18px] py-[11px] text-[13px] font-extrabold hover:bg-shell">تغییر گروهی</button>
         ) : undefined}
       />
@@ -77,11 +79,15 @@ export function PricingCenterPage() {
                 ))}
               </div>
               {tab === 'audit' ? <AuditCard /> : <ServiceTab key={tab} service={tab} />}
-              <BulkDialog open={bulkOpen} onOpenChange={setBulkOpen} defaultService={tab === 'audit' ? 'bw' : tab} />
             </>
           )}
           {view === 'provider' && <ProviderLayerTab />}
+          {view === 'compare' && <CompareTab />}
           {view === 'pending' && <PendingTab />}
+          {(view === 'customer' || view === 'provider') && (
+            <BulkDialog open={bulkOpen} onOpenChange={setBulkOpen} defaultService={view === 'customer' && tab !== 'audit' ? tab : 'bw'}
+              defaultLayer={view === 'provider' ? 'provider' : 'customer'} defaultProviderId={params.get('provider') ?? undefined} />
+          )}
         </>
       )}
     </>

@@ -1,16 +1,18 @@
 import { useMemo, useState } from 'react'
-import { Chip } from '@/components/brand'
+import { Chip, TONES } from '@/components/brand'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { notify, toast } from '@/components/ui/sonner'
 import { Textarea } from '@/components/ui/textarea'
 import { fa, money } from '@/lib/format'
-import type { BulkBody, BulkOp, ColorType, PriceRounding, PrintSize } from '@/lib/types'
-import { usePapers } from '../../api'
-import { AdminSelect, NumInput, type SelectOption } from '../../components/controls'
+import { useCan } from '@/lib/permissions'
+import type { BulkBody, BulkOp, ColorType, PriceLayer, PriceRounding, PrintSize } from '@/lib/types'
+import { usePapers, useCenters } from '../../api'
+import { AdminSelect, NumInput, Tag, type SelectOption } from '../../components/controls'
 import { Field } from '../../components/FormDialog'
 import { usePriceBookMutations, type PriceService } from '../../pricing-api'
+import { useMarginGuard } from './MarginConfirm'
 import { BULK_OP_LABEL, COLOR_TYPE_OPTIONS, ROUNDING_OPTIONS, SIDE_OPTIONS, SIZE_OPTIONS, tehranInputJalali, tehranInputToIso, tomorrowTehranInput } from './labels'
 
 const ALL = '__all'
@@ -23,13 +25,21 @@ const SERVICE_OPTIONS: SelectOption[] = [
 ]
 const OP_OPTIONS: SelectOption[] = (Object.keys(BULK_OP_LABEL) as BulkOp[]).map((k) => ({ value: k, label: BULK_OP_LABEL[k] }))
 
-export function BulkDialog({ open, onOpenChange, defaultService }: { open: boolean; onOpenChange: (o: boolean) => void; defaultService: PriceService }) {
-  return <BulkForm key={String(open)} open={open} onOpenChange={onOpenChange} defaultService={defaultService} />
+export function BulkDialog({ open, onOpenChange, defaultService, defaultLayer = 'customer', defaultProviderId }: { open: boolean; onOpenChange: (o: boolean) => void; defaultService: PriceService; defaultLayer?: PriceLayer; defaultProviderId?: string }) {
+  return <BulkForm key={String(open)} open={open} onOpenChange={onOpenChange} defaultService={defaultService} defaultLayer={defaultLayer} defaultProviderId={defaultProviderId} />
 }
 
-function BulkForm({ open, onOpenChange, defaultService }: { open: boolean; onOpenChange: (o: boolean) => void; defaultService: PriceService }) {
+function BulkForm({ open, onOpenChange, defaultService, defaultLayer = 'customer', defaultProviderId }: { open: boolean; onOpenChange: (o: boolean) => void; defaultService: PriceService; defaultLayer?: PriceLayer; defaultProviderId?: string }) {
   const { bulkPreview, bulkApply } = usePriceBookMutations()
   const papers = usePapers()
+  const canCustomer = useCan('customer_price_bulk_update')
+  const canProvider = useCan('provider_price_bulk_update')
+  const [layer, setLayer] = useState<PriceLayer>(defaultLayer === 'provider' && canProvider ? 'provider' : canCustomer ? 'customer' : 'provider')
+  const centers = useCenters()
+  const [providerId, setProviderId] = useState(defaultProviderId ?? '')
+  const pid = providerId || centers.data?.[0]?.id || ''
+  const guard = useMarginGuard()
+  const isProvider = layer === 'provider'
   const [service, setService] = useState<PriceService>(defaultService)
   const [size, setSize] = useState(ALL)
   const [colorType, setColorType] = useState(ALL)
@@ -54,14 +64,15 @@ function BulkForm({ open, onOpenChange, defaultService }: { open: boolean; onOpe
     if (isColor && colorType !== ALL) filter.colorType = colorType as ColorType
     if (isColor && paper !== ALL) filter.paper = paper
     if (hasSide && side !== ALL) filter.side = side as 'single' | 'double'
-    const b: BulkBody = { layer: 'customer', filter, op, value, rounding }
+    if (isProvider && !pid) return null
+    const b: BulkBody = { layer, ...(isProvider ? { providerId: pid } : {}), filter, op, value, ...(isProvider ? {} : { rounding }) }
     if (when === 'schedule') {
       const d = new Date(`${from}:00+03:30`)
       if (!from || Number.isNaN(d.getTime())) return null
       b.effectiveFrom = tehranInputToIso(from)
     }
     return b
-  }, [service, size, colorType, paper, side, op, value, rounding, when, from, hasSize, hasSide, isColor])
+  }, [service, size, colorType, paper, side, op, value, rounding, when, from, layer, pid, isProvider, hasSize, hasSide, isColor])
 
   const key = body ? JSON.stringify(body) : null
   const preview = key !== null && key === previewedKey ? bulkPreview.data : undefined
@@ -80,15 +91,12 @@ function BulkForm({ open, onOpenChange, defaultService }: { open: boolean; onOpe
       toast.error('دلیل تغییر را وارد کنید')
       return
     }
-    bulkApply.mutate(
-      { ...body, reason: reason.trim() },
-      {
-        onSuccess: (r) => {
-          const skipped = r.skipped.length
-          notify(`${fa(r.created)} قیمت تغییر کرد${skipped ? ` · ${fa(skipped)} ترکیب رد شد` : ''}`)
-          onOpenChange(false)
-        },
-      },
+    guard.run((confirm) =>
+      bulkApply.mutateAsync({ ...body, reason: reason.trim(), confirmNegativeMargin: confirm }).then((r) => {
+        const skipped = r.skipped.length
+        notify(`${fa(r.created)} قیمت تغییر کرد${skipped ? ` · ${fa(skipped)} ترکیب رد شد` : ''}`)
+        onOpenChange(false)
+      }),
     )
   }
 
@@ -102,7 +110,18 @@ function BulkForm({ open, onOpenChange, defaultService }: { open: boolean; onOpe
           <DialogDescription className="text-[13px] leading-6 text-muted-2">ابتدا پیش‌نمایش را ببینید؛ بدون پیش‌نمایش اعمال نمی‌شود.</DialogDescription>
         </DialogHeader>
 
-        <div className="rounded-[16px] bg-amber-soft px-3.5 py-2.5 text-[12px] leading-6 font-semibold text-amber-ink">فقط قیمت مشتری تغییر می‌کند.</div>
+        <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="لایه قیمت">
+          {canCustomer && <Chip size="sm" role="radio" aria-checked={!isProvider} selected={!isProvider} onClick={() => setLayer('customer')}>قیمت مشتری</Chip>}
+          {canProvider && <Chip size="sm" role="radio" aria-checked={isProvider} selected={isProvider} onClick={() => setLayer('provider')}>قیمت یک مجری</Chip>}
+        </div>
+        {isProvider && (
+          <Field label="مجری">
+            <AdminSelect value={pid} onValueChange={setProviderId} options={(centers.data ?? []).map((p) => ({ value: p.id, label: p.name }))} ariaLabel="مجری" />
+          </Field>
+        )}
+        <div className="rounded-[16px] bg-amber-soft px-3.5 py-2.5 text-[12px] leading-6 font-semibold text-amber-ink">
+          {isProvider ? 'فقط قیمت همین مجری تغییر می‌کند؛ قیمت مشتری و مجریان دیگر دست نمی‌خورند.' : 'فقط قیمت مشتری تغییر می‌کند؛ قیمت مجریان دست نمی‌خورد.'}
+        </div>
 
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="سرویس">
@@ -134,9 +153,11 @@ function BulkForm({ open, onOpenChange, defaultService }: { open: boolean; onOpe
           <Field label={`مقدار (${isPct ? '٪' : 'تومان'})`}>
             <NumInput value={value} onValueChange={(n) => setValue(isPct ? Math.min(1000, n) : n)} className="w-full" />
           </Field>
-          <Field label="گرد کردن">
-            <AdminSelect value={String(rounding)} onValueChange={(v) => setRounding(Number(v) as PriceRounding)} options={ROUNDING_OPTIONS} ariaLabel="گرد کردن" />
-          </Field>
+          {!isProvider && (
+            <Field label="گرد کردن">
+              <AdminSelect value={String(rounding)} onValueChange={(v) => setRounding(Number(v) as PriceRounding)} options={ROUNDING_OPTIONS} ariaLabel="گرد کردن" />
+            </Field>
+          )}
         </div>
 
         <Field label="زمان اعمال" hint={when === 'schedule' ? tehranInputJalali(from) && `${tehranInputJalali(from)} (وقت تهران)` : undefined}>
@@ -159,22 +180,27 @@ function BulkForm({ open, onOpenChange, defaultService }: { open: boolean; onOpe
 
         {preview && (
           <div className="grid gap-3">
+            {preview.rows.some((r) => r.negativeMargin) && (
+              <div className="rounded-[16px] bg-pink-soft px-4 py-3 text-[12.5px] font-bold text-pink-ink">{fa(preview.rows.filter((r) => r.negativeMargin).length)} ترکیب پس از این تغییر قیمت مشتری کمتر از قیمت مجری دارد؛ اعمال آن تأیید جداگانه می‌خواهد.</div>
+            )}
             {preview.rows.length === 0 ? (
               <div className="rounded-[16px] bg-shell px-4 py-3 text-[13px] font-bold text-muted-1">هیچ ترکیبی با این فیلتر قابل تغییر نیست.</div>
             ) : (
               <div className="overflow-hidden rounded-[20px] border border-line">
                 <div className="max-h-[260px] overflow-auto">
-                  <div className="min-w-[360px]">
-                    <div className="grid grid-cols-[1.6fr_1fr_1fr] gap-2 bg-night px-4 py-2.5 text-[12px] font-extrabold text-[#c9bcff]">
+                  <div className="min-w-[420px]">
+                    <div className="grid grid-cols-[1.6fr_1fr_1fr_70px] gap-2 bg-night px-4 py-2.5 text-[12px] font-extrabold text-[#c9bcff]">
                       <span>ترکیب</span>
                       <span>فعلی</span>
                       <span>جدید</span>
+                      <span>حاشیه</span>
                     </div>
                     {preview.rows.map((r) => (
-                      <div key={r.comboKey} className="grid grid-cols-[1.6fr_1fr_1fr] gap-2 border-t border-line-soft px-4 py-2.5 text-[13px]">
+                      <div key={r.comboKey} className="grid grid-cols-[1.6fr_1fr_1fr_70px] gap-2 border-t border-line-soft px-4 py-2.5 text-[13px]">
                         <span className="font-bold">{r.label}</span>
                         <span>{r.current === null ? '—' : money(r.current)}</span>
                         <span className="font-extrabold">{r.next === null ? '—' : money(r.next)}</span>
+                        {r.negativeMargin ? <Tag bg={TONES.pink.soft} fg={TONES.pink.ink}>زیان</Tag> : <span className="text-muted-3">—</span>}
                       </div>
                     ))}
                   </div>
@@ -205,6 +231,7 @@ function BulkForm({ open, onOpenChange, defaultService }: { open: boolean; onOpe
             {bulkApply.isPending ? 'در حال اعمال…' : canApply ? `اعمال روی ${fa(preview.rows.length)} ترکیب` : 'اعمال'}
           </Button>
         </div>
+        {guard.dialog}
       </DialogContent>
     </Dialog>
   )
