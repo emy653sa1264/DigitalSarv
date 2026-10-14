@@ -47,7 +47,8 @@ export class BulkFilterDto {
   @IsOptional() @IsArray() @ArrayMaxSize(500) @IsString({ each: true }) comboKeys?: string[];
 }
 export class BulkDto {
-  @IsIn(['customer'], { message: 'در هر عملیات فقط یک لایه قیمت (مشتری) مجاز است' }) layer: 'customer';
+  @IsIn(PRICE_LAYERS, { message: 'در هر عملیات فقط یک لایه قیمت مجاز است' }) layer: PriceLayer;
+  @IsOptional() @IsMongoId() providerId?: string;
   @ValidateNested() @Type(() => BulkFilterDto) filter: BulkFilterDto;
   @IsIn(BULK_OPS) op: BulkOp;
   @IsInt() @Min(0) value: number;
@@ -56,6 +57,7 @@ export class BulkDto {
 }
 export class BulkApplyDto extends BulkDto {
   @IsString() @MinLength(1, { message: 'دلیل تغییر قیمت را بنویسید' }) @MaxLength(300) reason: string;
+  @IsOptional() @IsBoolean() confirmNegativeMargin?: boolean;
 }
 export class RangeDto {
   @IsInt() @Min(1) minPages: number;

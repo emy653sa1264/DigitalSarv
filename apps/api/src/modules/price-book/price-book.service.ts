@@ -85,12 +85,13 @@ export interface CompareRow {
 }
 
 export interface BulkInput {
-  layer: 'customer';
+  layer: PriceLayer;
+  providerId?: string;
   filter: { service?: ComboService; size?: string; colorType?: string; paper?: string; side?: string; comboKeys?: string[] };
   op: BulkOp; value: number; rounding?: number; effectiveFrom?: string;
 }
 export interface BulkPreview {
-  rows: { comboKey: string; label: string; current: number; next: number }[];
+  rows: { comboKey: string; label: string; current: number; next: number; negativeMargin: boolean }[];
   skipped: { comboKey: string; label: string; reason: string }[];
 }
 
@@ -420,46 +421,65 @@ export class PriceBookService {
   // ------------------------------------------------------------ bulk
 
   async bulkPreview(input: BulkInput): Promise<BulkPreview> {
-    if (input.layer !== 'customer') throw new BadRequestException('در هر عملیات فقط یک لایه قیمت (مشتری) مجاز است');
+    if (!(PRICE_LAYERS as readonly string[]).includes(input.layer)) throw new BadRequestException('در هر عملیات فقط یک لایه قیمت مجاز است');
     if (!Number.isInteger(input.value) || input.value < 0) throw new BadRequestException('مقدار باید عدد صحیح و نامنفی باشد');
     if ((input.op === 'inc_pct' || input.op === 'dec_pct') && input.value > 1000) throw new BadRequestException('درصد معتبر نیست');
+    const providerId = this.scope(input.layer, input.providerId).providerId;
+    const providerKey = providerId ? String(providerId) : null;
     const f = input.filter ?? {};
-    const rows = (await this.matrix('customer', f.service)).filter((r) => {
+    const rows = (await this.matrix(input.layer, f.service, new Date(), providerKey)).filter((r) => {
       const o = r.options as unknown as Record<string, unknown>;
       return (!f.size || o.size === f.size) && (!f.colorType || o.colorType === f.colorType) && (!f.paper || o.paper === f.paper)
         && (!f.side || o.side === f.side) && (!f.comboKeys?.length || f.comboKeys.includes(r.comboKey));
     });
+    const when = input.effectiveFrom ? new Date(input.effectiveFrom) : new Date();
+    const m = await this.marginChecker(Number.isNaN(when.getTime()) ? new Date() : when, rows.map((r) => r.comboKey));
     const out: BulkPreview = { rows: [], skipped: [] };
     for (const r of rows) {
       const cur = r.current;
       if (!cur) { out.skipped.push({ comboKey: r.comboKey, label: r.label, reason: 'قیمت فعالی ندارد' }); continue; }
-      if (cur.mode !== 'manual' || cur.price === undefined) { out.skipped.push({ comboKey: r.comboKey, label: r.label, reason: 'قیمت فرمولی است' }); continue; }
-      const next = bulkValue(cur.price, input.op, input.value, input.rounding ?? 0);
+      if (cur.mode !== 'manual' || cur.price === undefined) { out.skipped.push({ comboKey: r.comboKey, label: r.label, reason: 'قیمت فرمولی یا وابسته به مجری است' }); continue; }
+      const next = bulkValue(cur.price, input.op, input.value, input.layer === 'provider' ? 0 : (input.rounding ?? 0));
       if (next === null) { out.skipped.push({ comboKey: r.comboKey, label: r.label, reason: 'نتیجه منفی می‌شود' }); continue; }
-      out.rows.push({ comboKey: r.comboKey, label: r.label, current: cur.price, next });
+      out.rows.push({ comboKey: r.comboKey, label: r.label, current: cur.price, next, negativeMargin: m.conflicts(r.comboKey, input.layer, providerKey, next).length > 0 });
     }
     return out;
   }
 
-  async bulkApply(input: BulkInput & { reason: string }, by: string) {
+  async bulkApply(input: BulkInput & { reason: string; confirmNegativeMargin?: boolean }, by: string) {
+    await this.assertCan(by, layerPermission(input.layer, 'bulk_update'));
+    await this.assertCan(by, layerPermission(input.layer, 'publish'));
     const why = this.reason(input.reason);
+    const scope = this.scope(input.layer, input.providerId);
+    if (scope.providerId) await this.assertProvider(scope.providerId);
     const preview = await this.bulkPreview(input);
     const bulkId = randomUUID();
     const effectiveFrom = input.effectiveFrom ? new Date(input.effectiveFrom) : new Date();
     if (Number.isNaN(effectiveFrom.getTime())) throw new BadRequestException('تاریخ معتبر نیست');
     if (input.effectiveFrom && effectiveFrom.getTime() < Date.now() - PAST_GRACE_MS) throw new BadRequestException(PAST_MSG);
+    const flagged = preview.rows.filter((r) => r.negativeMargin);
+    let negative: MarginConflict[] = [];
+    if (flagged.length) {
+      const m = await this.marginChecker(effectiveFrom, flagged.map((r) => r.comboKey));
+      negative = flagged.flatMap((r) => m.conflicts(r.comboKey, input.layer, scope.providerId ? String(scope.providerId) : null, r.next));
+      if (!input.confirmNegativeMargin) {
+        // M2-R1: provider names and prices only for admins who may view provider prices
+        const shown: MarginWarning[] = (await this.canViewProviderPrices(by)) ? negative : negative.map((c) => ({ comboKey: c.comboKey }));
+        throw new ConflictException({ statusCode: 409, code: 'NEGATIVE_MARGIN', message: NEGATIVE_MSG, conflicts: shown });
+      }
+    }
     const docs: Awaited<ReturnType<PriceBookService['insertVersion']>>[] = [];
     const skipped = [...preview.skipped];
     const future = effectiveFrom.getTime() > Date.now();
     const applied: BulkPreview['rows'] = [];
     try {
       for (const row of preview.rows) {
-        if (future && (await this.versions.exists({ layer: 'customer', providerId: null, comboKey: row.comboKey, state: 'published', effectiveFrom }))) {
+        if (future && (await this.versions.exists({ ...scope, comboKey: row.comboKey, state: 'published', effectiveFrom }))) {
           skipped.push({ comboKey: row.comboKey, label: row.label, reason: 'قیمت دیگری با همین زمان شروع منتشر شده است' });
           continue;
         }
         docs.push(await this.insertVersion({
-          layer: 'customer', providerId: null, comboKey: row.comboKey, mode: 'manual', price: row.next,
+          ...scope, comboKey: row.comboKey, mode: 'manual', price: row.next,
           rounding: 0, effectiveFrom, state: 'published', reason: why, createdBy: new Types.ObjectId(by), bulkId,
         }));
         applied.push(row);
@@ -467,7 +487,7 @@ export class PriceBookService {
     } finally {
       if (docs.length) {
         await this.catalog.invalidate();
-        await this.audit('bulk', docs, why, by, { op: input.op, value: input.value, rounding: input.rounding ?? 0, filter: input.filter }, applied);
+        await this.audit('bulk', docs, why, by, { op: input.op, value: input.value, rounding: input.rounding ?? 0, filter: input.filter }, negative.length ? { rows: applied, negativeMargin: negative } : applied);
       }
     }
     return { bulkId, created: docs.length, skipped };
@@ -547,9 +567,8 @@ export class PriceBookService {
    * the unit of a candidate value, and the providers whose effective price would exceed the customer's effective
    * unit (quantity 1) if the candidate were in force. Never loads other combos' versions (P13).
    */
-  private async marginChecker(at: Date, comboKey: string) {
-    const sibling = singleSideKey(comboKey);
-    const keys = sibling ? [comboKey, sibling] : [comboKey];
+  private async marginChecker(at: Date, comboKeys: string[]) {
+    const keys = [...new Set(comboKeys.flatMap((k) => { const sib = singleSideKey(k); return sib ? [k, sib] : [k]; }))];
     const [rows, papers, centers] = await Promise.all([
       this.versions.find({ comboKey: { $in: keys }, state: { $in: ['published', 'disabled'] } }).lean() as Promise<Row[]>,
       this.papers.find().lean(),
@@ -583,7 +602,7 @@ export class PriceBookService {
 
   /** 409 NEGATIVE_MARGIN unless confirmed; returns the (confirmed) conflicts for the audit. */
   private async checkMargin(comboKey: string, at: Date, layer: PriceLayer, providerId: Types.ObjectId | null, value: VersionValue, confirmed: boolean, by: string): Promise<MarginConflict[]> {
-    const m = await this.marginChecker(at, comboKey);
+    const m = await this.marginChecker(at, [comboKey]);
     const found = m.conflicts(comboKey, layer, providerId ? String(providerId) : null, m.unitOf(value, comboKey, layer));
     // M2-R1: provider names and prices only for admins who may view provider prices (the count stays visible)
     const shown: MarginWarning[] = found.length && !(await this.canViewProviderPrices(by)) ? found.map((c) => ({ comboKey: c.comboKey })) : found;

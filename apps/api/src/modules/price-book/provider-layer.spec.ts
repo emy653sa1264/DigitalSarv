@@ -431,3 +431,51 @@ describe('Task 8 fix round 1', () => {
     expect(idx[0]).toEqual({ layer: 1, providerId: 1, comboKey: 1 });
   });
 });
+
+describe('bulk per layer (§33)', () => {
+  it('a provider-layer bulk changes only that provider', async () => {
+    const { svc, by, A, B } = setup();
+    await svc.create(cust(9000), by);
+    await svc.create(prov(A, 3500), by);
+    await svc.create(prov(A, 3800, { comboKey: 'bw|A4|double' }), by);
+    await svc.create(prov(B, 3700), by);
+    const body = { layer: 'provider' as const, providerId: A, filter: { service: 'bw' as const, size: 'A4' as const }, op: 'inc_fixed' as const, value: 100 };
+    expect((await svc.bulkPreview(body)).rows.map((r) => [r.comboKey, r.next, r.negativeMargin])).toEqual([[KEY, 3600, false], ['bw|A4|double', 3900, false]]);
+    const res = await svc.bulkApply({ ...body, reason: 'تورم' }, by);
+    expect(res.created).toBe(2);
+    expect((await current(svc, 'provider', A))?.unitPrice).toBe(3600);
+    expect((await current(svc, 'provider', B))?.unitPrice).toBe(3700);
+    expect((await current(svc, 'customer'))?.unitPrice).toBe(9000);
+  });
+  it('needs the provider for the provider layer', async () => {
+    const { svc } = setup();
+    await expect(svc.bulkPreview({ layer: 'provider', filter: {}, op: 'replace', value: 1 })).rejects.toThrow(/مجری را انتخاب کنید/);
+  });
+  it('flags negative margins and needs confirmation to apply them', async () => {
+    const { svc, by, A } = setup();
+    await svc.create(cust(3600), by);
+    await svc.create(prov(A, 3500), by);
+    const body = { layer: 'provider' as const, providerId: A, filter: { comboKeys: [KEY] }, op: 'inc_fixed' as const, value: 200, reason: 'x' };
+    expect((await svc.bulkPreview(body)).rows[0]).toMatchObject({ next: 3700, negativeMargin: true });
+    const err = await svc.bulkApply(body, by).catch((e: unknown) => e);
+    expect((err as ConflictException).getResponse()).toMatchObject({ code: 'NEGATIVE_MARGIN', conflicts: [{ providerId: A, providerPrice: 3700, customerPrice: 3600 }] });
+    await expect(svc.bulkApply({ ...body, confirmNegativeMargin: true }, by)).resolves.toMatchObject({ created: 1 });
+  });
+  it('a customer bulk skips markup versions and checks permissions per layer', async () => {
+    const { svc, by, A, providerOnly } = setup();
+    await svc.create(prov(A, 3500), by);
+    await svc.create({ ...cust(0), mode: 'fixed_markup', price: undefined, markup: 500, baseProviderId: A }, by);
+    const pre = await svc.bulkPreview({ layer: 'customer', filter: { comboKeys: [KEY] }, op: 'inc_pct', value: 10 });
+    expect(pre.skipped).toEqual([expect.objectContaining({ comboKey: KEY, reason: 'قیمت فرمولی یا وابسته به مجری است' })]);
+    await expect(svc.bulkApply({ layer: 'customer', filter: {}, op: 'inc_pct', value: 10, reason: 'x' }, providerOnly)).rejects.toThrow(/دسترسی/);
+  });
+  it('redacts provider details in the bulk 409 for admins without provider_price_view', async () => {
+    const { svc, by, A, customerOnly } = setup();
+    await svc.create(prov(A, 3500), by);
+    await svc.create(cust(3600), by);
+    const body = { layer: 'customer' as const, filter: { comboKeys: [KEY] }, op: 'replace' as const, value: 3000, reason: 'x' };
+    const err = await svc.bulkApply(body, customerOnly).catch((e: unknown) => e);
+    expect((err as ConflictException).getResponse()).toMatchObject({ code: 'NEGATIVE_MARGIN', conflicts: [{ comboKey: KEY }] });
+    expect(JSON.stringify((err as ConflictException).getResponse())).not.toContain('providerPrice');
+  });
+});

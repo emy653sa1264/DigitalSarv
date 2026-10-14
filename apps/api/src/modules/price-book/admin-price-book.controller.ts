@@ -66,10 +66,13 @@ export class AdminPriceBookController {
   @Post('price-book/versions/:id/rollback') @HttpCode(200)
   rollback(@Param('id') id: string, @Body() dto: ConfirmReasonDto, @CurrentUser() user: AuthUser) { return this.book.rollback(id, dto.reason, user.id, !!dto.confirmNegativeMargin); }
 
-  @Post('price-book/bulk/preview') @HttpCode(200) @RequirePermissions('customer_price_bulk_update')
-  bulkPreview(@Body() dto: BulkDto) { return this.book.bulkPreview(dto); }
+  @Post('price-book/bulk/preview') @HttpCode(200)
+  async bulkPreview(@Body() dto: BulkDto, @CurrentUser() user: AuthUser) {
+    await this.book.assertCan(user.id, layerPermission(dto.layer, 'bulk_update'));
+    return this.book.bulkPreview(dto);
+  }
 
-  @Post('price-book/bulk/apply') @HttpCode(200) @RequirePermissions('customer_price_bulk_update', 'customer_price_publish')
+  @Post('price-book/bulk/apply') @HttpCode(200)
   bulkApply(@Body() dto: BulkApplyDto, @CurrentUser() user: AuthUser) { return this.book.bulkApply(dto, user.id); }
 
   @Get('binding-ranges') @RequirePermissions('customer_price_view')
