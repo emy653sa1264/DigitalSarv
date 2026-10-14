@@ -5,12 +5,12 @@ import { cn } from '@/lib/utils'
 import { GradientBadge } from './GradientBadge'
 import type { BrandTone } from './tones'
 
-const BACKDROP = { customer: 'bg-[#0f1320]', courier: 'bg-[#07120c]' } as const
+const BACKDROP = { customer: 'bg-[#0f1320]', courier: 'bg-[#07120c]', provider: 'bg-[#061418]' } as const
 
 export type ShellRole = keyof typeof BACKDROP
 
 /**
- * Full-screen PWA app shell (v2 design) for the customer and courier apps: dark role backdrop,
+ * Full-screen PWA app shell (v2 design) for the customer, courier and provider apps: dark role backdrop,
  * centred `max-w-[520px] h-dvh` column on the role shell colour and a safe-area top spacer.
  * `BottomTabs` pads the bottom safe area; screens without tabs pass `safeBottom`.
  */

@@ -11,10 +11,11 @@ const ENTRIES = {
   landing: path.resolve(root, 'index.html'),
   customer: path.resolve(root, 'app/index.html'),
   courier: path.resolve(root, 'courier/index.html'),
+  provider: path.resolve(root, 'provider/index.html'),
   admin: path.resolve(root, 'admin/index.html'),
 }
 
-const APP_ROUTE = /^\/(app|courier|admin)(?:\/|$)/
+const APP_ROUTE = /^\/(app|courier|admin|provider)(?:\/|$)/
 
 /**
  * Dev + preview: serve each app's own index.html for its client-side routes

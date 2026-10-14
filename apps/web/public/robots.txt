@@ -3,6 +3,7 @@ Allow: /
 Disallow: /app
 Disallow: /courier
 Disallow: /admin
+Disallow: /provider
 Disallow: /api
 
 Sitemap: %VITE_PUBLIC_URL%/sitemap.xml

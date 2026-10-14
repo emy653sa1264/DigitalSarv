@@ -78,6 +78,15 @@
   --glow: rgba(31, 169, 104, 0.35);
 }
 
+[data-role="provider"] {
+  --accent: var(--cyan);
+  --accent-dark: var(--cyan-dark);
+  --accent-soft: var(--cyan-soft);
+  --accent-soft-ink: var(--cyan-ink);
+  --shell: #eaf6f8;
+  --glow: rgba(15, 169, 189, 0.35);
+}
+
 [data-role="admin"] {
   --accent: var(--violet);
   --accent-dark: var(--violet-dark);

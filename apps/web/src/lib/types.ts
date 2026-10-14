@@ -1,6 +1,6 @@
 /** Types mirrored from docs/api-contract.md — keep in sync with the contract, not with the API source. */
 
-export type Role = 'customer' | 'courier' | 'admin'
+export type Role = 'customer' | 'courier' | 'admin' | 'provider'
 export type PlanId = 'bronze' | 'silver' | 'gold' | 'platinum'
 export type Tone = 'blue' | 'violet' | 'pink' | 'amber' | 'cyan' | 'green'
 
@@ -15,6 +15,10 @@ export interface User {
   zone?: string
   referralCode: string
   courierId?: string
+  /** v4.1: role `provider` only */
+  providerId?: string
+  /** v4.1: admins only; absent = super-admin (every permission) */
+  permissions?: Permission[]
   createdAt: string
 }
 
@@ -556,16 +560,8 @@ export interface ProductionBoard {
 export interface AdminCustomer { id: string; name: string; phone: string; planId: PlanId; planTitle: string; ordersCount: number; spent: number; zone: string }
 export interface Zone { id: string; name: string; feeNote: string; feePct: number; sla: string; agentsCount: number }
 export interface Center {
-  id: string
-  name: string
-  zone: string
-  capacityPerDay: number
-  processingHours: number
-  commissionPct: number
-  rating: number
-  address: string
-  lat?: number
-  lng?: number
+  id: string; name: string; zone: string; capacityPerDay: number; processingHours: number; commissionPct: number; rating: number
+  address: string; lat?: number; lng?: number; status: ProviderStatus; availableForOrders: boolean
 }
 export interface PricingRule {
   id: string
@@ -625,7 +621,7 @@ export type PriceStatus = 'draft' | 'pending_approval' | 'rejected' | 'disabled'
 export type PriceRounding = 0 | 100 | 500 | 1000
 export interface PriceVersionView {
   id: string
-  layer: 'customer' | 'provider'
+  layer: PriceLayer
   providerId: string | null
   comboKey: string
   version: number
@@ -644,6 +640,9 @@ export interface PriceVersionView {
   status: PriceStatus
   /** Evaluated at quantity 1; null = cannot be evaluated. */
   unitPrice: number | null
+  baseProviderId?: string
+  reviewNote?: string
+  reviewedAt?: string
 }
 export interface MatrixRow {
   comboKey: string
@@ -652,12 +651,15 @@ export interface MatrixRow {
   label: string
   current: PriceVersionView | null
   next: PriceVersionView | null
+  pending: PriceVersionView | null
+  lastRejected: PriceVersionView | null
   /** false = this combination has never been priced («بدون قیمت») */
   hasVersions: boolean
 }
 export type BulkOp = 'inc_pct' | 'dec_pct' | 'inc_fixed' | 'dec_fixed' | 'replace'
 export interface BulkBody {
-  layer: 'customer'
+  layer: PriceLayer
+  providerId?: string
   filter: { service?: MatrixRow['service']; size?: PrintSize; colorType?: ColorType; paper?: string; side?: 'single' | 'double'; comboKeys?: string[] }
   op: BulkOp
   value: number
@@ -665,14 +667,15 @@ export interface BulkBody {
   effectiveFrom?: string
 }
 export interface BulkPreview {
-  rows: { comboKey: string; label: string; current: number | null; next: number | null }[]
+  rows: { comboKey: string; label: string; current: number | null; next: number | null; negativeMargin: boolean }[]
   skipped: { comboKey: string; label: string; reason: string }[]
 }
 export interface BindingRange { id: string; minPages: number; maxPages: number; on: boolean; sort: number }
 export interface PriceAuditEntry {
   id: string
-  action: 'create' | 'publish' | 'schedule' | 'disable' | 'rollback' | 'bulk' | 'approve' | 'reject' | 'range'
+  action: 'create' | 'publish' | 'schedule' | 'disable' | 'rollback' | 'bulk' | 'approve' | 'reject' | 'range' | 'submit'
   layer: string
+  providerId: string | null
   comboKeys: string[]
   reason: string
   by?: { id: string; name: string }
@@ -680,3 +683,49 @@ export interface PriceAuditEntry {
   before?: unknown
   after?: unknown
 }
+
+// ── v4.1 providers, provider prices, staff (contract «v4.1») ───────────────
+export type Permission =
+  | 'provider_price_view' | 'provider_price_edit' | 'provider_price_publish' | 'provider_price_bulk_update' | 'provider_price_rollback'
+  | 'customer_price_view' | 'customer_price_edit' | 'customer_price_publish' | 'customer_price_bulk_update' | 'customer_price_rollback'
+  | 'provider_view' | 'provider_edit' | 'provider_manage'
+  | 'dispatch_view' | 'dispatch_assign' | 'dispatch_reassign'
+  | 'provider_order_view' | 'provider_order_accept' | 'provider_order_status'
+export type PriceLayer = 'customer' | 'provider'
+export type ProviderStatus = 'active' | 'inactive' | 'busy' | 'suspended'
+export type ProviderService = 'black_white_printing' | 'color_printing' | 'docs' | 'school' | 'flyer' | 'cart' | 'repair'
+export type CapabilityAddon = 'mixed' | 'spiral' | 'glue' | 'hardcover' | 'staple' | 'lam_cover' | 'lam_sheet'
+export type EquipmentKind = 'printer' | 'binder' | 'laminator' | 'cutter' | 'other'
+export type EquipmentTag = 'A3' | 'A4' | 'A5' | 'A6' | 'bw' | 'color' | 'high_volume' | 'spiral' | 'glue' | 'hardcover' | 'staple' | 'laminate'
+export interface Capability { service: ProviderService; sizes: PrintSize[]; colorTypes: ColorType[]; papers: string[]; sides: ('single' | 'double')[]; addons: CapabilityAddon[] }
+export interface WorkingHours { weekday: number; from: string; to: string }
+export interface Equipment { name: string; kind: EquipmentKind; capabilities: EquipmentTag[] }
+export interface Capacity { dailySheets?: number; hourlySheets?: number; perService: { service: ProviderService; perDay: number }[] }
+export interface Provider {
+  id: string; name: string; businessName: string; contactName: string; phone: string; address: string; lat?: number; lng?: number; zone: string
+  status: ProviderStatus; availableForOrders: boolean; workingHours: WorkingHours[]
+  serviceZoneIds: string[]; serviceZones: { id: string; name: string }[]
+  canDeliver: boolean; deliveryFee: number; allowCustomerPickup: boolean; adminNotes: string
+  capacity: Capacity; equipment: Equipment[]; capabilities: Capability[]
+  capacityPerDay: number; processingHours: number; commissionPct: number; rating: number
+  login: { userId: string; phone: string; name: string } | null
+  createdAt: string; updatedAt: string
+}
+export type ProviderBody = Partial<Omit<Provider, 'id' | 'serviceZones' | 'login' | 'createdAt' | 'updatedAt'>>
+export type ProviderSelf = Omit<Provider, 'adminNotes' | 'commissionPct' | 'rating' | 'login' | 'serviceZoneIds' | 'zone' | 'capacityPerDay' | 'processingHours'>
+export interface MarginConflict { comboKey: string; providerId: string; providerName: string; providerPrice: number; customerPrice: number }
+export interface CompareRow {
+  comboKey: string; label: string; service: MatrixRow['service']; providerId: string; providerName: string; providerStatus: ProviderStatus
+  providerPrice: number | null; pendingPrice: number | null; customerPrice: number | null; customerMode: PriceVersionView['mode'] | null
+  difference: number | null; marginPct: number | null; negative: boolean
+}
+export interface PendingItem { version: PriceVersionView; providerName: string; label: string; currentProviderPrice: number | null; customerPrice: number | null }
+export interface ProviderPriceView {
+  id: string; comboKey: string; version: number; price: number | null; effectiveFrom: string; effectiveUntil?: string
+  status: PriceStatus; reason: string; reviewNote?: string; createdAt: string
+}
+export interface ProviderPriceRow {
+  comboKey: string; service: MatrixRow['service']; options: MatrixRow['options']; label: string; capable: boolean
+  current: ProviderPriceView | null; next: ProviderPriceView | null; pending: ProviderPriceView | null; lastRejected: ProviderPriceView | null
+}
+export interface StaffMember { id: string; name: string; phone: string; superAdmin: boolean; bootstrap: boolean; permissions: Permission[] | null; createdAt: string }

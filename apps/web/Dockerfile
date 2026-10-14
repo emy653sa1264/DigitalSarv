@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 #
-# Digital Sarv web (Vite multi-page PWA: landing /, customer /app/, courier /courier/, admin /admin/)
+# Digital Sarv web (Vite multi-page PWA: landing /, customer /app/, courier /courier/, admin /admin/, provider /provider/)
 # served by nginx, which also reverse-proxies /api/ to the api service.
 # Build context MUST be the repository root:
 #   docker build -f apps/web/Dockerfile --build-arg VITE_PUBLIC_URL=https://sarv.example.ir -t digital-sarv/web .

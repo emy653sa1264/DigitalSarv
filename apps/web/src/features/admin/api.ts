@@ -94,7 +94,7 @@ export type CampaignBody = Omit<Campaign, 'id' | 'stats'>
 /** `zoneId: null` clears the zone (PATCH only). */
 export interface CourierBody { name: string; phone: string; code: string; zoneId?: string | null; status: Courier['status']; rating?: number; bonus?: number }
 export type ZoneBody = Omit<Zone, 'id' | 'agentsCount'>
-export type CenterBody = Omit<Center, 'id'>
+export type CenterBody = Omit<Center, 'id' | 'status' | 'availableForOrders'>
 export interface CmsBody { label?: string; on?: boolean; order?: number }
 export interface NotificationBody { text?: string; on?: boolean }
 /** v3.3 `POST /admin/notifications` (409 when the event already has a template). */
