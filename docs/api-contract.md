@@ -855,6 +855,8 @@ type CancelStage = 'before_production' | 'in_production' | 'after_production';
   an order with a v1 `centerId` becomes a job of that provider (v1 had no acceptance) with status
   `registered|confirmed|courier_assigned|picked_up|awaiting_approval → accepted`, `preparing|binding|extras|qc → in_production`,
   `packing → ready`, `out_for_delivery → out_for_delivery`, history action `migrated`, and **no** provider price snapshot.
+  A migrated job has no `providerPricing`, so a separate delivery-provider fee set on it later is recorded only in the `delivery_changed` history entry (`deliveryFee`, for M4).
+  The job is the source of truth for the provider: every job write bumps `Job.rev`, and the order's `centerId` / `providerPricing` / provider-dependent `delivery` are mirrored by revision (`Order.providerRev`); reconcile repairs a stale mirror.
 - `rejected` and `failed` are **history statuses**: the job itself returns to `unassigned` at once (D21) and the
   provider joins `releasedProviderIds`. `attempts` counts assignments.
 - `deadline` = order `createdAt` + `dispatch.leadHours` (`dispatch.urgentLeadHours` for urgent orders); `priority`

@@ -16,7 +16,7 @@ import {
 import { Job, JobDocument } from './job.schema.js';
 import { jobSeed, orderNeedsJob, type JobSource } from './job-seed.js';
 
-export interface MoveOptions { actor: Actor; byRole: ByRole; by?: string; reason?: string; reasonCode?: RejectReason; providerId?: string }
+export interface MoveOptions { actor: Actor; byRole: ByRole; by?: string; reason?: string; reasonCode?: RejectReason; providerId?: string; assignmentId?: string }
 export interface GiveBackOptions { byRole: ByRole; by?: string; reason?: string; reasonCode?: RejectReason; providerId?: string; assignmentId?: string }
 /** What `cas` needs: who acts (selects the holder guard), extra guards, the field changes and the history entry. */
 export interface CasSpec {
@@ -153,17 +153,43 @@ export class JobsService {
       ...(spec.actor === 'delivery' && job.deliveryProviderId ? { deliveryProviderId: job.deliveryProviderId } : {}),
       ...spec.extraGuard,
     };
+    const paths = [
+      'status', ...Object.keys(spec.set ?? {}), ...Object.keys(spec.unset ?? {}), ...Object.keys(spec.addToSet ?? {}),
+      'rev', ...Object.keys(spec.inc ?? {}), 'history', ...Object.keys(spec.push ?? {}),
+    ];
+    // dev assertion: one path in two operators (or twice in one) is a Mongo conflict error at best, a silent drop at worst
+    const dup = paths.find((x, i) => paths.indexOf(x) !== i);
+    if (dup) throw new Error(`cas: path "${dup}" appears twice in the update`);
     return this.jobs.findOneAndUpdate(
       filter,
       {
         $set: { status: to, ...spec.set },
         ...(spec.unset ? { $unset: spec.unset } : {}),
         ...(spec.addToSet ? { $addToSet: spec.addToSet } : {}),
-        ...(spec.inc ? { $inc: spec.inc } : {}),
-        $push: { history: spec.history, ...spec.push },
+        $inc: { ...spec.inc, rev: 1 },
+        $push: { ...spec.push, history: spec.history },
       },
       { returnDocument: 'after' },
     );
+  }
+
+  /**
+   * THE job→order provider mirror (the job is the source of truth). Revision-ordered: it only lands when the order's
+   * `providerRev` is missing or older than the job's `rev` (`repair` also accepts an equal one), so a late write can
+   * never replace a newer provider's fields. Covers `centerId`, `providerPricing` and the provider-dependent parts of
+   * `delivery`. Never throws — the job is already written; reconcile repairs a missed mirror.
+   */
+  async mirrorProvider(job: Pick<JobDocument, 'orderId' | 'rev'>, fields: { set?: Record<string, unknown>; unset?: Record<string, 1> }, repair = false): Promise<void> {
+    try {
+      const rev = job.rev ?? 0;
+      const res = await this.orders.updateOne(
+        { _id: job.orderId, $or: [{ providerRev: { $exists: false } }, { providerRev: repair ? { $lte: rev } : { $lt: rev } }] },
+        { $set: { ...fields.set, providerRev: rev }, ...(fields.unset && Object.keys(fields.unset).length ? { $unset: fields.unset } : {}), $inc: { __v: 1 } },
+      );
+      if (!res.matchedCount) this.logger.debug(`order ${String(job.orderId)}: mirror rev ${rev} skipped (a newer revision landed)`);
+    } catch (err) {
+      this.logger.error(`order ${String(job.orderId)}: provider mirror failed (reconcile repairs): ${(err as Error).message}`);
+    }
   }
 
   /**
@@ -173,6 +199,7 @@ export class JobsService {
   async move(jobId: string, to: JobStatus, o: MoveOptions): Promise<JobDocument> {
     const job = await this.byId(jobId);
     if (o.providerId && !this.holds(job, o.providerId, o.actor)) throw new NotFoundException(NOT_FOUND);
+    if (o.assignmentId && String(job.assignment?.id) !== o.assignmentId) throw raced();
     const order = await this.orders.findById(job.orderId);
     if (!order) throw new NotFoundException(NOT_FOUND);
     if (job.status === 'cancelled' || order.status === 'cancelled') throw new BadRequestException('این سفارش لغو شده است');
@@ -255,30 +282,16 @@ export class JobsService {
       history: this.entry(job, kind, status, o, now, { stage: cancelStage(job.status) }),
     });
     if (!updated) throw raced();
-    await this.releaseOrder(job, providerId, reset);
+    await this.mirrorProvider(updated, {
+      set: { ...(reset.deliveryMethod ? { 'delivery.method': 'courier' } : {}), ...(reset.pickupAt ? { 'delivery.pickupAt': 'point' } : {}) },
+      unset: { centerId: 1, providerPricing: 1, ...(reset.pickupAt ? { 'delivery.providerShop': 1 } : {}) },
+    });
     if (kind === 'timeout' || kind === 'unassigned') await this.notifier.provider('job_withdrawn', providerId, updated);
     if (job.deliveryProviderId && String(job.deliveryProviderId) !== String(providerId)) await this.notifier.provider('job_withdrawn', job.deliveryProviderId, updated);
     if (kind === 'rejected') await this.notifier.admins('job_rejected', updated);
     if (kind === 'timeout') await this.notifier.admins('job_timeout', updated);
     if (kind === 'failed') await this.notifier.admins('job_failed', updated);
     return updated;
-  }
-
-  /**
-   * Clears the released provider from the order — only while the order still names that provider, so a late give-back
-   * never wipes a newer assignment. The job is already released: a failure here is logged, never thrown.
-   */
-  private async releaseOrder(job: JobDocument, providerId: Types.ObjectId, reset: { deliveryMethod?: string; pickupAt?: string }): Promise<void> {
-    try {
-      const orderSet = { ...(reset.deliveryMethod ? { 'delivery.method': 'courier' } : {}), ...(reset.pickupAt ? { 'delivery.pickupAt': 'point' } : {}) };
-      await this.orders.updateOne(
-        { _id: job.orderId, centerId: providerId },
-        { $unset: { centerId: 1, ...(reset.pickupAt ? { 'delivery.providerShop': 1 } : {}) }, ...(Object.keys(orderSet).length ? { $set: orderSet } : {}), $inc: { __v: 1 } },
-      );
-      await this.orders.updateOne({ _id: job.orderId, 'providerPricing.providerId': String(providerId) }, { $unset: { providerPricing: 1 } });
-    } catch (err) {
-      this.logger.error(`order ${job.orderCode}: clearing the released provider failed (job already released): ${(err as Error).message}`);
-    }
   }
 
   // ------------------------------------------------------------ order events
@@ -355,11 +368,51 @@ export class JobsService {
   }
 
   /**
+   * Re-mirrors the provider from the job (the source of truth) onto orders whose mirror is missing, older than the job's
+   * revision, or names another provider. Pages over the jobs that were ever written (`rev > 0`) by `_id` — the
+   * comparison needs both documents, so it happens here — bounded to 10 pages per run. Never throws.
+   */
+  private async reconcileMirror(limit: number): Promise<number> {
+    let fixed = 0;
+    try {
+      let after: Types.ObjectId | undefined;
+      for (let page = 0; page < 10; page++) {
+        const rows = await this.jobs.aggregate<Job & { _id: Types.ObjectId; o: { providerRev?: number; centerId?: Types.ObjectId }[] }>([
+          { $match: { status: { $in: LIVE }, rev: { $gt: 0 }, ...(after ? { _id: { $gt: after } } : {}) } },
+          { $sort: { _id: 1 } },
+          { $limit: limit },
+          { $lookup: { from: 'orders', localField: 'orderId', foreignField: '_id', as: 'o' } },
+        ]);
+        for (const j of rows) {
+          const o = j.o[0];
+          if (!o) continue;
+          const stale = o.providerRev === undefined || o.providerRev === null || o.providerRev < j.rev || String(o.centerId ?? '') !== String(j.providerId ?? '');
+          if (!stale) continue;
+          if (j.providerId) {
+            await this.mirrorProvider(j, {
+              set: { centerId: j.providerId, 'delivery.method': j.deliveryMethod, ...(j.pickupAt ? { 'delivery.pickupAt': j.pickupAt } : {}), ...(j.providerPricing ? { providerPricing: j.providerPricing } : {}) },
+              unset: j.providerPricing ? {} : { providerPricing: 1 },
+            }, true);
+          } else {
+            await this.mirrorProvider(j, { unset: { centerId: 1, providerPricing: 1 } }, true);
+          }
+          fixed++;
+        }
+        if (rows.length < limit) break;
+        after = rows[rows.length - 1]._id;
+      }
+    } catch (err) {
+      this.logger.warn(`reconcile mirror failed: ${(err as Error).message}`);
+    }
+    return fixed;
+  }
+
+  /**
    * Safety net (boot + every minute). Both scans are filtered in the database before `limit`, so a backlog of healthy
    * rows can never hide the rows that need work: orders without a job get one; live jobs follow cancelled / delivered orders.
    */
-  async reconcile(limit = 500): Promise<{ created: number; cancelled: number; delivered: number }> {
-    const res = { created: 0, cancelled: 0, delivered: 0 };
+  async reconcile(limit = 500): Promise<{ created: number; cancelled: number; delivered: number; mirrored: number }> {
+    const res = { created: 0, cancelled: 0, delivered: 0, mirrored: 0 };
     try {
       const missing = await this.orders.aggregate<JobSource>([
         { $match: { status: { $nin: ['pending_payment', 'cancelled', 'delivered'] } } },
@@ -383,6 +436,7 @@ export class JobsService {
     } catch (err) {
       this.logger.warn(`reconcile failed: ${(err as Error).message}`);
     }
+    res.mirrored = await this.reconcileMirror(limit);
     return res;
   }
 }

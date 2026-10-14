@@ -27,11 +27,11 @@ export interface DispatchJobRow {
 }
 export interface JobHistoryView {
   at: string; action: JobAction; status: JobStatus; label: string; providerName?: string; deliveryProviderName?: string;
-  byName?: string; byRole: ByRole; reason?: string; reasonCode?: RejectReason; override?: boolean; stage?: CancelStage;
+  byName?: string; byRole: ByRole; reason?: string; reasonCode?: RejectReason; override?: boolean; stage?: CancelStage; changes?: { priority?: [string, string]; deadline?: [string, string] };
 }
 export interface AssignmentView {
   providerId: string; providerName: string; assignedByName?: string; assignedAt: string; acceptedAt?: string; rejectedAt?: string;
-  completedAt?: string; endedAt?: string; reason?: string; reasonCode?: RejectReason; override?: boolean;
+  completedAt?: string; endedAt?: string; reason?: string; reasonCode?: RejectReason; override?: boolean; overrideReason?: string;
   outcome: 'pending' | 'active' | 'rejected' | 'timeout' | 'withdrawn' | 'failed' | 'cancelled' | 'completed';
 }
 export interface DispatchJobDetail extends DispatchJobRow {
@@ -79,7 +79,7 @@ export function historyView(history: JobHistoryEntry[], names: Names): JobHistor
     ...(e.deliveryProviderId ? { deliveryProviderName: nameOf(names, e.deliveryProviderId) } : {}),
     ...(e.by ? { byName: nameOf(names, e.by) } : {}),
     ...(e.reason ? { reason: e.reason } : {}), ...(e.reasonCode ? { reasonCode: e.reasonCode } : {}),
-    ...(e.override ? { override: true } : {}), ...(e.stage ? { stage: e.stage } : {}),
+    ...(e.override ? { override: true } : {}), ...(e.stage ? { stage: e.stage } : {}), ...(e.changes ? { changes: e.changes } : {}),
   }));
 }
 
@@ -101,7 +101,7 @@ export function dispatchDetail(job: JobRow, order: DetailOrder, names: Names, re
       providerId: a.providerId, providerName: nameOf(names, a.providerId) ?? '—', ...(a.assignedBy ? { assignedByName: nameOf(names, a.assignedBy) } : {}),
       assignedAt: iso(a.assignedAt)!, ...(a.acceptedAt ? { acceptedAt: iso(a.acceptedAt) } : {}), ...(a.rejectedAt ? { rejectedAt: iso(a.rejectedAt) } : {}),
       ...(a.completedAt ? { completedAt: iso(a.completedAt) } : {}), ...(a.endedAt ? { endedAt: iso(a.endedAt) } : {}),
-      ...(a.reason ? { reason: a.reason } : {}), ...(a.reasonCode ? { reasonCode: a.reasonCode } : {}), ...(a.override ? { override: true } : {}), outcome: a.outcome,
+      ...(a.reason ? { reason: a.reason } : {}), ...(a.reasonCode ? { reasonCode: a.reasonCode } : {}), ...(a.override ? { override: true } : {}), ...(a.overrideReason ? { overrideReason: a.overrideReason } : {}), outcome: a.outcome,
     })),
     ...(job.cancel ? { cancel: { at: iso(job.cancel.at)!, stage: job.cancel.stage, ...(job.cancel.providerId ? { providerName: nameOf(names, job.cancel.providerId) } : {}) } } : {}),
   };

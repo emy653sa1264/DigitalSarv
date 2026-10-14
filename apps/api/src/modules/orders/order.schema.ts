@@ -222,6 +222,10 @@ export class Order {
   @Prop({ type: MongooseSchema.Types.Mixed, select: false })
   providerPricing?: ProviderPricingSnapshot;
 
+  /** Internal: the `Job.rev` of the last provider mirror written to this order (revision-ordered, never decreases). */
+  @Prop({ type: Number })
+  providerRev?: number;
+
   /**
    * Internal: gateway authorities whose verified capture was credited to the wallet because the order
    * could no longer take it (idempotency key of that credit). Never serialized (select: false).

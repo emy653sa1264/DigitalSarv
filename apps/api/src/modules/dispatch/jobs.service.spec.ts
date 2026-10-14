@@ -195,7 +195,7 @@ describe('JobsService — races and review fixes', () => {
   });
   it('a late give-back leaves a newer provider’s centre and price snapshot on the order', async () => {
     const Q = new Types.ObjectId();
-    const s = setup({ centerId: Q, providerPricing: { providerId: String(Q) } });
+    const s = setup({ centerId: Q, providerPricing: { providerId: String(Q) }, providerRev: 99 }); // a newer revision already landed
     const id = await heldBy(s);
     await s.svc.giveBack(await s.svc.byId(id), 'rejected', { byRole: 'provider', providerId: String(P), reasonCode: 'other', reason: 'x' });
     expect(s.jobs.docs[0].status).toBe('unassigned');

@@ -49,6 +49,8 @@ export class Job {
   @Prop({ type: String, enum: PICKUP_AT }) pickupAt?: PickupAt;
   @Prop({ type: JobAssignmentSchema }) assignment?: JobAssignment;
   @Prop({ type: Number, default: 0 }) attempts: number;
+  /** Monotonic revision, +1 on every `cas`; orders the job→order provider mirror (`Order.providerRev`). */
+  @Prop({ type: Number, default: 0 }) rev: number;
   /** Providers that held the job and lost it (rejected, timed out, taken away) — their «لغوشده» stubs. */
   @Prop({ type: [MongooseSchema.Types.ObjectId], default: [] }) releasedProviderIds: Types.ObjectId[];
   @Prop({ type: MongooseSchema.Types.Mixed }) providerPricing?: ProviderPricingSnapshot;

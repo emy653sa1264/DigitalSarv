@@ -156,6 +156,10 @@ export interface JobHistoryEntry {
   reason?: string;
   reasonCode?: RejectReason;
   override?: boolean;
+  /** `updated`: what changed. */
+  changes?: { priority?: [string, string]; deadline?: [string, string] };
+  /** `delivery_changed` on a job without a provider snapshot (migrated): the delivery fee is recorded only here (M4). */
+  deliveryFee?: number;
   /** The previous provider's stage when the job was taken away / cancelled (M4). */
   stage?: CancelStage;
 }
@@ -171,6 +175,7 @@ export interface AssignmentRecord {
   reason?: string;
   reasonCode?: RejectReason;
   override?: boolean;
+  overrideReason?: string;
   outcome: 'pending' | 'active' | 'rejected' | 'timeout' | 'withdrawn' | 'failed' | 'cancelled' | 'completed';
 }
 
@@ -195,7 +200,7 @@ export function assignmentHistory(history: JobHistoryEntry[]): AssignmentRecord[
         ...(e.by ? { assignedBy: String(e.by) } : {}),
         assignedAt: e.at,
         outcome: e.action === 'migrated' ? 'active' : 'pending',
-        ...(e.override ? { override: true } : {}),
+        ...(e.override ? { override: true, ...(e.reason ? { overrideReason: e.reason } : {}) } : {}),
       };
       out.push(open);
     } else if (e.action === 'accepted' && open) {

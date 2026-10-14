@@ -336,3 +336,144 @@ describe('DispatchService on behalf of the provider and the v1 order-sheet path'
     expect(s.jobsModel.docs[0].history.at(-1)).toMatchObject({ action: 'unassigned', reason: 'لغو از صفحه سفارش' });
   });
 });
+
+describe('job→order provider mirror is revision-ordered (C1)', () => {
+  const G = new Types.ObjectId();
+  const withG = (s: ReturnType<typeof setup>) => s.centers.docs.push({ ...s.centers.docs[2], _id: G, name: 'آزمون G', userId: new Types.ObjectId(), canDeliver: false });
+  it('a late assign mirror never overwrites a newer unassign', async () => {
+    const s = setup();
+    const id = await withJob(s);
+    await s.svc.assign(id, { providerId: String(C) } as never, String(ADMIN));
+    const staleRev = s.jobsModel.docs[0].rev;
+    await s.svc.unassign(id, 'تغییر', String(ADMIN));
+    await s.jobs.mirrorProvider({ orderId: s.order._id, rev: staleRev } as never, { set: { centerId: C } });
+    expect(s.orders.docs[0].centerId).toBeUndefined();
+    expect(s.orders.docs[0].providerRev).toBe(s.jobsModel.docs[0].rev);
+  });
+  it('a failed release mirror followed by an assign ends with the order on the new provider', async () => {
+    const s = setup();
+    withG(s);
+    const id = await withJob(s);
+    await s.svc.assign(id, { providerId: String(C) } as never, String(ADMIN));
+    s.orders.updateOne.mockRejectedValueOnce(new Error('db down'));
+    await s.svc.unassign(id, 'تغییر', String(ADMIN));
+    expect(String(s.orders.docs[0].centerId)).toBe(String(C)); // stale, as the failed release left it
+    await s.svc.assign(id, { providerId: String(G), confirmMissingPrice: true } as never, String(ADMIN));
+    expect(String(s.orders.docs[0].centerId)).toBe(String(G));
+    expect(s.orders.docs[0].providerPricing.providerId).toBe(String(G));
+    expect(s.orders.docs[0].providerRev).toBe(s.jobsModel.docs[0].rev);
+  });
+  it('an order delivered meanwhile still gets the provider snapshot', async () => {
+    const s = setup();
+    const id = await withJob(s);
+    const orig = s.versions.find.getMockImplementation()!;
+    s.versions.find.mockImplementation(((...a: unknown[]) => { s.orders.docs[0].status = 'delivered'; return (orig as (...x: unknown[]) => unknown)(...a); }) as never);
+    await s.svc.assign(id, { providerId: String(C) } as never, String(ADMIN));
+    expect(String(s.orders.docs[0].centerId)).toBe(String(C));
+    expect(s.orders.docs[0].providerPricing.providerSubtotal).toBe(1_600_000);
+  });
+  it('reconcile repairs a stale order from the job', async () => {
+    const s = setup();
+    s.jobsModel.joins.orders = s.orders;
+    s.orders.joins.jobs = s.jobsModel;
+    const id = await withJob(s);
+    await s.svc.assign(id, { providerId: String(C) } as never, String(ADMIN));
+    delete s.orders.docs[0].centerId;
+    delete s.orders.docs[0].providerPricing;
+    delete s.orders.docs[0].providerRev;
+    expect((await s.jobs.reconcile()).mirrored).toBe(1);
+    expect(String(s.orders.docs[0].centerId)).toBe(String(C));
+    expect(s.orders.docs[0].providerPricing).toEqual(s.jobsModel.docs[0].providerPricing);
+    expect((await s.jobs.reconcile()).mirrored).toBe(0);
+    await s.svc.unassign(id, 'تغییر', String(ADMIN));
+    s.orders.docs[0].centerId = C; // stale again
+    s.orders.docs[0].providerRev = 0;
+    expect((await s.jobs.reconcile()).mirrored).toBe(1);
+    expect(s.orders.docs[0].centerId).toBeUndefined();
+  });
+  it('cas refuses a path that appears in two operators', async () => {
+    const s = setup();
+    const job = await s.jobs.byId(await withJob(s));
+    await expect(s.jobs.cas(job, 'assigned', { set: { status: 'x' }, history: {} as never })).rejects.toThrow('appears twice');
+  });
+});
+
+describe('delivery defaults and pricing history (I2, I3, M5-M9)', () => {
+  const G = new Types.ObjectId();
+  const withG = (s: ReturnType<typeof setup>) => s.centers.docs.push({ ...s.centers.docs[2], _id: G, name: 'آزمون G', userId: new Types.ObjectId(), canDeliver: false });
+  it('reassign keeps a separate delivery provider; delivery by the old producer falls back to the courier', async () => {
+    const s = setup();
+    withG(s);
+    const id = await withJob(s);
+    await s.svc.assign(id, { providerId: String(C), deliveryMethod: 'provider', deliveryProviderId: String(F) } as never, String(ADMIN));
+    await s.svc.reassign(id, { providerId: String(G), reason: 'تغییر', confirmMissingPrice: true } as never, String(ADMIN));
+    expect(s.jobsModel.docs[0]).toMatchObject({ deliveryMethod: 'provider' });
+    expect(String(s.jobsModel.docs[0].deliveryProviderId)).toBe(String(F));
+    expect(s.orders.docs[0].delivery.method).toBe('provider');
+
+    const t = setup();
+    withG(t);
+    const tid = await withJob(t);
+    await t.svc.assign(tid, { providerId: String(C), deliveryMethod: 'provider' } as never, String(ADMIN));
+    await t.svc.reassign(tid, { providerId: String(G), reason: 'تغییر', confirmMissingPrice: true } as never, String(ADMIN));
+    expect(t.jobsModel.docs[0].deliveryMethod).toBe('courier');
+    expect(t.jobsModel.docs[0].deliveryProviderId).toBeUndefined();
+  });
+  it('omitted delivery fields keep the job delivery; a delivery provider with another method is 400', async () => {
+    const s = setup();
+    const id = await withJob(s);
+    await s.svc.assign(id, { providerId: String(C), deliveryMethod: 'provider', deliveryProviderId: String(F) } as never, String(ADMIN));
+    await s.svc.updateDelivery(id, { reason: 'فقط یادداشت' } as never, String(ADMIN));
+    expect(s.jobsModel.docs[0].deliveryMethod).toBe('provider');
+    expect(String(s.jobsModel.docs[0].deliveryProviderId)).toBe(String(F));
+    await expect(s.svc.updateDelivery(id, { deliveryMethod: 'courier', deliveryProviderId: String(F) } as never, String(ADMIN))).rejects.toMatchObject({ status: 400 });
+  });
+  it('updateDelivery appends a refreshed snapshot to the pricing history', async () => {
+    const s = setup();
+    const id = await withJob(s);
+    await s.svc.assign(id, { providerId: String(C) } as never, String(ADMIN));
+    const first = s.jobsModel.docs[0].providerPricing.snapshotAt;
+    await new Promise((r) => setTimeout(r, 5));
+    await s.svc.updateDelivery(id, { deliveryMethod: 'provider', deliveryProviderId: String(F) } as never, String(ADMIN));
+    const job = s.jobsModel.docs[0];
+    expect(job.pricingHistory).toHaveLength(2);
+    expect(job.providerPricing.snapshotAt).not.toBe(first);
+    expect(job.pricingHistory[1].delivery).toEqual({ providerId: String(F), fee: 20000 });
+    expect(s.orders.docs[0].providerPricing).toEqual(job.providerPricing);
+  });
+  it('a migrated job without a snapshot records the delivery fee in the history only', async () => {
+    const s = setup();
+    const id = await withJob(s);
+    await s.svc.assign(id, { providerId: String(C) } as never, String(ADMIN));
+    delete s.jobsModel.docs[0].providerPricing;
+    await s.svc.updateDelivery(id, { deliveryMethod: 'provider', deliveryProviderId: String(F) } as never, String(ADMIN));
+    expect(s.jobsModel.docs[0].providerPricing).toBeUndefined();
+    expect(s.jobsModel.docs[0].history.at(-1)).toMatchObject({ action: 'delivery_changed', deliveryFee: 20000 });
+  });
+  it('an on-behalf accept with a stale assignment is refused; respond needs an assigned job', async () => {
+    const s = setup();
+    const id = await withJob(s);
+    await expect(s.svc.respond(id, { accept: true, reason: 'x' } as never, String(ADMIN))).rejects.toThrow('این سفارش در انتظار پاسخ مجری نیست');
+    await s.svc.assign(id, { providerId: String(C) } as never, String(ADMIN));
+    await expect(s.jobs.move(id, 'accepted', { actor: 'admin', byRole: 'admin', assignmentId: String(new Types.ObjectId()) })).rejects.toMatchObject({ status: 409 });
+    expect(s.jobsModel.docs[0].status).toBe('assigned');
+  });
+  it('update refuses a past deadline and records what changed; the override reason is in the assignment view', async () => {
+    const s = setup();
+    const id = await withJob(s);
+    s.centers.docs[2].status = 'busy';
+    const d0 = await s.svc.assign(id, { providerId: String(C), override: true, reason: 'هماهنگ شد' } as never, String(ADMIN));
+    expect(d0.assignments[0]).toMatchObject({ override: true, overrideReason: 'هماهنگ شد' });
+    await expect(s.svc.update(id, { deadline: new Date(Date.now() - 1000).toISOString() } as never, String(ADMIN))).rejects.toThrow('مهلت باید در آینده باشد');
+    const deadline = new Date(Date.now() + 5 * 3_600_000).toISOString();
+    await s.svc.update(id, { priority: 'high', deadline } as never, String(ADMIN));
+    expect(s.jobsModel.docs[0].history.at(-1)).toMatchObject({ action: 'updated', changes: { priority: ['normal', 'high'], deadline: [expect.any(String), deadline] } });
+  });
+  it('assignFromOrder checks the permission before it creates a job', async () => {
+    const s = setup();
+    const staff = new Types.ObjectId();
+    (s.svc as unknown as { users: { docs: Doc[] } }).users.docs.push({ _id: staff, role: 'admin', permissions: ['dispatch_view'] });
+    await expect(s.svc.assignFromOrder(String(s.order._id), String(C), String(staff))).rejects.toThrow('به این بخش دسترسی ندارید');
+    expect(s.jobsModel.docs).toHaveLength(0);
+  });
+});
