@@ -17,6 +17,7 @@ import { PricingCenterPage } from './pages/pricing/PricingCenterPage'
 import { ProductionPage } from './pages/ProductionPage'
 import { RulesPage } from './pages/RulesPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { StaffPage } from './pages/StaffPage'
 
 export const adminRoutes: RouteObject[] = [
   { path: '/admin/login', element: <AdminLoginPage /> },
@@ -43,6 +44,7 @@ export const adminRoutes: RouteObject[] = [
           { path: 'centers', element: <Navigate to="/admin/providers" replace /> },
           { path: 'cms', element: <CmsPage /> },
           { path: 'notifications', element: <NotificationsPage /> },
+          { path: 'staff', element: <StaffPage /> },
           { path: '*', element: <Navigate to="/admin" replace /> },
         ],
       },

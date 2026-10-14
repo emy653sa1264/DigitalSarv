@@ -1,4 +1,6 @@
 import { fa } from '@/lib/format'
+import { can, isSuperAdmin } from '@/lib/permissions'
+import type { Permission, User } from '@/lib/types'
 import {
   useAdminOrders,
   useCampaigns,
@@ -15,6 +17,14 @@ export interface AdminMenuItem {
   to: string
   label: string
   end?: boolean
+  /** shown when the admin holds at least one of these */
+  anyOf?: Permission[]
+  superOnly?: boolean
+}
+
+export function menuVisible(m: AdminMenuItem, user: User | null): boolean {
+  if (m.superOnly) return isSuperAdmin(user)
+  return !m.anyOf || m.anyOf.some((p) => can(user, p))
 }
 
 /** Sidebar entries, same order and copy as the prototype `adminMenu`. */
@@ -24,16 +34,17 @@ export const ADMIN_MENU: AdminMenuItem[] = [
   { key: 'prod', to: '/admin/production', label: 'تولید و کنترل کیفیت' },
   { key: 'colors', to: '/admin/services', label: 'سرویس‌ها و گزینه‌ها' },
   { key: 'prices', to: '/admin/prices', label: 'قیمت‌ها' },
-  { key: 'pricing', to: '/admin/pricing', label: 'مرکز مدیریت قیمت' },
+  { key: 'pricing', to: '/admin/pricing', label: 'مرکز مدیریت قیمت', anyOf: ['customer_price_view', 'provider_price_view'] },
   { key: 'plans', to: '/admin/plans', label: 'عضویت‌ها' },
   { key: 'settings', to: '/admin/settings', label: 'تنظیمات' },
   { key: 'rules', to: '/admin/rules', label: 'قوانین قیمت' },
   { key: 'camp', to: '/admin/campaigns', label: 'کمپین‌ها' },
   { key: 'customers', to: '/admin/customers', label: 'مشتریان' },
   { key: 'agents', to: '/admin/couriers', label: 'پیک‌ها و مناطق' },
-  { key: 'centers', to: '/admin/providers', label: 'مدیریت مجریان' },
+  { key: 'centers', to: '/admin/providers', label: 'مدیریت مجریان', anyOf: ['provider_view'] },
   { key: 'cms', to: '/admin/cms', label: 'لندینگ و محتوا' },
   { key: 'notif', to: '/admin/notifications', label: 'اعلان‌ها' },
+  { key: 'staff', to: '/admin/staff', label: 'کارکنان و دسترسی‌ها', superOnly: true },
 ]
 
 const count = (n: number | undefined) => (n ? fa(n) : '')

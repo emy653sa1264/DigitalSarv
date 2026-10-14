@@ -5,7 +5,7 @@ import { notify } from '@/components/ui/sonner'
 import { useLogout } from '@/lib/query'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/stores/auth'
-import { ADMIN_MENU, useMenuCounts } from './menu'
+import { ADMIN_MENU, menuVisible, useMenuCounts } from './menu'
 
 /** Brand block: green tree badge + "پنل مدیریت / دیجیتال سرو". */
 export function AdminBrand() {
@@ -41,7 +41,7 @@ export function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
         <AdminBrand />
       </div>
       <nav className="flex flex-col gap-[3px]">
-        {ADMIN_MENU.map((m) => (
+        {ADMIN_MENU.filter((m) => menuVisible(m, user)).map((m) => (
           <NavLink
             key={m.key}
             to={m.to}
