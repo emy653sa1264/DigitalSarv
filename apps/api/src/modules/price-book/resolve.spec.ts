@@ -117,3 +117,18 @@ describe('margin (§42, §85)', () => {
     expect(margin(3500, null)).toEqual({ difference: null, marginPct: null, negative: false });
   });
 });
+
+describe('exactness regressions', () => {
+  const mk = (o: Partial<VersionLike>) => v({ id: 'm', version: 1, price: undefined, ...o });
+  it('percent markup uses exact arithmetic', () => {
+    expect(unitPrice(mk({ mode: 'percent_markup', markup: 15, rounding: 100 }), { provider_price: 3000 })).toBe(3500);
+    expect(unitPrice(mk({ mode: 'percent_markup', markup: 15, rounding: 100 }), { provider_price: 3500 })).toBe(4000);
+  });
+  it('margin never returns -0 and rounds half-way symmetrically', () => {
+    expect(margin(1999, 2000).marginPct).toBe(-0.1);
+    expect(margin(2001, 2000).marginPct).toBe(0.1);
+    expect(Object.is(margin(2000, 2000).marginPct, 0)).toBe(true);
+    expect(Object.is(margin(1, 1000000).marginPct, 0)).toBe(false);
+    expect(Object.is(margin(999999, 1000000).marginPct, -0)).toBe(false);
+  });
+});

@@ -58,7 +58,7 @@ export function unitPrice(v: VersionLike, vars: Partial<Record<string, number>>)
     // §21 modes 2/3: over the base provider's price of the same combo (missing → unavailable, never a guess)
     const base = vars.provider_price;
     if (typeof base !== 'number' || !Number.isFinite(base) || typeof v.markup !== 'number' || !Number.isFinite(v.markup)) return null;
-    raw = v.mode === 'fixed_markup' ? base + v.markup : base * (1 + v.markup / 100);
+    raw = v.mode === 'fixed_markup' ? base + v.markup : (base * (100 + v.markup)) / 100;
   } else {
     return null;
   }
@@ -82,5 +82,5 @@ export function nextChangeAt(versions: VersionLike[], at: Date): Date | null {
 export function margin(customer: number | null, provider: number | null): { difference: number | null; marginPct: number | null; negative: boolean } {
   if (customer === null || provider === null) return { difference: null, marginPct: null, negative: false };
   const difference = customer - provider;
-  return { difference, marginPct: provider > 0 ? Math.round((difference / provider) * 1000) / 10 : null, negative: difference < 0 };
+  return { difference, marginPct: provider > 0 ? (Math.sign(difference) * Math.round((Math.abs(difference) * 1000) / provider)) / 10 || 0 : null, negative: difference < 0 };
 }
