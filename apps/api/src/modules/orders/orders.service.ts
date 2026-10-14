@@ -181,7 +181,13 @@ export class OrdersService {
       children: orderChildren(draft.children, quote.children.map((c) => c.total), ctx),
       services,
       quote,
-      pickup: { ...dto.pickup, address: dto.pickup.address ?? '', phone: pickupPhone },
+      // a slot/date only exists for home pickup; the address only when something is collected or sent there
+      pickup: {
+        ...dto.pickup,
+        ...(homePickup ? {} : { date: undefined, slot: undefined }),
+        address: homePickup || resolved.delivery.method === 'courier' ? (dto.pickup.address ?? '') : '',
+        phone: pickupPhone,
+      },
       delivery: resolved.delivery,
       payMethod: dto.payMethod,
       paid: charged,

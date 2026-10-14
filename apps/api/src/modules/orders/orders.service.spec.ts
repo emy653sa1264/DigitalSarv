@@ -490,6 +490,16 @@ describe('OrdersService.create — v4.2 delivery (D12, D17)', () => {
     expect(orders.docs.at(-1)!.delivery).toMatchObject({ method: 'customer_pickup', homePickup: false, pickupAt: 'point', pickupPoint: { id: 'pp1', name: 'دفتر مرکزی', kind: 'point' } });
   });
 
+  it('no home pickup → a client-sent date/slot is not stored', async () => {
+    const { svc, orders, user } = setup();
+    user.walletBalance = 1_000_000;
+    await svc.create(customer, printOnly({ pickup: { address: 'تهران، ونک', phone: '09123456789', date: '2026-10-20', slot: '۱۰ تا ۱۲' } }));
+    const stored = orders.docs.at(-1)!.pickup as Doc;
+    expect(stored.date).toBeUndefined();
+    expect(stored.slot).toBeUndefined();
+    expect(stored.address).toBe('تهران، ونک');
+  });
+
   it('school books still need a pickup slot; a courier delivery needs an address', async () => {
     const { svc } = setup();
     const school = { children: [{ name: 'a', grade: 'g', color: 'blue', books: 1 }], services: [], payMethod: 'wallet', pickup: { address: 'addr', phone: '09123456789' } } as unknown as OrderDraftDto;
