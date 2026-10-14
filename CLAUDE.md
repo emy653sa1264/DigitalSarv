@@ -33,6 +33,7 @@ Admin `09120000000`, courier `09121111111`, customer `09123456789`.
 
 - **Contract first.** `docs/api-contract.md` is authoritative for endpoints, shapes and pricing formulas. Change it before changing either side.
 - **Server-authoritative pricing.** The web app never computes totals itself; it calls `POST /api/orders/quote` (debounced) and renders `Quote.lines`.
+- **v4 price book** (`modules/price-book`, design `docs/v4-design.md`): print prices are per sheet, keyed by combo (`bw|A4|single` …). Never overwrite a price — every change is a new `priceVersions` doc + `priceAudit`. A missing/disabled price is UNAVAILABLE (Persian reason), never 0 or another combo's price. Formulas go through `price-book/formula.ts` only (no `eval`). Orders snapshot `services[i].pricing`; old orders and courier recounts never re-price service lines.
 - **Nothing hard-coded that admins edit.** Colors, extras, grades, prices, plans, rules, campaigns, CMS sections and notification templates live in MongoDB and are managed from the admin panel. `GET /api/catalog` is cached in Redis under a versioned key (`catalog:v1:<ver>`); every write that affects it must call the catalog invalidation (which `INCR`s `catalog:ver`).
 - **API is ESM** (`"type": "module"`, `nodenext`): relative imports need the `.js` suffix.
 - **RTL everywhere.** `<html dir="rtl" lang="fa">`. Use logical Tailwind utilities (`ms-*`, `me-*`, `ps-*`, `pe-*`, `start-*`, `end-*`, `text-start`) — never `ml/mr/pl/pr/left/right` for layout.
