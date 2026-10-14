@@ -300,7 +300,7 @@ Stored stats are `{ orders, books, revenue }` updated with a single `$inc` per o
 | courier | 09121111111 | رضا موسوی (code 247) |
 | customer | 09123456789 | مریم رضایی (plan gold, wallet 2,100,000) |
 
-Seed (`pnpm seed`, idempotent — drops the DB) also creates 4 more customers (مهدی کریمی 09121112233, شرکت آریا نت 09128877665, زهرا نوری 09354445566, دبستان مهر 09124455667), 3 more couriers (codes 251/260/263, not linked to logins), 3 zones, 5 centers, 2 campaigns (active `SCHOOL1405`, inactive `UNI1405`) and 26 orders (codes 10152–10254, all statuses; next new order is 10255).
+Seed (`pnpm seed`, idempotent — drops the DB) also creates 4 more customers (مهدی کریمی 09121112233, شرکت آریا نت 09128877665, زهرا نوری 09354445566, دبستان مهر 09124455667), 3 more couriers (codes 251/260/263, not linked to logins), 3 zones, 5 centers, 2 campaigns (active `SCHOOL1405`, inactive `UNI1405`) and 28 orders (codes 10152–10256, all statuses, including two v4 demo orders: 10255 چاپ سیاه‌وسفید and 10256 چاپ رنگی گلاسه ۲۰۰; next new order is 10257).
 The prototype's rule 4 (`کمپین = اول مهر ۱۴۰۵ → ۵٪ تخفیف با کد SCHOOL1405`) is seeded **off**: the coupon already applies that discount, so enabling it would discount twice.
 
 ---

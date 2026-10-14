@@ -25,6 +25,11 @@ describe('v4 price seeds', () => {
     expect(SPIRAL_RANGES.map((r) => [r.minPages, r.maxPages, r.price])).toEqual([[10, 12, 60000], [14, 16, 70000], [18, 20, 80000], [22, 25, 100000], [30, 35, 110000], [40, 40, 120000]]);
     expect(get('spiral|r6')?.price).toBe(120000);
   });
+  it('seeds no spiral prices without fresh ranges', () => {
+    const none = v4PriceSeeds([]);
+    expect(none.some((s) => s.comboKey.startsWith('spiral|'))).toBe(false);
+    expect(none.length).toBe(seeds.length - 6);
+  });
   it('seeds add-ons from today’s prices', () => {
     expect(get('addon|glue')?.price).toBe(45000);
     expect(get('addon|lam_sheet|A3')?.price).toBe(12000);

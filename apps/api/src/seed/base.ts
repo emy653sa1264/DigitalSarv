@@ -126,11 +126,14 @@ export async function seedBase(app: INestApplicationContext, log = new Logger('S
   // v4 spiral ranges: only a database without any range gets the six defaults
   const Ranges = model<BindingRange>(BindingRange.name);
   counts.bindingRanges = 0;
-  if ((await Ranges.estimatedDocumentCount()) === 0) {
+  const freshRanges = (await Ranges.estimatedDocumentCount()) === 0;
+  if (freshRanges) {
     await Ranges.insertMany(SPIRAL_RANGES.map(({ minPages, maxPages }, i) => ({ minPages, maxPages, on: true, sort: i + 1 })));
     counts.bindingRanges = SPIRAL_RANGES.length;
   }
-  const rangeIds = (await Ranges.find().sort({ minPages: 1 }).lean()).slice(0, SPIRAL_RANGES.length).map((r) => String(r._id));
+  // spiral prices are seeded only in the run that inserted the default ranges: an admin who later deletes,
+  // recreates or leaves a range unpriced must not get a default price back
+  const rangeIds = !freshRanges ? [] : (await Ranges.find().sort({ minPages: 1 }).lean()).slice(0, SPIRAL_RANGES.length).map((r) => String(r._id));
 
   // v4 initial customer prices: version 1 of a combination, only while it has no version at all
   // (`providerId: null` is part of the filter, so it is stored explicitly on insert)

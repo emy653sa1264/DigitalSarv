@@ -1,6 +1,6 @@
 /**
  * Dev/demo seed: DROPS the database, runs the base seed (see seed-base.ts), then adds demo users,
- * couriers, a second campaign and ~26 orders spread over the last week (plus a few older ones) so
+ * couriers, a second campaign and ~28 orders spread over the last week (plus a few older ones) so
  * the dashboard, production board, courier app and the customer home look alive.
  * Refuses to run when NODE_ENV=production.
  *
