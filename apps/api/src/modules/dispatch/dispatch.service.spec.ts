@@ -323,6 +323,14 @@ describe('DispatchService on behalf of the provider and the v1 order-sheet path'
     expect((await s.svc.respond(id, { accept: true, reason: 'تلفنی تأیید شد' } as never, String(ADMIN))).status).toBe('accepted');
     expect(s.orders.docs[0].status).toBe('confirmed');
   });
+  it('M2: the v1 centre select forwards confirmMissingPrice (and override/reason) to the assign', async () => {
+    const s = setup();
+    await withJob(s);
+    s.versions.docs.length = 0;
+    await expect(s.svc.assignFromOrder(String(s.order._id), String(C), String(ADMIN))).rejects.toMatchObject({ status: 409 });
+    await s.svc.assignFromOrder(String(s.order._id), String(C), String(ADMIN), { confirmMissingPrice: true });
+    expect(s.jobsModel.docs[0]).toMatchObject({ status: 'assigned', providerPricing: { confirmedMissing: true } });
+  });
   it('the v1 centre select delegates with the dispatch permissions', async () => {
     const s = setup();
     await withJob(s);

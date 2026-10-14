@@ -166,6 +166,11 @@ export class AssignDto {
 
   @Transform(emptyToNull) @IsOptional() @IsMongoId({ message: 'شناسه مرکز چاپ معتبر نیست' })
   centerId?: string | null;
+
+  /** v4.2 (Q22): forwarded to the dispatch assign — same validation as `AssignJobDto`. */
+  @IsOptional() @IsBoolean() override?: boolean;
+  @IsOptional() @IsString() @MaxLength(300, { message: 'دلیل حداکثر ۳۰۰ کاراکتر است' }) reason?: string;
+  @IsOptional() @IsBoolean() confirmMissingPrice?: boolean;
 }
 
 /** v3.3: the upper bound is the order's own checklist length (checked by the service). */

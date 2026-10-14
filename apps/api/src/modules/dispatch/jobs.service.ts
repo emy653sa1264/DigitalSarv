@@ -72,7 +72,16 @@ export class JobsService {
       } catch (err) {
         if ((err as { code?: number }).code !== 11000) throw err;
       }
-      return await this.jobs.findOne(key);
+      const job = await this.jobs.findOne(key);
+      // M3: the order may have been cancelled between its placement and this call — the new job follows it
+      if (job && LIVE.includes(job.status)) {
+        const now = await this.orders.findById(order._id, { status: 1 }).lean();
+        if (now?.status === 'cancelled') {
+          await this.cancelForOrder(order, 'system');
+          return await this.jobs.findOne(key);
+        }
+      }
+      return job;
     } catch (err) {
       this.logger.warn(`job for order ${order.code} not created (reconcile retries): ${(err as Error).message}`);
       return null;
@@ -108,7 +117,14 @@ export class JobsService {
   async fulfillmentFor(orders: { _id: unknown; delivery?: Partial<OrderDelivery> | null }[]): Promise<Map<string, CustomerFulfillment>> {
     const out = new Map<string, CustomerFulfillment>();
     if (!orders.length) return out;
-    const jobs = await this.jobs.find({ orderId: { $in: orders.map((o) => o._id as Types.ObjectId) }, seq: 1 }, { orderId: 1, status: 1 }).lean();
+    let jobs: { orderId: unknown; status: JobStatus }[];
+    try {
+      jobs = await this.jobs.find({ orderId: { $in: orders.map((o) => o._id as Types.ObjectId) }, seq: 1 }, { orderId: 1, status: 1 }).lean();
+    } catch (err) {
+      // a read for the customer's view must never fail the order operation that asked for it
+      this.logger.warn(`fulfilment read failed (the view has no fulfillment): ${(err as Error).message}`);
+      return out;
+    }
     const byOrder = new Map(jobs.map((j) => [String(j.orderId), j.status]));
     for (const o of orders) {
       const status = byOrder.get(String(o._id));
@@ -301,7 +317,7 @@ export class JobsService {
   // ------------------------------------------------------------ order events
 
   /** The order was cancelled: its live job becomes `cancelled` with the stage (M4) and the holder is told. Never throws; `true` when this call changed the job. */
-  async cancelForOrder(order: { _id: unknown }, byRole: ByRole = 'admin'): Promise<boolean> {
+  async cancelForOrder(order: { _id: unknown }, byRole: ByRole = 'admin', by?: string): Promise<boolean> {
     try {
       for (let attempt = 0; attempt < 3; attempt++) {
         const job = await this.forOrder(order._id);
@@ -310,7 +326,7 @@ export class JobsService {
         const stage = cancelStage(job.status);
         const updated = await this.cas(job, 'cancelled', {
           set: { cancel: { at: now, stage, ...(job.providerId ? { providerId: job.providerId } : {}), byRole } },
-          history: this.entry(job, 'cancelled', 'cancelled', { byRole }, now, { stage }),
+          history: this.entry(job, 'cancelled', 'cancelled', { byRole, ...(by ? { by } : {}) }, now, { stage }),
         });
         if (!updated) continue;
         if (job.providerId) await this.notifier.provider('job_cancelled', job.providerId, updated);
@@ -327,7 +343,7 @@ export class JobsService {
    * The order was delivered by `byRole`: the job follows. Courier / delivery-provider callers must satisfy the flow;
    * an admin (or the system safety net) overrides from any live stage. Never throws; `true` when this call changed the job.
    */
-  async onOrderDelivered(orderId: unknown, byRole: ByRole): Promise<boolean> {
+  async onOrderDelivered(orderId: unknown, byRole: ByRole, by?: string): Promise<boolean> {
     try {
       const job = await this.forOrder(orderId);
       if (!job || !LIVE.includes(job.status)) return false;
@@ -340,7 +356,7 @@ export class JobsService {
       const updated = await this.cas(job, 'delivered', {
         actor,
         set: { deliveredAt: now, ...(job.readyAt ? {} : { readyAt: now }) },
-        history: this.entry(job, 'status', 'delivered', { byRole }, now),
+        history: this.entry(job, 'status', 'delivered', { byRole, ...(by ? { by } : {}) }, now),
       });
       return !!updated;
     } catch (err) {
@@ -350,13 +366,13 @@ export class JobsService {
   }
 
   /** The order went `out_for_delivery` (by `byRole`): a courier job that is `ready` follows. Never throws; `true` when changed. */
-  async onOrderOutForDelivery(orderId: unknown, byRole: ByRole = 'admin'): Promise<boolean> {
+  async onOrderOutForDelivery(orderId: unknown, byRole: ByRole = 'admin', by?: string): Promise<boolean> {
     try {
       const job = await this.forOrder(orderId);
       if (!job || job.status !== 'ready' || job.deliveryMethod !== 'courier') return false;
       const actor = actorOf(byRole);
       if (!canMove('ready', 'out_for_delivery', actor, flowOf(job))) return false;
-      const updated = await this.cas(job, 'out_for_delivery', { actor, history: this.entry(job, 'status', 'out_for_delivery', { byRole }, new Date()) });
+      const updated = await this.cas(job, 'out_for_delivery', { actor, history: this.entry(job, 'status', 'out_for_delivery', { byRole, ...(by ? { by } : {}) }, new Date()) });
       return !!updated;
     } catch (err) {
       this.logger.warn(`out_for_delivery job of order ${String(orderId)} failed: ${(err as Error).message}`);

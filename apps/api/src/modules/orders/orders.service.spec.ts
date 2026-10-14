@@ -542,7 +542,7 @@ describe('v4.2 orders ↔ jobs', () => {
   it('cancel during production records the stage: the admin cancel cancels the job (by admin), the customer cancel by customer', async () => {
     const a = setup({ status: 'preparing' });
     await a.svc.setStatus(String(orderId), 'cancelled', 'admin-id');
-    expect(a.jobs.cancelForOrder).toHaveBeenCalledWith(expect.objectContaining({ status: 'cancelled' }), 'admin');
+    expect(a.jobs.cancelForOrder).toHaveBeenCalledWith(expect.objectContaining({ status: 'cancelled' }), 'admin', 'admin-id');
     const c = setup();
     await c.svc.cancel(String(orderId), customer);
     expect(c.jobs.cancelForOrder).toHaveBeenCalledWith(expect.objectContaining({ status: 'cancelled' }), 'customer');
@@ -565,5 +565,46 @@ describe('v4.2 orders ↔ jobs', () => {
     const { svc, jobs } = setup();
     jobs.fulfillmentFor.mockResolvedValueOnce(new Map([[String(orderId), { status: 'in_production', label: 'در حال تولید' }]]));
     expect(await svc.getForUser(String(orderId), customer)).toMatchObject({ fulfillment: { status: 'in_production', label: 'در حال تولید' } });
+  });
+  it('I1: a failing fulfilment read never fails an order that was already paid / refunded', async () => {
+    const w = setup();
+    w.user.walletBalance = 1_000_000;
+    w.jobs.fulfillmentFor.mockRejectedValue(new Error('db'));
+    const created = await w.svc.create(customer, schoolDraft);
+    expect(created).not.toHaveProperty('fulfillment');
+    expect(w.user.walletBalance).toBeLessThan(1_000_000); // debited exactly once
+    const debit = w.user.walletBalance;
+    const c = setup();
+    c.jobs.fulfillmentFor.mockRejectedValue(new Error('db'));
+    const before = c.user.walletBalance as number;
+    await expect(c.svc.cancel(String(orderId), customer)).resolves.toMatchObject({ status: 'cancelled' });
+    expect(c.user.walletBalance).toBe(before + 500000); // refunded exactly once
+    expect(debit).toBeGreaterThanOrEqual(0);
+  });
+  it('M1: the admin id goes to the job on cancel, delivered and out_for_delivery', async () => {
+    const a = setup({ status: 'preparing' });
+    await a.svc.setStatus(String(orderId), 'cancelled', 'admin-id');
+    expect(a.jobs.cancelForOrder).toHaveBeenCalledWith(expect.anything(), 'admin', 'admin-id');
+    const d = setup({ status: 'out_for_delivery' });
+    await d.svc.setStatus(String(orderId), 'delivered', 'admin-id');
+    expect(d.jobs.onOrderDelivered).toHaveBeenCalledWith(orderId, 'admin', 'admin-id');
+    const o = setup({ status: 'packing', qc: Array(9).fill(true) });
+    await o.svc.setStatus(String(orderId), 'out_for_delivery', 'admin-id');
+    expect(o.jobs.onOrderOutForDelivery).toHaveBeenCalledWith(orderId, 'admin', 'admin-id');
+  });
+  it('M2: override / reason / confirmMissingPrice reach the dispatch assign; the DTO validates them', async () => {
+    const admin = String(new Types.ObjectId());
+    const centre = String(new Types.ObjectId());
+    const { svc, dispatch } = setup();
+    await svc.assign(String(orderId), { centerId: centre, override: true, reason: 'فوری', confirmMissingPrice: true }, admin);
+    expect(dispatch.assignFromOrder).toHaveBeenCalledWith(String(orderId), centre, admin, { override: true, reason: 'فوری', confirmMissingPrice: true });
+    expect(await validate(plainToInstance(AssignDto, { centerId: centre, override: true, reason: 'x', confirmMissingPrice: false }))).toHaveLength(0);
+    expect(await validate(plainToInstance(AssignDto, { centerId: centre, override: 'yes' }))).not.toHaveLength(0);
+    expect(await validate(plainToInstance(AssignDto, { centerId: centre, reason: 'x'.repeat(301) }))).not.toHaveLength(0);
+  });
+  it('M4: an unknown courier is refused before the provider is assigned', async () => {
+    const { svc, dispatch } = setup();
+    await expect(svc.assign(String(orderId), { centerId: String(new Types.ObjectId()), courierId: String(new Types.ObjectId()) }, 'admin-id')).rejects.toThrow('پیک یافت نشد');
+    expect(dispatch.assignFromOrder).not.toHaveBeenCalled();
   });
 });

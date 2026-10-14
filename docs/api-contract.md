@@ -1067,6 +1067,11 @@ Errors (Persian):
 «تغییر از صفحه سفارش» when held) under the same checks and permissions (`dispatch_assign` / `dispatch_reassign`, 403
 «به این بخش دسترسی ندارید»); `centerId: null` → `unassign` with reason «لغو از صفحه سفارش». `courierId` keeps v1
 behaviour, except that assigning a courier to an order without home pickup does not add `confirmed`/`courier_assigned`.
+The v1 body also accepts the optional `override`, `reason` (≤ 300) and `confirmMissingPrice`, validated like `AssignJobDto` and
+forwarded to `assign`/`reassign` (so the order-page picker can complete school orders with a missing provider price and
+soft overrides; `reason` replaces the default reassign reason). With both `centerId` and `courierId`, an unknown courier is
+rejected (404 «پیک یافت نشد») before the provider is assigned. Job history records the acting admin on order-driven
+cancel/delivered/out-for-delivery moves; `fulfillment` reads never fail the order response (absent on error).
 
 ### Provider endpoints (`/provider/jobs`, role provider, `ProviderScopeGuard`)
 

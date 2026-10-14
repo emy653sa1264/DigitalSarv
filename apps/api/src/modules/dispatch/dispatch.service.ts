@@ -461,14 +461,14 @@ export class DispatchService {
   }
 
   /** Production board (kept, D10): each order's job status and provider name. */
-  async boardInfo(orderIds: unknown[]): Promise<Map<string, { jobStatus: JobStatus; providerName?: string }>> {
-    const jobs = orderIds.length ? ((await this.jobModel.find({ orderId: { $in: orderIds as Types.ObjectId[] }, seq: 1 }, { orderId: 1, status: 1, providerId: 1 }).lean()) as JobRow[]) : [];
+  async boardInfo(orderIds: Types.ObjectId[]): Promise<Map<string, { jobStatus: JobStatus; providerName?: string }>> {
+    const jobs = orderIds.length ? ((await this.jobModel.find({ orderId: { $in: orderIds }, seq: 1 }, { orderId: 1, status: 1, providerId: 1 }).lean()) as JobRow[]) : [];
     const names = await this.namesFor(jobs);
     return new Map(jobs.map((j) => [String(j.orderId), { jobStatus: j.status, ...(j.providerId ? { providerName: names.get(String(j.providerId)) } : {}) }]));
   }
 
   /** v1 `PATCH /admin/orders/:id/assign { centerId }` — delegated with the dispatch permissions (the v1 route has none). */
-  async assignFromOrder(orderId: string, centerId: string | null, by: string): Promise<void> {
+  async assignFromOrder(orderId: string, centerId: string | null, by: string, opts: { override?: boolean; reason?: string; confirmMissingPrice?: boolean } = {}): Promise<void> {
     assertObjectId(orderId, 'سفارش');
     let job = await this.jobs.forOrder(new Types.ObjectId(orderId));
     // permission first (before anything is created); a missing job is a new, unassigned one
@@ -482,7 +482,8 @@ export class DispatchService {
       if (HELD.includes(job.status)) await this.unassign(String(job._id), 'لغو از صفحه سفارش', by);
       return;
     }
-    if (job.status === 'unassigned') await this.assign(String(job._id), { providerId: centerId } as AssignJobDto, by);
-    else await this.reassign(String(job._id), { providerId: centerId, reason: 'تغییر از صفحه سفارش' } as AssignJobDto, by);
+    const extra = { ...(opts.override !== undefined ? { override: opts.override } : {}), ...(opts.confirmMissingPrice !== undefined ? { confirmMissingPrice: opts.confirmMissingPrice } : {}) };
+    if (job.status === 'unassigned') await this.assign(String(job._id), { providerId: centerId, ...extra, ...(opts.reason ? { reason: opts.reason } : {}) } as AssignJobDto, by);
+    else await this.reassign(String(job._id), { providerId: centerId, ...extra, reason: opts.reason?.trim() || 'تغییر از صفحه سفارش' } as AssignJobDto, by);
   }
 }

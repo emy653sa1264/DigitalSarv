@@ -263,12 +263,21 @@ export class OrdersService {
 
   /** The customer's JSON of an order, with its fulfilment (v4.2; customer-safe fields only). */
   private async customerView(order: OrderDocument) {
-    return customerOrderJson(order, (await this.jobs.fulfillmentFor([order])).get(String(order._id)));
+    return customerOrderJson(order, (await this.fulfillments([order])).get(String(order._id)));
+  }
+
+  /** The money is already moved when a view is built: a failing fulfilment read only leaves the field out. */
+  private async fulfillments(list: OrderDocument[]) {
+    try {
+      return await this.jobs.fulfillmentFor(list);
+    } catch {
+      return new Map<string, never>();
+    }
   }
 
   async mine(userId: string) {
     const list = await this.orders.find({ customerId: new Types.ObjectId(userId) }).sort({ createdAt: -1 });
-    const f = await this.jobs.fulfillmentFor(list);
+    const f = await this.fulfillments(list);
     return list.map((o) => customerOrderJson(o, f.get(String(o._id))));
   }
 
@@ -335,7 +344,7 @@ export class OrdersService {
    * set in the same update, so however many cancels race, exactly one wins and the wallet is credited
    * `chargedAmount` exactly once. Returns null when the guard no longer matches (the order changed first).
    */
-  private async cancelAndRefund(order: OrderDocument, guard: QueryFilter<Order>, byRole: 'customer' | 'admin'): Promise<OrderDocument | null> {
+  private async cancelAndRefund(order: OrderDocument, guard: QueryFilter<Order>, byRole: 'customer' | 'admin', by?: string): Promise<OrderDocument | null> {
     // chargedAmount / paidVia are only set together with `paid`, so guarding on `paid` makes the pre-read safe
     const amount = refundableAmount(order);
     const updated = await this.orders.findOneAndUpdate(
@@ -351,7 +360,8 @@ export class OrdersService {
     if (amount > 0) await this.users.updateOne({ _id: updated.customerId }, { $inc: { walletBalance: amount } });
     await this.notifications.dispatch('cancelled', updated);
     // v4.2: the job follows (best-effort; records the stage it was cancelled at)
-    await this.jobs.cancelForOrder(updated, byRole);
+    if (by) await this.jobs.cancelForOrder(updated, byRole, by);
+    else await this.jobs.cancelForOrder(updated, byRole);
     return updated;
   }
 
@@ -387,14 +397,14 @@ export class OrdersService {
    * leaving production (`picked_up … qc`) for packing / out_for_delivery / delivered needs every QC item
    * done — checked again atomically in the update, so an item unticked meanwhile makes it a 409.
    */
-  async setStatus(id: string, status: OrderStatus, _by?: string): Promise<OrderDocument> {
+  async setStatus(id: string, status: OrderStatus, by?: string): Promise<OrderDocument> {
     const order = await this.findById(id);
     if (order.status === status) return order;
     if (!canAdminTransition(order.status, status)) {
       throw new BadRequestException(`تغییر وضعیت از «${STATUS_LABELS[order.status]}» به «${STATUS_LABELS[status]}» مجاز نیست`);
     }
     if (status === 'cancelled') {
-      const cancelled = await this.cancelAndRefund(order, { status: order.status }, 'admin');
+      const cancelled = await this.cancelAndRefund(order, { status: order.status }, 'admin', by);
       if (!cancelled) throw OrdersService.raced();
       return cancelled;
     }
@@ -415,8 +425,8 @@ export class OrdersService {
     );
     if (!updated) throw OrdersService.raced();
     await this.notifications.dispatch(status, updated);
-    if (status === 'delivered') await this.jobs.onOrderDelivered(updated._id, 'admin');
-    if (status === 'out_for_delivery') await this.jobs.onOrderOutForDelivery(updated._id);
+    if (status === 'delivered') await (by ? this.jobs.onOrderDelivered(updated._id, 'admin', by) : this.jobs.onOrderDelivered(updated._id, 'admin'));
+    if (status === 'out_for_delivery') await (by ? this.jobs.onOrderOutForDelivery(updated._id, 'admin', by) : this.jobs.onOrderOutForDelivery(updated._id));
     return updated;
   }
 
@@ -430,7 +440,11 @@ export class OrdersService {
     // v4.2: the provider is assigned through the dispatch center (eligibility, snapshot, acceptance — contract «v1 centre select»)
     if (dto.centerId !== undefined) {
       if (!by) throw new BadRequestException('تخصیص مجری از «مرکز تخصیص سفارش» انجام می‌شود');
-      await this.dispatch.assignFromOrder(id, dto.centerId, by);
+      // M4: an unknown courier must not leave the provider assigned and the request failed
+      if (dto.courierId && !(await this.couriers.exists({ _id: dto.courierId }))) throw new NotFoundException('پیک یافت نشد');
+      const opts = { override: dto.override, reason: dto.reason, confirmMissingPrice: dto.confirmMissingPrice };
+      if (Object.values(opts).some((v) => v !== undefined)) await this.dispatch.assignFromOrder(id, dto.centerId, by, opts);
+      else await this.dispatch.assignFromOrder(id, dto.centerId, by);
       if (dto.courierId === undefined) return this.findById(id);
     }
 
@@ -447,7 +461,6 @@ export class OrdersService {
         if (order.status === 'registered' || order.status === 'confirmed') steps.push('courier_assigned');
       }
     }
-    if (!Object.keys($set).length && !Object.keys($unset).length) return order;
     if (steps.length) $set.status = steps[steps.length - 1];
     const now = new Date();
     const updated = await this.orders.findOneAndUpdate(

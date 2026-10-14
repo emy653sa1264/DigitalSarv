@@ -280,3 +280,33 @@ describe('JobsService.reconcile pages in the database', () => {
     expect(s.jobs.docs.at(-1)!.status).toBe('delivered');
   });
 });
+
+describe('v4.2 fix round 1', () => {
+  it('I1: fulfillmentFor never throws — a failing read gives an empty map', async () => {
+    const s = setup();
+    (s.jobs as unknown as { find: unknown }).find = vi.fn(() => { throw new Error('db down'); });
+    await expect(s.svc.fulfillmentFor([s.order as never])).resolves.toEqual(new Map());
+  });
+  it('M1: the admin id is recorded in the job history of cancel, delivered and out_for_delivery', async () => {
+    const admin = String(new Types.ObjectId());
+    const a = setup();
+    await heldBy(a, 'in_production');
+    await a.svc.cancelForOrder(a.orders.docs[0], 'admin', admin);
+    expect(a.jobs.docs[0].history.at(-1)).toMatchObject({ action: 'cancelled', byRole: 'admin' });
+    expect(String(a.jobs.docs[0].history.at(-1).by)).toBe(admin);
+    const d = setup();
+    await heldBy(d, 'ready');
+    await d.svc.onOrderOutForDelivery(d.orders.docs[0]._id, 'admin', admin);
+    expect(String(d.jobs.docs[0].history.at(-1).by)).toBe(admin);
+    await d.svc.onOrderDelivered(d.orders.docs[0]._id, 'admin', admin);
+    expect(d.jobs.docs[0]).toMatchObject({ status: 'delivered' });
+    expect(String(d.jobs.docs[0].history.at(-1).by)).toBe(admin);
+  });
+  it('M3: a job created for an order that was cancelled meanwhile is cancelled by the system', async () => {
+    const s = setup();
+    const placed = { ...s.order }; // the stale view the placement flow holds
+    s.orders.docs[0].status = 'cancelled';
+    await s.svc.ensureJob(placed as never);
+    expect(s.jobs.docs[0]).toMatchObject({ status: 'cancelled', cancel: { byRole: 'system' } });
+  });
+});
