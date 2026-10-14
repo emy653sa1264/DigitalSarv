@@ -37,6 +37,7 @@ export function PricingCenterPage() {
   const [params, setParams] = useSearchParams()
   const canCustomer = useCan('customer_price_view')
   const canProvider = useCan('provider_price_view')
+  const canBulk = useCan('customer_price_bulk_update', 'customer_price_publish') || useCan('provider_price_bulk_update', 'provider_price_publish')
   const pending = usePendingPrices(1, canProvider)
   const views: { key: View; label: string; show: boolean }[] = [
     { key: 'customer', label: 'قیمت مشتری', show: canCustomer },
@@ -58,7 +59,7 @@ export function PricingCenterPage() {
       <PageHeader
         title="مرکز مدیریت قیمت"
         subtitle="قیمت مشتری و قیمت مجریان — دو لایه جدا، با نسخه‌بندی، زمان‌بندی، تأیید و تاریخچه"
-        actions={view === 'customer' || view === 'provider' ? (
+        actions={canBulk && (view === 'customer' || view === 'provider') ? (
           <button type="button" onClick={() => setBulkOpen(true)} className="cursor-pointer rounded-full border-[1.5px] border-line bg-white px-[18px] py-[11px] text-[13px] font-extrabold hover:bg-shell">تغییر گروهی</button>
         ) : undefined}
       />
@@ -84,7 +85,7 @@ export function PricingCenterPage() {
           {view === 'provider' && <ProviderLayerTab />}
           {view === 'compare' && <CompareTab />}
           {view === 'pending' && <PendingTab />}
-          {(view === 'customer' || view === 'provider') && (
+          {canBulk && (view === 'customer' || view === 'provider') && (
             <BulkDialog open={bulkOpen} onOpenChange={setBulkOpen} defaultService={view === 'customer' && tab !== 'audit' ? tab : 'bw'}
               defaultLayer={view === 'provider' ? 'provider' : 'customer'} defaultProviderId={params.get('provider') ?? undefined} />
           )}

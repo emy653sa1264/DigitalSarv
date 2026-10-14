@@ -29,5 +29,7 @@ export function useSubmitProviderPrice() {
   return useMutation({
     mutationFn: (body: SubmitPriceBody) => api.post<ProviderPriceView>('/provider/prices', body),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: providerKeys.all }),
+    // a rejected submit usually means the row changed under us (e.g. a pending request now exists): show the fresh state
+    onError: () => queryClient.invalidateQueries({ queryKey: providerKeys.all }),
   })
 }

@@ -17,8 +17,10 @@ export function PricesScreen() {
   const [service, setService] = useState<ProviderPriceService>('bw')
   const [search, setSearch] = useState('')
   const [onlyCapable, setOnlyCapable] = useState(true)
-  const [open, setOpen] = useState<ProviderPriceRow | null>(null)
+  const [openKey, setOpenKey] = useState<string | null>(null)
   const query = useProviderPrices(service)
+  // derived from the query data so the sheet reflects a refetch (e.g. after a rejected submit)
+  const open = openKey ? (query.data ?? []).find((r) => r.comboKey === openKey) ?? null : null
   const rows = (query.data ?? []).filter((r) => (!onlyCapable || r.capable) && (!search.trim() || r.label.includes(search.trim())))
 
   return (
@@ -51,11 +53,11 @@ export function PricesScreen() {
           />
         ) : (
           <div className="mt-3 grid gap-2.5">
-            {rows.map((r) => <PriceCard key={r.comboKey} row={r} onOpen={() => setOpen(r)} />)}
+            {rows.map((r) => <PriceCard key={r.comboKey} row={r} onOpen={() => setOpenKey(r.comboKey)} />)}
           </div>
         )}
       </ScreenBody>
-      <PriceSheet row={open} onClose={() => setOpen(null)} />
+      <PriceSheet row={open} onClose={() => setOpenKey(null)} />
     </>
   )
 }

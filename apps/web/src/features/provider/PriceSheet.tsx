@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Chip, InfoBanner, ToneTag, type BrandTone } from '@/components/brand'
+import { Chip, InfoBanner, LoadingBlock, ToneTag, type BrandTone } from '@/components/brand'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
@@ -24,6 +24,7 @@ export const PRICE_STATUS: Record<PriceStatus, { label: string; tone: BrandTone 
 /** `yyyy-mm-dd` (Tehran, the date input) → ISO of 00:00 Tehran that day (Asia/Tehran: fixed +03:30). */
 const tehranDayToIso = (day: string) => new Date(`${day}T00:00:00+03:30`).toISOString()
 const tomorrowTehran = () => new Date(Date.now() + 86_400_000 + 3.5 * 3_600_000).toISOString().slice(0, 10)
+const tehranDate = (iso: string) => jalali(iso, { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Tehran' })
 const validDay = (day: string) => !!day && !Number.isNaN(new Date(`${day}T00:00:00+03:30`).getTime())
 
 export function PriceSheet({ row, onClose }: { row: ProviderPriceRow | null; onClose: () => void }) {
@@ -45,9 +46,10 @@ function SheetBody({ row, onDone }: { row: ProviderPriceRow; onDone: () => void 
   const [reason, setReason] = useState('')
 
   const send = () => {
+    if (price === 0) return toast.error('قیمت باید بیشتر از صفر باشد')
     if (price === null || !Number.isInteger(price) || price <= 0) return toast.error('قیمت را وارد کنید')
     if (!reason.trim()) return toast.error('توضیح تغییر قیمت را بنویسید')
-    if (when === 'later' && !validDay(day)) return toast.error('تاریخ را وارد کنید')
+    if (when === 'later' && (!validDay(day) || day < tomorrowTehran())) return toast.error('تاریخ باید از فردا به بعد باشد')
     submit.mutate(
       { comboKey: row.comboKey, price, reason: reason.trim(), ...(when === 'later' ? { effectiveFrom: tehranDayToIso(day) } : {}) },
       { onSuccess: () => { notify('قیمت برای تأیید ارسال شد'); onDone() } },
@@ -80,8 +82,8 @@ function SheetBody({ row, onDone }: { row: ProviderPriceRow; onDone: () => void 
           </div>
           {when === 'later' && (
             <label className="grid gap-1.5 text-[12.5px] font-bold text-muted-1">
-              از تاریخ {validDay(day) ? `(${jalali(tehranDayToIso(day))})` : ''}
-              <Input type="date" dir="ltr" value={day} onChange={(e) => setDay(e.target.value)} className="bg-white" />
+              از تاریخ {validDay(day) ? `(${tehranDate(tehranDayToIso(day))})` : ''}
+              <Input type="date" dir="ltr" min={tomorrowTehran()} value={day} onChange={(e) => setDay(e.target.value)} className="bg-white" />
             </label>
           )}
           <label className="grid gap-1.5 text-[13px] font-extrabold">
@@ -95,7 +97,7 @@ function SheetBody({ row, onDone }: { row: ProviderPriceRow; onDone: () => void 
       <div className="mt-5 text-[13.5px] font-black">سابقه قیمت</div>
       <div className="mt-2 grid gap-2">
         {history.isPending ? (
-          <div className="text-[12.5px] text-muted-2">در حال بارگذاری…</div>
+          <LoadingBlock rows={2} />
         ) : history.isError ? (
           <ProviderError error={history.error} onRetry={() => void history.refetch()} />
         ) : history.data.length === 0 ? (
@@ -106,7 +108,7 @@ function SheetBody({ row, onDone }: { row: ProviderPriceRow; onDone: () => void 
               <div className="flex flex-wrap items-center gap-2">
                 <span className="font-black">{v.price != null ? money(v.price) : '—'}</span>
                 <ToneTag tone={PRICE_STATUS[v.status].tone}>{PRICE_STATUS[v.status].label}</ToneTag>
-                <span className="text-[11.5px] text-muted-2">نسخه {fa(v.version)} · از {jalali(v.effectiveFrom)}</span>
+                <span className="text-[11.5px] text-muted-2">نسخه {fa(v.version)} · از {tehranDate(v.effectiveFrom)}</span>
               </div>
               {v.reason && <div className="mt-1 text-[12px] text-muted-1">توضیح شما: {v.reason}</div>}
               {v.reviewNote && <div className={v.status === 'rejected' ? 'mt-1 text-[12px] font-bold text-pink-dark' : 'mt-1 text-[12px] text-muted-1'}>نظر دیجیتال سرو: {v.reviewNote}</div>}

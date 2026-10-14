@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Chip, DsSwitch, InfoBanner, TONES } from '@/components/brand'
 import { Input } from '@/components/ui/input'
-import { notify, toast } from '@/components/ui/sonner'
+import { toast } from '@/components/ui/sonner'
 import { fa, toEnDigits } from '@/lib/format'
 import { isSuperAdmin } from '@/lib/permissions'
 import { PERMISSION_GROUPS } from '@/lib/provider-labels'
@@ -41,12 +41,14 @@ export function StaffPage() {
           <AdminTable columns={COLUMNS} minWidth={820} head={['نام', 'موبایل', 'دسترسی', 'نوع', '']}>
             {list.map((m) => {
               const shown = (m.permissions ?? []).filter((p) => LABEL.has(p))
+              const hidden = (m.permissions?.length ?? 0) - shown.length // permissions without a label here (dispatch / provider orders, M3)
               return (
                 <AdminRow key={m.id} className="py-3">
                   <span className="truncate font-bold">{m.name || '—'}{m.id === user?.id && <span className="ms-1.5 text-[11.5px] text-muted-2">(شما)</span>}</span>
                   <span dir="ltr" className="text-start font-bold">{fa(m.phone)}</span>
                   <span className="text-[12.5px] leading-6 text-muted-1">
                     {m.superAdmin ? 'همه بخش‌ها' : shown.length === 0 ? 'فقط بخش‌های عمومی پنل' : shown.map((p) => LABEL.get(p)).join('، ')}
+                    {!m.superAdmin && hidden > 0 && <span className="ms-1 font-bold text-muted-2">{shown.length ? '، ' : ''}+{fa(hidden)} دسترسی دیگر</span>}
                   </span>
                   <span className="flex flex-wrap gap-1">
                     <Tag bg={m.superAdmin ? TONES.violet.soft : TONES.cyan.soft} fg={m.superAdmin ? TONES.violet.ink : TONES.cyan.ink}>{m.superAdmin ? 'مدیر کل' : 'محدود'}</Tag>
@@ -57,7 +59,7 @@ export function StaffPage() {
                     {!m.bootstrap && (
                       <ConfirmDelete title={`حذف دسترسی مدیر ${m.name || fa(m.phone)}؟`}
                         description="این شماره حساب مشتری عادی می‌شود و نشست‌های بازش بسته می‌شود. آخرین مدیر کل حذف نمی‌شود."
-                        onConfirm={() => remove.mutate(m.id, { onSuccess: () => notify('دسترسی مدیر حذف شد') })} />
+                        onConfirm={() => remove.mutate(m.id)} />
                     )}
                   </span>
                 </AdminRow>
@@ -83,9 +85,9 @@ function StaffDialog({ open, onOpenChange, item }: { open: boolean; onOpenChange
 
   const submit = () => {
     const permissions = superAdmin ? null : perms
-    const done = (msg: string) => () => { notify(msg); onOpenChange(false) }
+    const done = () => onOpenChange(false)
     if (item) {
-      update.mutate({ id: item.id, name: name.trim(), ...(locked ? {} : { permissions }) }, { onSuccess: done('تغییرات ذخیره شد') })
+      update.mutate({ id: item.id, name: name.trim(), ...(locked ? {} : { permissions }) }, { onSuccess: done })
       return
     }
     const p = toEnDigits(phone).trim()
@@ -93,7 +95,7 @@ function StaffDialog({ open, onOpenChange, item }: { open: boolean; onOpenChange
       toast.error('شماره موبایل را درست وارد کنید')
       return
     }
-    create.mutate({ phone: p, name: name.trim(), permissions }, { onSuccess: done('مدیر اضافه شد') })
+    create.mutate({ phone: p, name: name.trim(), permissions }, { onSuccess: done })
   }
 
   return (

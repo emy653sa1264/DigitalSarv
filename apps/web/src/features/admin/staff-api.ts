@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { notify } from '@/components/ui/sonner'
 import { api } from '@/lib/api'
 import { qk } from '@/lib/query'
 import type { Permission, StaffMember, User } from '@/lib/types'
@@ -24,14 +25,15 @@ export function useStaffMutations() {
     }
   }
   return {
-    create: useMutation({ mutationFn: (b: StaffBody) => api.post<StaffMember>('/admin/staff', b), onSuccess: refresh }),
+    create: useMutation({ mutationFn: (b: StaffBody) => api.post<StaffMember>('/admin/staff', b), onSuccess: async () => { notify('مدیر اضافه شد'); await refresh() } }),
     update: useMutation({
       mutationFn: ({ id, ...b }: StaffBody & { id: string }) => api.patch<StaffMember>(`/admin/staff/${id}`, b),
-      onSuccess: async (_d, v) => { await syncSelf(v.id); await refresh() },
+      // toast here, not per call: editing your own access can log you out and unmount the dialog before a per-call callback runs
+      onSuccess: async (_d, v) => { notify('تغییرات ذخیره شد'); await syncSelf(v.id); await refresh() },
     }),
     remove: useMutation({
       mutationFn: (id: string) => api.del<{ ok: true }>(`/admin/staff/${id}`),
-      onSuccess: async (_d, id) => { await syncSelf(id); await refresh() },
+      onSuccess: async (_d, id) => { notify('دسترسی مدیر حذف شد'); await syncSelf(id); await refresh() },
     }),
   }
 }

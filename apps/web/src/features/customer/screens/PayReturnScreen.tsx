@@ -12,7 +12,7 @@ import { CtaButton } from '../components/parts'
 import { customerKeys, useOrder, usePayOrder } from '../hooks/queries'
 import { orderBooks, orderTitle } from '../lib/orders'
 
-/** `/app/pay/return?order=<id>&status=ok|failed|pending` — where the payment callback sends the browser back. */
+/** `/app/pay/return?order=<id>&status=ok|failed|pending|mismatch` — where the payment callback sends the browser back. */
 export function PayReturnScreen() {
   const [params] = useSearchParams()
   const navigate = useNavigate()
@@ -60,7 +60,7 @@ export function PayReturnScreen() {
       ) : verifying ? (
         <PayVerifying order={o} refreshing={order.isFetching} onRefresh={() => void order.refetch()} />
       ) : (
-        <PayFailure order={o} />
+        <PayFailure order={o} mismatch={status === 'mismatch' || o.payment?.status === 'mismatch'} />
       )}
     </Screen>
   )
@@ -133,7 +133,7 @@ function PayVerifying({ order: o, refreshing, onRefresh }: { order: Order; refre
   )
 }
 
-function PayFailure({ order: o }: { order: Order }) {
+function PayFailure({ order: o, mismatch }: { order: Order; mismatch: boolean }) {
   const navigate = useNavigate()
   const { pay, busyId } = usePayOrder()
   const reorder = useReorderFlow()
@@ -154,7 +154,9 @@ function PayFailure({ order: o }: { order: Order }) {
         <div className="mt-5 text-[23px] font-black">پرداخت انجام نشد</div>
       </div>
       <InfoBanner tone="pink" className="mt-2">
-        {cancelled
+        {mismatch
+          ? 'مبلغ پرداختی با مبلغ سفارش یکسان نبود و به کیف پول شما برگشت داده شد'
+          : cancelled
           ? o.refunded
             ? 'این سفارش لغو شده است و مبلغ پرداختی به کیف پول شما برگشت داده شد.'
             : 'این سفارش به دلیل عدم پرداخت لغو شده است. برای ادامه، سفارش را دوباره ثبت کنید.'

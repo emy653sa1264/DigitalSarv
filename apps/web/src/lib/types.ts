@@ -464,7 +464,7 @@ export interface OrderPayment {
   driver: string
   authority: string
   /** `verifying`: the bank said OK but the provider could not be reached yet — re-verified by the server. */
-  status: 'pending' | 'verifying' | 'paid' | 'failed'
+  status: 'pending' | 'verifying' | 'paid' | 'failed' | 'mismatch'
   /** Toman requested for the current attempt. */
   amount?: number
   requestedAt?: string

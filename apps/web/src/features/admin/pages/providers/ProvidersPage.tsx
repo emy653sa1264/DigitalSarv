@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { DsSwitch, EmptyState, TONES } from '@/components/brand'
+import { DsSwitch, EmptyState, InfoBanner, TONES } from '@/components/brand'
 import { notify } from '@/components/ui/sonner'
 import { fa } from '@/lib/format'
 import { useCan } from '@/lib/permissions'
@@ -16,7 +16,8 @@ const ALL = '__all'
 const STATUS_FILTER = [{ value: ALL, label: 'همه وضعیت‌ها' }, ...(Object.keys(PROVIDER_STATUS) as ProviderStatus[]).map((s) => ({ value: s, label: PROVIDER_STATUS[s].label }))]
 
 export function ProvidersPage() {
-  const query = useProviders()
+  const canView = useCan('provider_view')
+  const query = useProviders(canView)
   const { update, remove } = useProviderMutations()
   const canEdit = useCan('provider_edit')
   const canManage = useCan('provider_manage')
@@ -24,6 +25,14 @@ export function ProvidersPage() {
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState(ALL)
 
+  if (!canView) {
+    return (
+      <>
+        <PageHeader title="مدیریت مجریان" />
+        <InfoBanner>به بخش مجریان دسترسی ندارید. برای دریافت دسترسی با مدیر کل تماس بگیرید.</InfoBanner>
+      </>
+    )
+  }
   return (
     <>
       <PageHeader

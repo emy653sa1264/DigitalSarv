@@ -32,12 +32,14 @@ export function BulkDialog({ open, onOpenChange, defaultService, defaultLayer = 
 function BulkForm({ open, onOpenChange, defaultService, defaultLayer = 'customer', defaultProviderId }: { open: boolean; onOpenChange: (o: boolean) => void; defaultService: PriceService; defaultLayer?: PriceLayer; defaultProviderId?: string }) {
   const { bulkPreview, bulkApply } = usePriceBookMutations()
   const papers = usePapers()
-  const canCustomer = useCan('customer_price_bulk_update')
-  const canProvider = useCan('provider_price_bulk_update')
+  // a layer needs both the bulk-update and the publish permission (the apply endpoint checks both)
+  const canCustomer = useCan('customer_price_bulk_update', 'customer_price_publish')
+  const canProvider = useCan('provider_price_bulk_update', 'provider_price_publish')
   const [layer, setLayer] = useState<PriceLayer>(defaultLayer === 'provider' && canProvider ? 'provider' : canCustomer ? 'customer' : 'provider')
   const centers = useCenters()
   const [providerId, setProviderId] = useState(defaultProviderId ?? '')
-  const pid = providerId || centers.data?.[0]?.id || ''
+  // never defaults to the first provider; a stale `?provider=` that no longer exists counts as no pick
+  const pid = providerId && (centers.data ?? []).some((c) => c.id === providerId) ? providerId : ''
   const guard = useMarginGuard()
   const isProvider = layer === 'provider'
   const [service, setService] = useState<PriceService>(defaultService)
@@ -79,6 +81,10 @@ function BulkForm({ open, onOpenChange, defaultService, defaultLayer = 'customer
   const canApply = !!preview && preview.rows.length > 0
 
   const runPreview = () => {
+    if (isProvider && !pid) {
+      toast.error('مجری را انتخاب کنید')
+      return
+    }
     if (!body || !key) {
       toast.error('زمان اعمال را وارد کنید')
       return
@@ -116,7 +122,7 @@ function BulkForm({ open, onOpenChange, defaultService, defaultLayer = 'customer
         </div>
         {isProvider && (
           <Field label="مجری">
-            <AdminSelect value={pid} onValueChange={setProviderId} options={(centers.data ?? []).map((p) => ({ value: p.id, label: p.name }))} ariaLabel="مجری" />
+            <AdminSelect value={pid} onValueChange={setProviderId} placeholder="یک مجری را انتخاب کنید" options={(centers.data ?? []).map((p) => ({ value: p.id, label: p.name }))} ariaLabel="مجری" />
           </Field>
         )}
         <div className="rounded-[16px] bg-amber-soft px-3.5 py-2.5 text-[12px] leading-6 font-semibold text-amber-ink">
@@ -173,7 +179,7 @@ function BulkForm({ open, onOpenChange, defaultService, defaultLayer = 'customer
         </Field>
 
         <div>
-          <Button type="button" variant="secondary" onClick={runPreview} disabled={bulkPreview.isPending}>
+          <Button type="button" variant="secondary" onClick={runPreview} disabled={bulkPreview.isPending || (isProvider && !pid)}>
             {bulkPreview.isPending ? 'در حال محاسبه…' : 'پیش‌نمایش'}
           </Button>
         </div>
