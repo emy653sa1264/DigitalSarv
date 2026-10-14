@@ -1,6 +1,7 @@
 import { createParamDecorator, ExecutionContext, SetMetadata } from '@nestjs/common';
 import type { Role } from '../constants.js';
 import type { AuthUser } from './auth-user.js';
+import type { Permission } from '../permissions.js';
 
 export const ROLES_KEY = 'roles';
 
@@ -12,3 +13,7 @@ export const CurrentUser = createParamDecorator(
   (_data: unknown, ctx: ExecutionContext): AuthUser | undefined =>
     ctx.switchToHttp().getRequest<{ user?: AuthUser }>().user,
 );
+
+export const PERMISSIONS_KEY = 'permissions';
+/** Requires every listed permission (enforced by PermissionsGuard, after JwtAuthGuard + RolesGuard). */
+export const RequirePermissions = (...permissions: Permission[]) => SetMetadata(PERMISSIONS_KEY, permissions);

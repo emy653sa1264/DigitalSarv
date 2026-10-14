@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { PLAN_IDS, ROLES, type PlanId, type Role } from '../../common/constants.js';
+import { PERMISSIONS, type Permission } from '../../common/permissions.js';
 
 @Schema({ collection: 'users', timestamps: true })
 export class User {
@@ -30,6 +31,10 @@ export class User {
 
   @Prop({ type: MongooseSchema.Types.ObjectId })
   courierId?: Types.ObjectId;
+
+  /** v4: granular admin permissions; absent = every permission (super-admin). */
+  @Prop({ type: [String], enum: PERMISSIONS, default: undefined })
+  permissions?: Permission[];
 
   createdAt: Date;
   updatedAt: Date;

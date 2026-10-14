@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import type { AppConfig } from '../../config/configuration.js';
 import { JwtAuthGuard, OptionalJwtAuthGuard, RolesGuard } from './guards.js';
+import { PermissionsGuard } from './permissions.guard.js';
 import { TokenVerifier } from './token-verifier.service.js';
 
 /** JWT + guards, available to every module. */
@@ -21,7 +22,7 @@ import { TokenVerifier } from './token-verifier.service.js';
       },
     }),
   ],
-  providers: [TokenVerifier, JwtAuthGuard, OptionalJwtAuthGuard, RolesGuard],
-  exports: [JwtModule, TokenVerifier, JwtAuthGuard, OptionalJwtAuthGuard, RolesGuard],
+  providers: [TokenVerifier, JwtAuthGuard, OptionalJwtAuthGuard, RolesGuard, PermissionsGuard],
+  exports: [JwtModule, TokenVerifier, JwtAuthGuard, OptionalJwtAuthGuard, RolesGuard, PermissionsGuard],
 })
 export class SecurityModule {}
