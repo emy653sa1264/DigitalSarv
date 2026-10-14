@@ -141,6 +141,15 @@ describe('UploadsService ownership', () => {
     }
   });
 
+  it('strict applyToDraft rejects a v4 printing line whose file is foreign or not a docs upload', async () => {
+    const { svc } = setup([mine, theirs, photo]);
+    for (const kind of ['black_white_printing', 'color_printing'] as const) {
+      const d = (id: unknown) => ({ children: [], services: [{ kind, spec: { fileId: String(id), pages: 1 } }] }) as unknown as OrderDraft;
+      await expect(svc.applyToDraft(d(theirs._id), String(customerId), true)).rejects.toThrow(/متعلق به شما نیست/);
+      await expect(svc.applyToDraft(d(photo._id), String(customerId), true)).rejects.toThrow(/برای این بخش/);
+    }
+  });
+
   it('the PDF page count still overrides `pages` for a v3 docs range (its ranges are clipped to it when priced)', async () => {
     const { svc } = setup([mine]);
     const rangeDraft: OrderDraft = {

@@ -354,6 +354,15 @@ describe('OrdersService.create', () => {
     expect(user.walletBalance).toBe(1_000_000);
   });
 
+  it('an unavailable line is reported before the minimum-order shortfall', async () => {
+    const { svc } = setup();
+    pricingOf(svc).quote.mockResolvedValueOnce({
+      quote: { total: 0, subtotal: 0, minOrderShortfall: 100000, planId: 'gold', children: [], services: [{ index: 0, price: 0, label: 'x', detail: '', unavailable: 'ناموجود' }] },
+      appliedRuleIds: [],
+    });
+    await expect(svc.create(customer, draft('wallet'))).rejects.toThrow('ناموجود');
+  });
+
   it('a matching expectedTotal is accepted', async () => {
     const { svc, orders, user } = setup();
     user.walletBalance = 1_000_000;

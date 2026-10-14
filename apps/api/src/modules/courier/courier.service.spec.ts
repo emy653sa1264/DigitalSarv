@@ -16,6 +16,32 @@ function setup(couriers: Doc[], orders: Doc[] = [], users: Doc[] = []) {
   return { svc, c, o, u };
 }
 
+describe('CourierService.verify recount', () => {
+  it('keeps a legacy print line as print in the re-quote on a count mismatch', async () => {
+    const userId = new Types.ObjectId();
+    const courierId = new Types.ObjectId();
+    const printLine = { kind: 'print', spec: { pages: 2 }, price: 1, label: 'چاپ اسناد', detail: '' };
+    const order = {
+      _id: new Types.ObjectId(), courierId, status: 'courier_assigned', planId: 'bronze', urgent: false,
+      pickupLabels: ['a'], timeline: [], quote: { totalBooks: 5 },
+      children: [{ name: 'a', grade: 'g', books: 5, total: 100 }], services: [printLine],
+      markModified: vi.fn(), save: vi.fn(async () => undefined),
+    };
+    const pricing = {
+      context: vi.fn(async () => ({ grades: [], extras: [] })),
+      quote: vi.fn(async () => ({ quote: { total: 1, children: [{ total: 1 }] }, appliedRuleIds: [] })),
+    };
+    const svc = new CourierService(
+      fakeModel([{ _id: courierId, userId }]) as never, fakeModel([order]) as never, fakeModel([]) as never, fakeModel([]) as never,
+      pricing as never, { dispatch: vi.fn(async () => undefined) } as never, { attach: vi.fn(async () => undefined) } as never, {} as never,
+    );
+    const res = await svc.verify({ id: String(userId), role: 'courier' } as never, String(order._id), { collectedCount: 3, checks: [true] });
+    const drafted = pricing.quote.mock.calls[0][0] as { services: { kind: string }[] };
+    expect(drafted.services.map((s) => s.kind)).toEqual(['print']);
+    expect(res.status).toBe('awaiting_approval');
+  });
+});
+
 describe('CourierService admin (v3.2)', () => {
   it('derives zoneName from zoneId; the stored free text is only a fallback', async () => {
     const { svc } = setup([

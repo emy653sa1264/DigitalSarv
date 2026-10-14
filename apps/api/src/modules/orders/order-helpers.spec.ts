@@ -119,10 +119,20 @@ describe('v4 order helpers', () => {
     const draft = draftFromOrder({ children: [], planId: 'bronze', urgent: false, services: [
       { kind: 'print', childIndex: 1, spec: { pages: 2, scope: 'all', paper: 'tahrir80', size: 'A4', ink: 'bw', sides: 'single', copies: 1, binding: 'none', staple: false, laminate: 'none' }, price: 1, label: 'چاپ اسناد', detail: '' },
       { kind: 'black_white_printing', spec: { pages: 2 }, price: 7000, label: 'چاپ سیاه‌وسفید', detail: '', pricing: { lines: [] } },
-    ] } as never);
+    ] } as never, { convertLegacy: true });
     expect(draft.services.map((s) => s.kind)).toEqual(['black_white_printing', 'black_white_printing']);
     expect(draft.services[0]).toMatchObject({ childIndex: 1 });
     expect(draft.services[1]).not.toHaveProperty('pricing');
+  });
+
+  it('draftFromOrder keeps legacy print unless convertLegacy is set, always stripping pricing', () => {
+    const order = { children: [], planId: 'bronze', urgent: false, services: [
+      { kind: 'print', spec: { pages: 2 }, price: 1, label: 'x', detail: '', pricing: { lines: [] } },
+    ] } as never;
+    const kept = draftFromOrder(order);
+    expect(kept.services[0].kind).toBe('print');
+    expect(kept.services[0]).not.toHaveProperty('pricing');
+    expect(draftFromOrder(order, { convertLegacy: true }).services[0].kind).toBe('black_white_printing');
   });
 
   it('orderQcLabels maps the v4 print kinds to the print checklist', () => {

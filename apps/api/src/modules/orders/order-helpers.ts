@@ -145,11 +145,14 @@ export function recountChildren<T extends ChildDraft>(children: T[], counted: nu
 }
 
 /** Turns a stored order back into an editable draft. */
-export function draftFromOrder(order: Pick<Order, 'children' | 'services' | 'planId' | 'coupon' | 'urgent'>): OrderDraft {
+export function draftFromOrder(
+  order: Pick<Order, 'children' | 'services' | 'planId' | 'coupon' | 'urgent'>,
+  { convertLegacy = false }: { convertLegacy?: boolean } = {},
+): OrderDraft {
   return {
     children: (order.children ?? []).map(({ total: _t, ...c }) => c as ChildDraft),
     services: (order.services ?? []).map(({ price: _p, label: _l, detail: _d, childName: _n, pricing: _s, ...s }: OrderService) =>
-      s.kind === 'print' ? { ...legacyPrintToV4(s.spec ?? {}), ...(s.childIndex !== undefined ? { childIndex: s.childIndex } : {}) } : (s as ServiceDraft),
+      convertLegacy && s.kind === 'print' ? { ...legacyPrintToV4(s.spec ?? {}), ...(s.childIndex !== undefined ? { childIndex: s.childIndex } : {}) } : (s as ServiceDraft),
     ),
     planId: order.planId,
     ...(order.coupon ? { coupon: order.coupon } : {}),

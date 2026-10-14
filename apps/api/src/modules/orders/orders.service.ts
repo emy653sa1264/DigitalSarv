@@ -139,11 +139,12 @@ export class OrdersService {
     if (pickupError) throw new BadRequestException(pickupError);
     const planId = dto.planId ?? user.planId;
     const { quote, appliedRuleIds } = await this.pricing.quote(draft, planId, ctx);
+    // the unavailable reason comes first (contract), then the minimum, then a stale total
+    const unavailable = quote.services?.find((s) => s.unavailable)?.unavailable;
+    if (unavailable) throw new BadRequestException(unavailable);
     if (quote.minOrderShortfall) {
       throw new BadRequestException(`حداقل مبلغ سفارش ${fa(quote.subtotal + quote.minOrderShortfall)} تومان است`);
     }
-    const unavailable = quote.services?.find((s) => s.unavailable)?.unavailable;
-    if (unavailable) throw new BadRequestException(unavailable);
     if (dto.expectedTotal !== undefined && dto.expectedTotal !== quote.total) {
       throw new ConflictException({ statusCode: 409, code: 'PRICE_CHANGED', message: 'قیمت سفارش تغییر کرده است', previousTotal: dto.expectedTotal, newTotal: quote.total });
     }
@@ -279,7 +280,7 @@ export class OrdersService {
 
   async reorder(id: string, user: AuthUser): Promise<OrderDraft> {
     const order = await this.ownOrder(id, user);
-    const draft = draftFromOrder(order);
+    const draft = draftFromOrder(order, { convertLegacy: true });
     const u = await this.users.findById(user.id, { planId: 1 });
     return {
       ...draft,
