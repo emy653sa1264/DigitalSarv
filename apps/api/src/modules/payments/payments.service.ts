@@ -159,6 +159,7 @@ export class PaymentsService {
           await this.orders.updateOne({ ...attempt, 'payment.status': { $ne: 'paid' } }, { $set: { 'payment.status': 'verifying' }, $inc: { __v: 1 } });
           return 'pending';
         }
+        if (result.mismatch) return await this.creditMismatch(order, authority, result.mismatch.paidRial, result.message);
         this.logger.warn(`payment verify failed for order ${order.code}: ${result.message}`);
         await this.markFailed(attempt);
         return 'failed';
@@ -215,6 +216,29 @@ export class PaymentsService {
     }
     await this.creditToWallet(current, authority, amount, refId, paidAt);
     return current.paid && current.status !== 'cancelled' ? 'ok' : 'failed';
+  }
+
+  /**
+   * The provider captured an amount different from the one requested: the order is NOT paid. The captured
+   * money (rial → toman, floored) is credited to the customer's wallet once per authority (the authority is
+   * pushed to `refundedAuthorities` in the same compare-and-set, so replays never credit twice). The order
+   * stays `pending_payment` (payable again with a new `/pay`); `payment.status` becomes `mismatch` with a timeline note.
+   */
+  private async creditMismatch(order: OrderDocument, authority: string, paidRial: number, message: string): Promise<Outcome> {
+    const credit = Number.isFinite(paidRial) && paidRial > 0 ? Math.floor(paidRial / 10) : 0;
+    const note = { status: 'pending_payment' as const, label: `مغایرت مبلغ پرداخت (${credit} تومان به کیف پول اعتبار شد)`, at: new Date() };
+    const credited = await this.orders.findOneAndUpdate(
+      { _id: order._id, status: 'pending_payment', 'payment.authority': authority, 'payment.status': { $ne: 'paid' }, refundedAuthorities: { $ne: authority } },
+      { $set: { 'payment.status': 'mismatch' }, $push: { refundedAuthorities: authority, timeline: note }, $inc: { __v: 1 } },
+      { returnDocument: 'after' },
+    );
+    if (!credited) {
+      this.logger.warn(`order ${order.code}: payment ${authority} amount mismatch was already handled`);
+      return 'failed';
+    }
+    if (credit > 0) await this.users.updateOne({ _id: credited.customerId }, { $inc: { walletBalance: credit } });
+    this.logger.error(`order ${order.code}: payment ${authority} AMOUNT MISMATCH (${message}) — order not paid, ${credit} toman credited to the wallet`);
+    return 'failed';
   }
 
   private async markFailed(attempt: QueryFilter<Order>) {

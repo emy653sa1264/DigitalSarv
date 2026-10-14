@@ -118,7 +118,7 @@ export type UploadPurpose = (typeof UPLOAD_PURPOSES)[number];
 export const PAYMENT_DRIVERS = ['mock', 'zarinpal', 'zibal'] as const;
 export type PaymentDriverName = (typeof PAYMENT_DRIVERS)[number];
 /** `verifying`: the gateway callback said OK but the provider could not be reached to verify yet. */
-export const PAYMENT_STATUSES = ['pending', 'verifying', 'paid', 'failed'] as const;
+export const PAYMENT_STATUSES = ['pending', 'verifying', 'paid', 'failed', 'mismatch'] as const;
 export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
 
 export const PICKUP_CHECK_LABELS = [

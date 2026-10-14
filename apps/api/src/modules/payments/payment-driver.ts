@@ -21,7 +21,7 @@ export interface PaymentRequestResult {
 export type PaymentVerifyResult =
   | { ok: true; refId: string; cardPan?: string }
   /** `retryable`: the provider could not be reached — the payment may still be verified later. */
-  | { ok: false; message: string; retryable: boolean };
+  | { ok: false; message: string; retryable: boolean; /** the provider captured a different amount than requested (rial) */ mismatch?: { paidRial: number } };
 
 /** One payment gateway (`PAYMENT_DRIVER`). */
 export interface PaymentDriver {
@@ -188,7 +188,7 @@ export class ZibalPaymentDriver implements PaymentDriver {
       if (body.amount !== undefined && body.amount !== null && Number(body.amount) !== tomanToRial(amount)) {
         const message = `zibal amount mismatch for trackId ${authority}: provider ${String(body.amount)} rial, expected ${tomanToRial(amount)}`;
         new Logger('ZibalPaymentDriver').error(message);
-        return { ok: false, message, retryable: false };
+        return { ok: false, message, retryable: false, mismatch: { paidRial: Number(body.amount) } };
       }
       return { ok: true, refId: String(body.refNumber ?? authority), ...(body.cardNumber ? { cardPan: body.cardNumber } : {}) };
     }

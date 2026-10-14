@@ -337,3 +337,25 @@ describe('PaymentsService: driver switch (zibal active)', () => {
     expect(o.status).toBe('pending_payment');
   });
 });
+
+describe('PaymentsService: provider amount mismatch', () => {
+  it('credits the captured amount to the wallet once, never pays the order; a replay does not credit twice', async () => {
+    const o = pendingOrder({ payment: { driver: 'zibal', authority: '159', status: 'pending', amount: 500000, requestedAt: new Date() } });
+    const driver: PaymentDriver = {
+      name: 'zibal',
+      request: vi.fn(),
+      verify: vi.fn(async () => ({ ok: false as const, message: 'amount mismatch', retryable: false, mismatch: { paidRial: 3_150_005 } })),
+    };
+    const { svc, user, rules } = setup([o], driver);
+    await expect(svc.handleCallback('zibal', '159', 'OK')).resolves.toBe(failed(o));
+    expect(user.walletBalance).toBe(315000);
+    expect(o).toMatchObject({ status: 'pending_payment', paid: false });
+    expect(o.payment.status).toBe('mismatch');
+    expect(o.refundedAuthorities).toEqual(['159']);
+    expect(o.timeline.at(-1).label).toMatch(/مغایرت/);
+    await svc.handleCallback('zibal', '159', 'OK');
+    expect(user.walletBalance).toBe(315000);
+    expect(o.refundedAuthorities).toEqual(['159']);
+    expect(rules.recordUsage).not.toHaveBeenCalled();
+  });
+});
