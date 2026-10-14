@@ -31,7 +31,7 @@ export const ADMIN_MENU: AdminMenuItem[] = [
   { key: 'camp', to: '/admin/campaigns', label: 'کمپین‌ها' },
   { key: 'customers', to: '/admin/customers', label: 'مشتریان' },
   { key: 'agents', to: '/admin/couriers', label: 'پیک‌ها و مناطق' },
-  { key: 'centers', to: '/admin/centers', label: 'مراکز چاپ' },
+  { key: 'centers', to: '/admin/providers', label: 'مدیریت مجریان' },
   { key: 'cms', to: '/admin/cms', label: 'لندینگ و محتوا' },
   { key: 'notif', to: '/admin/notifications', label: 'اعلان‌ها' },
 ]

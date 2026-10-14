@@ -3,7 +3,7 @@ import { RequireRole } from '@/components/auth/RequireRole'
 import { AdminLayout } from './layout/AdminLayout'
 import { CampaignsPage } from './pages/CampaignsPage'
 import { CatalogPage } from './pages/CatalogPage'
-import { CentersPage } from './pages/CentersPage'
+import { ProvidersPage } from './pages/providers/ProvidersPage'
 import { CmsPage } from './pages/CmsPage'
 import { CouriersPage } from './pages/CouriersPage'
 import { CustomersPage } from './pages/CustomersPage'
@@ -39,7 +39,8 @@ export const adminRoutes: RouteObject[] = [
           { path: 'campaigns', element: <CampaignsPage /> },
           { path: 'customers', element: <CustomersPage /> },
           { path: 'couriers', element: <CouriersPage /> },
-          { path: 'centers', element: <CentersPage /> },
+          { path: 'providers', element: <ProvidersPage /> },
+          { path: 'centers', element: <Navigate to="/admin/providers" replace /> },
           { path: 'cms', element: <CmsPage /> },
           { path: 'notifications', element: <NotificationsPage /> },
           { path: '*', element: <Navigate to="/admin" replace /> },
