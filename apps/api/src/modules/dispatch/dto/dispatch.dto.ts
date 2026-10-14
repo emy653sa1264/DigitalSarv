@@ -72,3 +72,16 @@ export class AdminJobStatusDto {
   @IsString(reasonMsg) @IsNotEmpty(reasonMsg) @MaxLength(300) reason: string;
   @IsOptional() @IsIn(REJECT_REASONS, { message: 'دلیل معتبر نیست' }) reasonCode?: RejectReason;
 }
+
+export const PROVIDER_JOB_TARGETS = ['in_production', 'ready', 'out_for_delivery', 'ready_for_pickup', 'delivered', 'failed'] as const;
+
+export class RejectJobDto {
+  @IsIn(REJECT_REASONS, { message: 'دلیل رد را انتخاب کنید' }) reasonCode: RejectReason;
+  @IsOptional() @IsString() @MaxLength(300, { message: 'توضیح حداکثر ۳۰۰ کاراکتر است' }) note?: string;
+}
+
+export class ProviderJobStatusDto {
+  @IsIn(PROVIDER_JOB_TARGETS, { message: 'وضعیت معتبر نیست' }) status: (typeof PROVIDER_JOB_TARGETS)[number];
+  @IsOptional() @IsIn(REJECT_REASONS, { message: 'دلیل را انتخاب کنید' }) reasonCode?: RejectReason;
+  @IsOptional() @IsString() @MaxLength(300, { message: 'توضیح حداکثر ۳۰۰ کاراکتر است' }) note?: string;
+}

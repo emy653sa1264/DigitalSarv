@@ -3,8 +3,11 @@ import { CurrentUser, RequirePermissions, Roles } from '../../common/auth/decora
 import { JwtAuthGuard, RolesGuard } from '../../common/auth/guards.js';
 import { PermissionsGuard } from '../../common/auth/permissions.guard.js';
 import type { AuthUser } from '../../common/auth/auth-user.js';
+import { CurrentProvider, ProviderScopeGuard } from '../centers/provider-scope.guard.js';
+import { QcDto } from '../orders/dto/orders.dto.js';
+import { ProviderJobsService } from './provider-jobs.service.js';
 import { DispatchService } from './dispatch.service.js';
-import { AdminJobStatusDto, AssignJobDto, DeliveryChangeDto, DispatchQueryDto, EligibilityQueryDto, ReasonDto, RespondDto, UpdateJobDto } from './dto/dispatch.dto.js';
+import { ProviderJobStatusDto, ProviderJobsQueryDto, RejectJobDto, AdminJobStatusDto, AssignJobDto, DeliveryChangeDto, DispatchQueryDto, EligibilityQueryDto, ReasonDto, RespondDto, UpdateJobDto } from './dto/dispatch.dto.js';
 
 /** «مرکز تخصیص سفارش» (contract v4.2 «Admin endpoints»). Provider prices and fees need `provider_price_view` too (Q18). */
 @Controller('admin/dispatch')
@@ -44,4 +47,27 @@ export class AdminDispatchController {
 
   @Post('jobs/:id/status') @HttpCode(200) @RequirePermissions('provider_order_status')
   status(@Param('id') id: string, @Body() dto: AdminJobStatusDto, @CurrentUser() user: AuthUser) { return this.dispatch.setStatus(id, dto, user.id); }
+}
+
+/** «سرو مجری» orders — provider id only from ProviderScopeGuard (never URL/body, §64). */
+@Controller('provider/jobs')
+@UseGuards(JwtAuthGuard, RolesGuard, ProviderScopeGuard)
+@Roles('provider')
+export class ProviderJobsController {
+  constructor(private readonly jobs: ProviderJobsService) {}
+
+  @Get() list(@CurrentProvider() pid: string, @Query() q: ProviderJobsQueryDto) { return this.jobs.list(pid, q); }
+  @Get(':id') detail(@CurrentProvider() pid: string, @Param('id') id: string) { return this.jobs.detail(pid, id); }
+
+  @Post(':id/accept') @HttpCode(200)
+  accept(@CurrentProvider() pid: string, @Param('id') id: string, @CurrentUser() user: AuthUser) { return this.jobs.accept(pid, id, user.id); }
+
+  @Post(':id/reject') @HttpCode(200)
+  reject(@CurrentProvider() pid: string, @Param('id') id: string, @Body() dto: RejectJobDto, @CurrentUser() user: AuthUser) { return this.jobs.reject(pid, id, dto, user.id); }
+
+  @Post(':id/status') @HttpCode(200)
+  status(@CurrentProvider() pid: string, @Param('id') id: string, @Body() dto: ProviderJobStatusDto, @CurrentUser() user: AuthUser) { return this.jobs.setStatus(pid, id, dto, user.id); }
+
+  @Patch(':id/qc')
+  qc(@CurrentProvider() pid: string, @Param('id') id: string, @Body() dto: QcDto) { return this.jobs.setQc(pid, id, dto.index, dto.done); }
 }
