@@ -1,9 +1,12 @@
 import type { ReactNode } from 'react'
 import { Outlet } from 'react-router'
-import { Store } from 'lucide-react'
+import { Store, Tags } from 'lucide-react'
 import { AppShell, BottomTabs, type TabItem } from '@/components/brand'
 
-export const PROVIDER_TABS: TabItem[] = [{ to: '/provider/me', label: 'پروفایل', icon: Store }]
+export const PROVIDER_TABS: TabItem[] = [
+  { to: '/provider', label: 'قیمت‌های من', icon: Tags, end: true },
+  { to: '/provider/me', label: 'پروفایل', icon: Store },
+]
 
 /** Cyan-themed full-screen shell of «سرو مجری» (same structure as the courier app). */
 export function ProviderFrame({ children, safeBottom = false }: { children: ReactNode; safeBottom?: boolean }) {

@@ -1,5 +1,6 @@
 import { Navigate, type RouteObject } from 'react-router'
 import { RequireRole } from '@/components/auth/RequireRole'
+import { PricesScreen } from './PricesScreen'
 import { ProfileScreen } from './ProfileScreen'
 import { ProviderLogin } from './ProviderLogin'
 import { ProviderShell } from './ProviderShell'
@@ -13,7 +14,7 @@ export const providerRoutes: RouteObject[] = [
       {
         element: <ProviderShell />,
         children: [
-          { index: true, element: <Navigate to="/provider/me" replace /> },
+          { index: true, element: <PricesScreen /> },
           { path: 'me', element: <ProfileScreen /> },
           { path: '*', element: <Navigate to="/provider" replace /> },
         ],
