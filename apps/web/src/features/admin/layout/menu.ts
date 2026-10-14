@@ -1,5 +1,5 @@
 import { fa } from '@/lib/format'
-import { can, isSuperAdmin } from '@/lib/permissions'
+import { can, isSuperAdmin, useCan } from '@/lib/permissions'
 import type { Permission, User } from '@/lib/types'
 import {
   useAdminOrders,
@@ -11,6 +11,7 @@ import {
   useProduction,
   useRules,
 } from '../api'
+import { useDispatchJobs } from '../dispatch-api'
 
 export interface AdminMenuItem {
   key: string
@@ -31,6 +32,7 @@ export function menuVisible(m: AdminMenuItem, user: User | null): boolean {
 export const ADMIN_MENU: AdminMenuItem[] = [
   { key: 'dash', to: '/admin', label: 'داشبورد', end: true },
   { key: 'orders', to: '/admin/orders', label: 'سفارش‌ها' },
+  { key: 'dispatch', to: '/admin/dispatch', label: 'مرکز تخصیص سفارش', anyOf: ['dispatch_view'] },
   { key: 'prod', to: '/admin/production', label: 'تولید و کنترل کیفیت' },
   { key: 'colors', to: '/admin/services', label: 'سرویس‌ها و گزینه‌ها' },
   { key: 'prices', to: '/admin/prices', label: 'قیمت‌ها' },
@@ -59,9 +61,11 @@ export function useMenuCounts(): Record<string, string> {
   const couriers = useCouriers()
   const centers = useCenters()
   const notifications = useNotificationTemplates()
+  const dispatch = useDispatchJobs({ tab: 'unassigned', page: 1, limit: 1 }, useCan('dispatch_view'))
 
   return {
     orders: count(orders.data?.total),
+    dispatch: count(dispatch.data?.counts.unassigned),
     prod: count(production.data?.columns.reduce((s, c) => s + c.count, 0)),
     rules: count(rules.data?.length),
     camp: count(campaigns.data?.length),

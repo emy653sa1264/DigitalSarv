@@ -8,6 +8,7 @@ import { CmsPage } from './pages/CmsPage'
 import { CouriersPage } from './pages/CouriersPage'
 import { CustomersPage } from './pages/CustomersPage'
 import { DashboardPage } from './pages/DashboardPage'
+import { DispatchPage } from './pages/dispatch/DispatchPage'
 import { AdminLoginPage } from './pages/LoginPage'
 import { NotificationsPage } from './pages/NotificationsPage'
 import { OrdersPage } from './pages/OrdersPage'
@@ -30,6 +31,7 @@ export const adminRoutes: RouteObject[] = [
         children: [
           { index: true, element: <DashboardPage /> },
           { path: 'orders', element: <OrdersPage /> },
+          { path: 'dispatch', element: <DispatchPage /> },
           { path: 'production', element: <ProductionPage /> },
           { path: 'services', element: <CatalogPage /> },
           { path: 'prices', element: <PricesPage /> },
