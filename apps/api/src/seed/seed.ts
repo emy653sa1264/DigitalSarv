@@ -28,6 +28,7 @@ import { Campaign } from '../modules/campaigns/campaign.schema.js';
 import { BIND_COLORS, DEFAULT_PRICES, defaultPrintAddons } from '../modules/catalog/catalog.defaults.js';
 import { Center } from '../modules/centers/center.schema.js';
 import { Paper } from '../modules/catalog/schemas/paper.schema.js';
+import { SETTINGS_ID, Settings } from '../modules/catalog/schemas/settings.schema.js';
 import { Courier } from '../modules/courier/courier.schema.js';
 import { orderChildren } from '../modules/orders/order-helpers.js';
 import { Order } from '../modules/orders/order.schema.js';
@@ -301,6 +302,22 @@ async function main() {
     });
     await Centers.updateOne({ _id: art }, { $set: { capabilities: [bwCap(['A4'])] } });
     await Centers.updateOne({ _id: mehr }, { $set: { status: 'busy', capabilities: [bwCap(['A3', 'A4'])] } });
+    // v4.2 dispatch demo (§86 spirit): نگین also binds school books and theses and hands over at its shop,
+    // پرینت لند prints colour A3/A4 on plain paper, کپی‌سنتر پارس only delivers
+    const printLand = centerId(3);
+    const pars = centerId(4);
+    const none = { sizes: [], colorTypes: [], papers: [], sides: [], addons: [] };
+    await Centers.updateOne({ _id: negin }, {
+      $set: { allowCustomerPickup: true },
+      $push: { capabilities: { $each: [{ service: 'school', ...none }, { service: 'docs', ...none }] } },
+    });
+    await Centers.updateOne({ _id: printLand }, {
+      $set: { capabilities: [{ service: 'color_printing', sizes: ['A3', 'A4'], colorTypes: ['text', 'full'], papers: ['tahrir80'], sides: ['single', 'double'], addons: [] }] },
+    });
+    await Centers.updateOne({ _id: pars }, { $set: { canDeliver: true, deliveryFee: 25000, capabilities: [] } });
+    await model<Settings>(Settings.name).updateOne({ _id: SETTINGS_ID }, {
+      $set: { pickupPoints: [{ id: 'pp-central', name: 'دفتر مرکزی دیجیتال سرو', address: 'تهران، ونک، خیابان ملاصدرا، پلاک ۱۲', phone: '02191002233', hours: '۹ تا ۱۸', on: true }] },
+    });
     const providerUser = await Users.create({ phone: '09122222222', name: 'علی نگینی', role: 'provider', planId: 'bronze', referralCode: 'NEGIN-1405', providerId: negin });
     await Centers.updateOne({ _id: negin }, { $set: { userId: providerUser._id } });
     userDates.push({ _id: providerUser._id, createdAt: addDays(todayStart, -60) });
@@ -311,6 +328,7 @@ async function main() {
       providerPrice(art, 'bw|A4|single', 3700),
       providerPrice(mehr, 'bw|A4|single', 3400),
       providerPrice(negin, 'bw|A4|double', 3600, 'pending_approval'),
+      providerPrice(negin, 'color|A4|full|glossy200|single', 8000),
     ]);
 
     await Users.collection.bulkWrite(
@@ -410,7 +428,7 @@ async function main() {
       `Demo: 2 campaigns, ${COURIERS.length} couriers, ${userDates.length} users, ${ORDERS.length} orders ` +
         `(next code ${maxCode + 1}); cleared ${otpKeys} OTP keys`,
     );
-    log.log('Logins — admin 09120000000 · courier 09121111111 (رضا موسوی, 247) · provider 09122222222 (چاپ نگین) · customer 09123456789 (مریم رضایی)');
+    log.log('Logins — admin 09120000000 · courier 09121111111 (رضا موسوی, 247) · provider 09122222222 (چاپ نگین) · customer 09123456789 (مریم رضایی); pickup point «دفتر مرکزی دیجیتال سرو»; jobs are created when the API starts (reconcile)');
   } finally {
     await app.close();
   }
