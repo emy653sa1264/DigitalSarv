@@ -9,7 +9,7 @@ import { User } from '../users/user.schema.js';
 import { COLOR_TYPES, comboKey, parseCombo, PRINT_ADDONS, PRINT_SIZES, SIDES, singleSideKey, type ComboOptions, type ComboService } from './combo.js';
 import { bulkValue, type BulkOp } from './bulk.js';
 import { Center } from '../centers/center.schema.js';
-import type { ProviderStatus } from '../centers/provider-model.js';
+import { comboWithinCapabilities, type Capability, type ProviderStatus } from '../centers/provider-model.js';
 import { formulaVariables, parseFormula, validateFormula } from './formula.js';
 import { comboLabel, type LabelNames } from './labels.js';
 import { CUSTOMER_FORMULA_VARS, layerPermission, PRICE_LAYERS, PRICE_MODES, ROUNDINGS, type DisplayStatus, type PriceLayer, type PriceMode } from './price-book.constants.js';
@@ -40,6 +40,37 @@ export interface MatrixRow {
 }
 
 export interface MarginConflict { comboKey: string; providerId: string; providerName: string; providerPrice: number; customerPrice: number }
+/** What an admin without `provider_price_view` gets: the combos in conflict, no provider names or prices (M2-R1). */
+export type RedactedConflict = { comboKey: string };
+export type MarginWarning = MarginConflict | RedactedConflict;
+
+export interface SubmitInput { comboKey: string; price: number; effectiveFrom?: string; reason: string }
+export interface ProviderPriceView {
+  id: string; comboKey: string; version: number; price: number | null; effectiveFrom: string; effectiveUntil?: string;
+  status: DisplayStatus; reason: string; reviewNote?: string; createdAt: string;
+}
+export interface ProviderPriceRow {
+  comboKey: string; service: ComboService; options: ComboOptions; label: string; capable: boolean;
+  current: ProviderPriceView | null; next: ProviderPriceView | null; pending: ProviderPriceView | null; lastRejected: ProviderPriceView | null;
+}
+export interface PendingItem { version: VersionView; providerName: string; label: string; currentProviderPrice: number | null; customerPrice: number | null }
+
+const PENDING_EXISTS = 'برای این ترکیب یک قیمت در انتظار تأیید دارید';
+const STALE = 'وضعیت این نسخه تغییر کرده است؛ صفحه را تازه کنید';
+
+/**
+ * The provider's own view of a version — an explicit whitelist (no author, layer, markup or customer data; §26).
+ * `reason` is only the caller's own note (P4): admin/rollback/bulk reasons are never shown, so it is '' for those.
+ */
+function providerView(v: VersionView | null, userId?: string): ProviderPriceView | null {
+  if (!v) return null;
+  return {
+    id: v.id, comboKey: v.comboKey, version: v.version, price: v.unitPrice, effectiveFrom: v.effectiveFrom,
+    ...(v.effectiveUntil ? { effectiveUntil: v.effectiveUntil } : {}), status: v.status,
+    reason: userId && v.createdBy?.id === userId ? v.reason : '',
+    ...(v.reviewNote ? { reviewNote: v.reviewNote } : {}), createdAt: v.createdAt,
+  };
+}
 export interface CompareRow {
   comboKey: string; label: string; service: ComboService; providerId: string; providerName: string; providerStatus: ProviderStatus;
   providerPrice: number | null; pendingPrice: number | null; customerPrice: number | null; customerMode: PriceMode | null;
@@ -179,7 +210,7 @@ export class PriceBookService {
     if (input.publish && input.effectiveFrom && (await this.versions.exists({ ...scope, comboKey: input.comboKey, state: 'published', effectiveFrom }))) {
       throw new ConflictException('قیمت دیگری با همین زمان شروع (هم‌زمان) منتشر شده است');
     }
-    const negative = input.publish ? await this.checkMargin(input.comboKey, effectiveFrom, layer, scope.providerId, input, !!input.confirmNegativeMargin) : [];
+    const negative = input.publish ? await this.checkMargin(input.comboKey, effectiveFrom, layer, scope.providerId, input, !!input.confirmNegativeMargin, by) : [];
     const doc = await this.insertVersion({
       ...scope, comboKey: input.comboKey, mode: input.mode,
       ...(input.mode === 'manual' ? { price: input.price } : {}),
@@ -214,7 +245,7 @@ export class PriceBookService {
     await this.assertCan(by, layerPermission(src.layer, 'rollback'));
     const why = this.reason(reason);
     if (src.state !== 'published' && src.state !== 'disabled') throw new BadRequestException('فقط نسخه‌های منتشرشده قابل بازگردانی هستند');
-    const negative = await this.checkMargin(src.comboKey, new Date(), src.layer, src.providerId, this.valueOf(src), confirmNegativeMargin);
+    const negative = await this.checkMargin(src.comboKey, new Date(), src.layer, src.providerId, this.valueOf(src), confirmNegativeMargin, by);
     const doc = await this.insertVersion({
       layer: src.layer, providerId: src.providerId, comboKey: src.comboKey, mode: src.mode,
       ...(src.price !== undefined ? { price: src.price } : {}), ...(src.formula ? { formula: src.formula } : {}),
@@ -244,6 +275,128 @@ export class PriceBookService {
       })),
       total, page, limit,
     };
+  }
+
+  // ------------------------------------------------------------ provider workflow
+
+  /** A provider submits its own price → `pending_approval` (never effective until an admin approves it). */
+  async submit(providerId: string, input: SubmitInput, userId: string): Promise<ProviderPriceView> {
+    const scope = this.scope('provider', providerId);
+    if (!parseCombo(input.comboKey)) throw new BadRequestException('ترکیب قیمت معتبر نیست');
+    const problem = this.valueProblem({ comboKey: input.comboKey, mode: 'manual', price: input.price }, 'provider');
+    if (problem) throw new BadRequestException(problem);
+    const reason = this.reason(input.reason);
+    const effectiveFrom = input.effectiveFrom ? new Date(input.effectiveFrom) : new Date();
+    if (Number.isNaN(effectiveFrom.getTime())) throw new BadRequestException('تاریخ معتبر نیست');
+    if (effectiveFrom.getTime() < Date.now() - PAST_GRACE_MS) throw new BadRequestException(PAST_MSG);
+    if (await this.versions.exists({ ...scope, comboKey: input.comboKey, state: 'pending_approval' })) throw new ConflictException(PENDING_EXISTS);
+    const doc = await this.insertVersion({
+      ...scope, comboKey: input.comboKey, mode: 'manual', price: input.price, rounding: 0, effectiveFrom,
+      state: 'pending_approval', reason, createdBy: new Types.ObjectId(userId),
+    });
+    await this.audit('submit', [doc], reason, userId, undefined, this.plain(doc));
+    return providerView(await this.viewOne(doc), userId)!;
+  }
+
+  /** Admin approval: published at max(requested, now); a customer version is never created or changed. */
+  async approve(id: string, reason: string, by: string, confirmNegativeMargin = false): Promise<VersionView> {
+    const before = await this.findVersion(id);
+    if (before.layer !== 'provider') throw new BadRequestException('فقط قیمت‌های مجری تأیید می‌شوند');
+    await this.assertCan(by, 'provider_price_publish');
+    const why = this.reason(reason);
+    if (before.state !== 'pending_approval') throw new ConflictException(STALE);
+    const now = new Date();
+    const requested = new Date(before.effectiveFrom);
+    const effectiveFrom = requested.getTime() > now.getTime() ? requested : now;
+    if (effectiveFrom !== now && (await this.versions.exists({ layer: 'provider', providerId: before.providerId, comboKey: before.comboKey, state: 'published', effectiveFrom }))) {
+      throw new ConflictException('قیمت دیگری با همین زمان شروع (هم‌زمان) منتشر شده است');
+    }
+    const negative = await this.checkMargin(before.comboKey, effectiveFrom, 'provider', before.providerId, this.valueOf(before), confirmNegativeMargin, by);
+    const doc = await this.versions.findOneAndUpdate(
+      { _id: before._id, state: 'pending_approval' },
+      { $set: { state: 'published', effectiveFrom, reviewNote: why, reviewedBy: new Types.ObjectId(by), reviewedAt: now, updatedBy: new Types.ObjectId(by) } },
+      { returnDocument: 'after' },
+    );
+    if (!doc) throw new ConflictException(STALE);
+    await this.catalog.invalidate(); // customer markup versions over this provider follow it
+    await this.audit('approve', [doc], why, by, this.plain(before), this.withNegative(this.plain(doc), negative));
+    return this.viewOne(doc);
+  }
+
+  async reject(id: string, reason: string, by: string): Promise<VersionView> {
+    const before = await this.findVersion(id);
+    if (before.layer !== 'provider') throw new BadRequestException('فقط قیمت‌های مجری تأیید می‌شوند');
+    await this.assertCan(by, 'provider_price_publish');
+    const why = this.reason(reason);
+    const doc = await this.versions.findOneAndUpdate(
+      { _id: before._id, state: 'pending_approval' },
+      { $set: { state: 'rejected', reviewNote: why, reviewedBy: new Types.ObjectId(by), reviewedAt: new Date(), updatedBy: new Types.ObjectId(by) } },
+      { returnDocument: 'after' },
+    );
+    if (!doc) throw new ConflictException(STALE);
+    await this.audit('reject', [doc], why, by, this.plain(before), this.plain(doc));
+    return this.viewOne(doc);
+  }
+
+  /**
+   * Pending submissions, newest first, with the provider's current price and the customer price beside them.
+   * Batched (P13): one read of the page's combos (+ single-sided siblings) instead of a history per row.
+   */
+  async pendingList(page = 1, limit = 20) {
+    const filter = { layer: 'provider' as const, state: 'pending_approval' as const };
+    const skip = (Math.max(1, page) - 1) * limit;
+    const at = new Date();
+    const [rows, total, papers, ranges] = await Promise.all([
+      this.versions.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean() as Promise<Row[]>,
+      this.versions.countDocuments(filter),
+      this.papers.find().lean(),
+      this.ranges.find().lean(),
+    ]);
+    if (!rows.length) return { items: [] as PendingItem[], total, page, limit };
+    const keys = [...new Set(rows.flatMap((r) => [r.comboKey, singleSideKey(r.comboKey)].filter((k): k is string => !!k)))];
+    const providerIds = [...new Set(rows.map((r) => String(r.providerId)))];
+    const [live, centers] = await Promise.all([
+      this.versions.find({ comboKey: { $in: keys }, state: { $in: ['published', 'disabled'] } }).lean() as Promise<Row[]>,
+      this.centers.find({ _id: { $in: providerIds.map((id) => new Types.ObjectId(id)) } }, { name: 1 }).lean(),
+    ]);
+    const names = this.names(papers, ranges);
+    const users = await this.userNames(rows);
+    const providerName = new Map(centers.map((c) => [String(c._id), c.name]));
+    const providerPrices = effectiveProviderPrices(live, at);
+    const customerRows = live.filter((r) => r.layer === 'customer');
+    const vars = this.varsFor(customerRows, papers, at, providerPrices);
+    const items: PendingItem[] = rows.map((r) => {
+      const pid = String(r.providerId);
+      const options = parseCombo(r.comboKey);
+      const eff = pickEffective(customerRows.filter((v) => v.comboKey === r.comboKey).map(toVersionLike), at);
+      return {
+        version: this.view(r, null, at, users, {}),
+        providerName: providerName.get(pid) ?? '',
+        label: options ? comboLabel(options, names) : r.comboKey,
+        currentProviderPrice: providerPrices[pid]?.[r.comboKey] ?? null,
+        customerPrice: eff ? unitPrice(eff, vars(r.comboKey, eff.baseProviderId)) : null,
+      };
+    });
+    return { items, total, page, limit };
+  }
+
+  /** `/provider/prices` — the caller's own versions per known combination (no customer data, §26). */
+  async providerPrices(providerId: string, service?: ComboService, userId?: string): Promise<ProviderPriceRow[]> {
+    const [rows, center] = await Promise.all([
+      this.matrix('provider', service, new Date(), providerId),
+      this.centers.findById(this.oid(providerId), { capabilities: 1 }).lean(),
+    ]);
+    const caps = ((center as { capabilities?: Capability[] } | null)?.capabilities ?? []) as Capability[];
+    return rows.map((r) => ({
+      comboKey: r.comboKey, service: r.service, options: r.options, label: r.label, capable: comboWithinCapabilities(r.options, caps),
+      current: providerView(r.current, userId), next: providerView(r.next, userId),
+      pending: providerView(r.pending, userId), lastRejected: providerView(r.lastRejected, userId),
+    }));
+  }
+
+  async providerHistory(providerId: string, comboKey: string, userId?: string): Promise<ProviderPriceView[]> {
+    if (!parseCombo(comboKey)) throw new BadRequestException('ترکیب قیمت معتبر نیست');
+    return (await this.history('provider', comboKey, new Date(), providerId)).map((v) => providerView(v, userId)!);
   }
 
   // ------------------------------------------------------------ bulk
@@ -411,14 +564,21 @@ export class PriceBookService {
   }
 
   /** 409 NEGATIVE_MARGIN unless confirmed; returns the (confirmed) conflicts for the audit. */
-  private async checkMargin(comboKey: string, at: Date, layer: PriceLayer, providerId: Types.ObjectId | null, value: VersionValue, confirmed: boolean): Promise<MarginConflict[]> {
+  private async checkMargin(comboKey: string, at: Date, layer: PriceLayer, providerId: Types.ObjectId | null, value: VersionValue, confirmed: boolean, by: string): Promise<MarginWarning[]> {
     const m = await this.marginChecker(at, comboKey);
     const found = m.conflicts(comboKey, layer, providerId ? String(providerId) : null, m.unitOf(value, comboKey, layer));
-    if (found.length && !confirmed) throw new ConflictException({ statusCode: 409, code: 'NEGATIVE_MARGIN', message: NEGATIVE_MSG, conflicts: found });
-    return found;
+    // M2-R1: provider names and prices only for admins who may view provider prices (the count stays visible)
+    const shown: MarginWarning[] = found.length && !(await this.canViewProviderPrices(by)) ? found.map((c) => ({ comboKey: c.comboKey })) : found;
+    if (found.length && !confirmed) throw new ConflictException({ statusCode: 409, code: 'NEGATIVE_MARGIN', message: NEGATIVE_MSG, conflicts: shown });
+    return shown;
   }
 
-  private withNegative(after: Record<string, unknown>, conflicts: MarginConflict[]) {
+  private async canViewProviderPrices(userId: string): Promise<boolean> {
+    const user = Types.ObjectId.isValid(userId) ? await this.users.findById(userId).lean() : null;
+    return !!user && user.role === 'admin' && (!user.permissions || user.permissions.includes('provider_price_view'));
+  }
+
+  private withNegative(after: Record<string, unknown>, conflicts: MarginWarning[]) {
     return conflicts.length ? { ...after, negativeMargin: conflicts } : after;
   }
 
@@ -487,10 +647,9 @@ export class PriceBookService {
         return await this.versions.create({ ...fields, version: (last?.version ?? 0) + 1 });
       } catch (err) {
         const e = err as { code?: number; keyPattern?: Record<string, unknown> };
-        if (e.code !== 11000) throw err;
-        // a duplicate on another unique index (e.g. one pending submission per combo) is a real conflict, not a version race
-        if (e.keyPattern && !('version' in e.keyPattern)) throw new ConflictException('نسخه دیگری برای این ترکیب در انتظار تأیید است');
-        if (attempt >= 4) throw err;
+        // a duplicate on another unique index (the one-pending-per-combo index) is a real conflict, not a version race
+        if (e.code === 11000 && e.keyPattern && !('version' in e.keyPattern)) throw new ConflictException(PENDING_EXISTS);
+        if (e.code !== 11000 || attempt >= 4) throw err;
       }
     }
   }
@@ -517,7 +676,7 @@ export class PriceBookService {
       }
     }
     const negative = to === 'published'
-      ? await this.checkMargin(before.comboKey, future ? new Date(before.effectiveFrom) : startsAt, before.layer, before.providerId, this.valueOf(before), confirmNegativeMargin)
+      ? await this.checkMargin(before.comboKey, future ? new Date(before.effectiveFrom) : startsAt, before.layer, before.providerId, this.valueOf(before), confirmNegativeMargin, by)
       : [];
     // Disabling a version that has not started yet cancels it (zero-length window); an active one stops selling now.
     const cancel = to === 'disabled' && future;

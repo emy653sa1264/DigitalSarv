@@ -77,3 +77,16 @@ export class HistoryQueryDto {
   @IsOptional() @IsMongoId() providerId?: string;
   @IsString() @MaxLength(120) comboKey: string;
 }
+
+export class SubmitProviderPriceDto {
+  @IsString() @MaxLength(120) comboKey: string;
+  @IsInt({ message: 'قیمت باید عدد صحیح و نامنفی (تومان) باشد' }) @Min(0) price: number;
+  @IsOptional() @IsISO8601() effectiveFrom?: string;
+  @IsString() @MinLength(1, { message: 'دلیل تغییر قیمت را بنویسید' }) @MaxLength(300) reason: string;
+}
+export class ProviderPricesQueryDto {
+  @IsOptional() @IsIn(['bw', 'color', 'spiral', 'addon']) service?: 'bw' | 'color' | 'spiral' | 'addon';
+}
+export class ProviderHistoryQueryDto {
+  @IsString() @MaxLength(120) comboKey: string;
+}

@@ -1,7 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 
-export const PRICE_AUDIT_ACTIONS = ['create', 'publish', 'schedule', 'disable', 'rollback', 'bulk', 'approve', 'reject', 'range'] as const;
+export const PRICE_AUDIT_ACTIONS = ['create', 'submit', 'publish', 'schedule', 'disable', 'rollback', 'bulk', 'approve', 'reject', 'range'] as const;
 export type PriceAuditAction = (typeof PRICE_AUDIT_ACTIONS)[number];
 
 /** Append-only audit of every price-book change (spec §32 step 10, §101 rule 26). */

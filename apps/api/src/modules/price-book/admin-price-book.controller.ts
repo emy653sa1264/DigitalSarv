@@ -30,6 +30,12 @@ export class AdminPriceBookController {
   @Get('price-book/compare') @RequirePermissions('provider_price_view', 'customer_price_view')
   compare(@Query() q: CompareQueryDto) { return this.book.compare(q.service, q.providerId); }
 
+  @Get('price-book/pending') @RequirePermissions('provider_price_view')
+  pending(@Query() q: PageQueryDto) {
+    const { page, limit } = pageParams(q);
+    return this.book.pendingList(page, limit);
+  }
+
   @Get('price-book/audit')
   async audit(@Query() q: PageQueryDto, @CurrentUser() user: AuthUser) {
     const { page, limit } = pageParams(q);
@@ -47,6 +53,12 @@ export class AdminPriceBookController {
 
   @Post('price-book/versions/:id/publish') @HttpCode(200)
   publish(@Param('id') id: string, @Body() dto: ConfirmReasonDto, @CurrentUser() user: AuthUser) { return this.book.publish(id, dto.reason, user.id, !!dto.confirmNegativeMargin); }
+
+  @Post('price-book/versions/:id/approve') @HttpCode(200)
+  approve(@Param('id') id: string, @Body() dto: ConfirmReasonDto, @CurrentUser() user: AuthUser) { return this.book.approve(id, dto.reason, user.id, !!dto.confirmNegativeMargin); }
+
+  @Post('price-book/versions/:id/reject') @HttpCode(200)
+  reject(@Param('id') id: string, @Body() dto: ReasonDto, @CurrentUser() user: AuthUser) { return this.book.reject(id, dto.reason, user.id); }
 
   @Post('price-book/versions/:id/disable') @HttpCode(200)
   disable(@Param('id') id: string, @Body() dto: ReasonDto, @CurrentUser() user: AuthUser) { return this.book.disable(id, dto.reason, user.id); }

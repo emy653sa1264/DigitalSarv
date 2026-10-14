@@ -1,3 +1,4 @@
+import { ConflictException } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { fakeModel } from '../../../test/fake-model.js';
 import type { PriceLayer } from './price-book.constants.js';
@@ -166,5 +167,210 @@ describe('insertVersion duplicate-key handling', () => {
     const { svc, by, versions } = setup();
     vi.spyOn(versions, 'create').mockRejectedValueOnce(new Error('boom'));
     await expect(svc.create(cust(4500), by)).rejects.toThrow('boom');
+  });
+});
+
+describe('provider submissions and approval (D8)', () => {
+  const PU = String(new Types.ObjectId());
+  const submit = (svc: PriceBookService, providerId: string, price: number, o: object = {}) =>
+    svc.submit(providerId, { comboKey: KEY, price, reason: 'افزایش قیمت کاغذ', ...o }, PU);
+
+  it('a submission waits for approval and never takes effect', async () => {
+    const { svc, A } = setup();
+    const s = await submit(svc, A, 3600);
+    expect(s).toMatchObject({ status: 'pending_approval', price: 3600, version: 1 });
+    const row = (await svc.matrix('provider', 'bw', new Date(), A)).find((r) => r.comboKey === KEY)!;
+    expect(row.current).toBeNull();
+    expect(row.pending?.price).toBe(3600);
+  });
+  it('one pending per combo', async () => {
+    const { svc, A, B } = setup();
+    await submit(svc, A, 3600);
+    await expect(submit(svc, A, 3650)).rejects.toThrow(/در انتظار تأیید/);
+    await expect(submit(svc, B, 3650)).resolves.toMatchObject({ status: 'pending_approval' });
+  });
+  it('approve publishes now (or at the requested time) and never touches the customer price (§24)', async () => {
+    const { svc, versions, catalog, by, A, B } = setup();
+    await svc.create(cust(4500), by);
+    const s = await submit(svc, A, 3600);
+    catalog.invalidate.mockClear();
+    const ok = await svc.approve(s.id, 'تأیید شد', by);
+    expect(ok).toMatchObject({ status: 'active', reviewNote: 'تأیید شد' });
+    expect(catalog.invalidate).toHaveBeenCalled();
+    expect((await current(svc, 'customer'))?.unitPrice).toBe(4500);
+    expect(versions.docs.filter((d) => d.layer === 'customer')).toHaveLength(1);
+    const later = await submit(svc, B, 3700, { effectiveFrom: new Date(Date.now() + 86_400_000).toISOString() });
+    expect((await svc.approve(later.id, 'ok', by)).status).toBe('scheduled');
+  });
+  it('reject keeps the reason for the provider', async () => {
+    const { svc, by, A } = setup();
+    const s = await submit(svc, A, 9000);
+    await svc.reject(s.id, 'قیمت بالاتر از عرف است', by);
+    const row = (await svc.providerPrices(A, 'bw')).find((r) => r.comboKey === KEY)!;
+    expect(row.pending).toBeNull();
+    expect(row.lastRejected).toMatchObject({ status: 'rejected', price: 9000, reviewNote: 'قیمت بالاتر از عرف است' });
+    await expect(submit(svc, A, 3600)).resolves.toMatchObject({ version: 2 });
+  });
+  it('approving above the customer price needs confirmation (§25)', async () => {
+    const { svc, by, A } = setup();
+    await svc.create(cust(3500), by);
+    const s = await submit(svc, A, 3700);
+    const err = await svc.approve(s.id, 'ok', by).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ConflictException);
+    expect((err as ConflictException).getResponse()).toMatchObject({ code: 'NEGATIVE_MARGIN' });
+    await expect(svc.approve(s.id, 'ok', by, true)).resolves.toMatchObject({ status: 'active' });
+  });
+  it('only pending provider versions can be approved or rejected, by provider-price publishers', async () => {
+    const { svc, by, A, customerOnly } = setup();
+    const c = await svc.create(cust(4500), by);
+    await expect(svc.approve(c.id, 'x', by)).rejects.toThrow(/فقط قیمت‌های مجری/);
+    const s = await submit(svc, A, 3600);
+    await expect(svc.approve(s.id, 'x', customerOnly)).rejects.toThrow(/دسترسی/);
+    await svc.approve(s.id, 'x', by);
+    await expect(svc.approve(s.id, 'x', by)).rejects.toThrow(/وضعیت این نسخه تغییر کرده/);
+    await expect(svc.reject(s.id, 'x', by)).rejects.toThrow(/وضعیت این نسخه تغییر کرده/);
+  });
+  it('validates submissions', async () => {
+    const { svc, A } = setup();
+    await expect(submit(svc, A, 10.5)).rejects.toThrow(/عدد صحیح/);
+    await expect(submit(svc, A, 3600, { comboKey: 'bw|A9|single' })).rejects.toThrow(/ترکیب/);
+    await expect(submit(svc, A, 3600, { effectiveFrom: new Date(Date.now() - 3_600_000).toISOString() })).rejects.toThrow(/گذشته/);
+    await expect(submit(svc, A, 3600, { reason: ' ' })).rejects.toThrow(/دلیل/);
+  });
+  it('ignores a smuggled providerId: a provider only ever writes and reads its own versions', async () => {
+    const { svc, versions, A, B } = setup();
+    await svc.submit(A, { comboKey: KEY, price: 3600, reason: 'x', providerId: B } as never, PU);
+    expect(versions.docs.map((d) => String(d.providerId))).toEqual([A]);
+    await submit(svc, B, 3700);
+    expect((await svc.providerHistory(A, KEY)).map((v) => v.price)).toEqual([3600]);
+  });
+  it('provider views never contain customer prices, margins, authors or other providers (§26)', async () => {
+    const { svc, by, A, B } = setup();
+    await svc.create(cust(4567), by);
+    await svc.create(prov(B, 3789), by);
+    await svc.create(prov(A, 3456), by);
+    const rows = await svc.providerPrices(A, 'bw', PU);
+    const json = JSON.stringify(rows) + JSON.stringify(await svc.providerHistory(A, KEY, PU));
+    expect(json.match(/"price":\d+/g)).toEqual(expect.arrayContaining(['"price":3456']));
+    expect(new Set(json.match(/"price":\d+/g))).toEqual(new Set(['"price":3456']));
+    expect(json).not.toMatch(/createdBy|reviewedBy|baseProviderId|providerId|layer|markup|margin|unitPrice|4567|3789/);
+  });
+  it('shows a reason only for versions the caller itself created (P4)', async () => {
+    const { svc, by, A } = setup();
+    await svc.create(prov(A, 3500, { reason: 'یادداشت داخلی مدیر' }), by);
+    const own = await submit(svc, A, 3600);
+    expect(own.reason).toBe('افزایش قیمت کاغذ');
+    const hist = await svc.providerHistory(A, KEY, PU);
+    expect(hist.find((v) => v.price === 3600)?.reason).toBe('افزایش قیمت کاغذ');
+    expect(hist.find((v) => v.price === 3500)?.reason).toBe('');
+    const other = await svc.providerHistory(A, KEY, String(new Types.ObjectId()));
+    expect(other.every((v) => v.reason === '')).toBe(true);
+    expect(JSON.stringify(other)).not.toContain('یادداشت داخلی');
+    const rows = await svc.providerPrices(A, 'bw', PU);
+    expect(rows.find((r) => r.comboKey === KEY)!.current?.reason).toBe('');
+  });
+  it('capable reflects the provider capabilities', async () => {
+    const { svc, A } = setup();
+    expect((await svc.providerPrices(A, 'bw')).every((r) => r.capable === false)).toBe(true);
+  });
+  it('lists pending submissions for the admin with names and current prices', async () => {
+    const { svc, by, A } = setup();
+    await svc.create(cust(4500), by);
+    await svc.create(prov(A, 3500), by);
+    await submit(svc, A, 3600);
+    const page = await svc.pendingList(1, 20);
+    expect(page.total).toBe(1);
+    expect(page.items[0]).toMatchObject({ providerName: 'مجری الف', label: 'چاپ سیاه‌وسفید · A4 · یک‌رو', currentProviderPrice: 3500, customerPrice: 4500 });
+    expect(page.items[0].version).toMatchObject({ price: 3600, status: 'pending_approval' });
+  });
+  it('pendingList reads in batch, not per row (P13)', async () => {
+    const { svc, versions, by, A, B } = setup();
+    await svc.create(cust(4500), by);
+    await submit(svc, A, 3600);
+    await submit(svc, B, 3700);
+    versions.find.mockClear();
+    const page = await svc.pendingList(1, 20);
+    expect(page.items).toHaveLength(2);
+    expect(versions.find.mock.calls.length).toBeLessThanOrEqual(2);
+  });
+});
+
+describe('negative margin visibility (M2-R1)', () => {
+  it('names and prices only for admins with provider_price_view (create path + audit)', async () => {
+    const { svc, audits, by, customerOnly, A } = setup();
+    await svc.create(prov(A, 3500), by);
+    const full = await svc.create(cust(3000), by).catch((e: ConflictException) => e.getResponse());
+    expect(full).toMatchObject({ code: 'NEGATIVE_MARGIN', conflicts: [{ comboKey: KEY, providerId: A, providerName: 'مجری الف', providerPrice: 3500, customerPrice: 3000 }] });
+    const red = await svc.create(cust(3000), customerOnly).catch((e: ConflictException) => e.getResponse());
+    expect((red as { conflicts: unknown }).conflicts).toEqual([{ comboKey: KEY }]);
+    expect(JSON.stringify(red)).not.toMatch(/مجری الف|3500|providerId/);
+    await svc.create(cust(3000, { confirmNegativeMargin: true }), customerOnly);
+    expect(audits.docs.at(-1)!.after.negativeMargin).toEqual([{ comboKey: KEY }]);
+  });
+  it('a publisher without view gets the redacted warning on approve, publish and rollback', async () => {
+    const { svc, users, audits, by, A } = setup();
+    const U = String(new Types.ObjectId());
+    const blind = new Types.ObjectId();
+    users.docs.push({ _id: blind, name: 'ناظر', role: 'admin', permissions: ['provider_price_publish', 'customer_price_edit', 'customer_price_publish', 'customer_price_rollback'] });
+    const b = String(blind);
+    const old = await svc.create(cust(3000), by);
+    await svc.create(cust(4500), by);
+    const s = await svc.submit(A, { comboKey: KEY, price: 3500, reason: 'x' }, U);
+    // approve: 3500 is below 4500, so no conflict; confirm the full path first
+    await svc.approve(s.id, 'ok', b);
+    // publish a draft customer price below the provider price
+    const draft = await svc.create(cust(2900, { publish: false }), b);
+    const pub = await svc.publish(draft.id, 'x', b).catch((e: ConflictException) => e.getResponse());
+    expect(pub).toMatchObject({ code: 'NEGATIVE_MARGIN' });
+    expect((pub as { conflicts: unknown }).conflicts).toEqual([{ comboKey: KEY }]);
+    expect(JSON.stringify(pub)).not.toMatch(/مجری الف|3500|providerId/);
+    const rb = await svc.rollback(old.id, 'x', b).catch((e: ConflictException) => e.getResponse());
+    expect((rb as { conflicts: unknown }).conflicts).toEqual([{ comboKey: KEY }]);
+    await svc.rollback(old.id, 'x', b, true);
+    expect(audits.docs.at(-1)!.after.negativeMargin).toEqual([{ comboKey: KEY }]);
+  });
+  it('approve: the redacted warning for a publisher without view, the full one with it', async () => {
+    const { svc, users, audits, by, A } = setup();
+    const U = String(new Types.ObjectId());
+    const blind = new Types.ObjectId();
+    users.docs.push({ _id: blind, name: 'ناظر', role: 'admin', permissions: ['provider_price_publish'] });
+    const b = String(blind);
+    await svc.create(cust(3000), by);
+    const s = await svc.submit(A, { comboKey: KEY, price: 3500, reason: 'x' }, U);
+    const red = await svc.approve(s.id, 'ok', b).catch((e: ConflictException) => e.getResponse());
+    expect(red).toMatchObject({ code: 'NEGATIVE_MARGIN', conflicts: [{ comboKey: KEY }] });
+    expect(JSON.stringify(red)).not.toMatch(/مجری الف|3500|3000|providerId/);
+    const full = await svc.approve(s.id, 'ok', by).catch((e: ConflictException) => e.getResponse());
+    expect(full).toMatchObject({ conflicts: [{ providerId: A, providerName: 'مجری الف', providerPrice: 3500, customerPrice: 3000 }] });
+    await svc.approve(s.id, 'ok', b, true);
+    expect(audits.docs.at(-1)).toMatchObject({ action: 'approve' });
+    expect(audits.docs.at(-1)!.after.negativeMargin).toEqual([{ comboKey: KEY }]);
+  });
+});
+
+describe('margin check follow-ups (Task 7 review)', () => {
+  it('a scheduled publish is checked at its own effectiveFrom', async () => {
+    const { svc, by, A } = setup();
+    const soon = new Date(Date.now() + 86_400_000).toISOString();
+    const later = new Date(Date.now() + 2 * 86_400_000).toISOString();
+    await svc.create(cust(4500), by);
+    await svc.create(prov(A, 3500), by);
+    // a provider price scheduled for tomorrow is not in force today, so a cheap customer price now is fine...
+    await svc.create(prov(A, 5000, { effectiveFrom: soon, confirmNegativeMargin: true }), by);
+    await expect(svc.create(cust(4400), by)).resolves.toMatchObject({ status: 'active' });
+    // ...but scheduling a customer price for after that change conflicts with it
+    const res = await svc.create(cust(4400, { effectiveFrom: later }), by).catch((e: ConflictException) => e.getResponse());
+    expect(res).toMatchObject({ code: 'NEGATIVE_MARGIN', conflicts: [{ providerPrice: 5000, customerPrice: 4400 }] });
+  });
+  it('a confirmed rollback records negativeMargin in the audit', async () => {
+    const { svc, audits, by, A } = setup();
+    const old = await svc.create(cust(3000), by);
+    await svc.create(cust(4500), by);
+    await svc.create(prov(A, 3500), by);
+    await expect(svc.rollback(old.id, 'بازگشت', by)).rejects.toBeInstanceOf(ConflictException);
+    await svc.rollback(old.id, 'بازگشت', by, true);
+    const last = audits.docs.at(-1)!;
+    expect(last.action).toBe('rollback');
+    expect(last.after.negativeMargin).toEqual([expect.objectContaining({ comboKey: KEY, providerId: A, providerPrice: 3500, customerPrice: 3000 })]);
   });
 });

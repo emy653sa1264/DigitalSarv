@@ -36,3 +36,8 @@ export type PriceVersionDocument = HydratedDocument<PriceVersion>;
 export const PriceVersionSchema = SchemaFactory.createForClass(PriceVersion);
 PriceVersionSchema.index({ layer: 1, providerId: 1, comboKey: 1, version: 1 }, { unique: true });
 PriceVersionSchema.index({ layer: 1, comboKey: 1, state: 1, effectiveFrom: -1 });
+/** At most one pending submission per provider + combo (D8); concurrent duplicates fail with 11000 → 409. */
+PriceVersionSchema.index(
+  { layer: 1, providerId: 1, comboKey: 1 },
+  { unique: true, partialFilterExpression: { state: 'pending_approval' }, name: 'one_pending_per_combo' },
+);
