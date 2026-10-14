@@ -249,6 +249,7 @@ export class CatalogService {
     };
     const printAddons = { ...current.printAddons, ...defined(dto.printAddons ?? {}) } as PrintAddons;
     const dispatch = { ...current.dispatch, ...defined(dto.dispatch ?? {}) } as DispatchSettings;
+    if (dispatch.urgentLeadHours > dispatch.leadHours) throw new BadRequestException('مهلت سفارش فوری نباید بیشتر از مهلت سفارش عادی باشد');
     let pickupPoints = current.pickupPoints;
     if (dto.pickupPoints) {
       const seen = new Set<string>();

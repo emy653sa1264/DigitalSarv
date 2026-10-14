@@ -122,4 +122,10 @@ describe('v4.2 dispatch settings and pickup points', () => {
     const p = { id: 'pp1', name: 'الف', address: 'آدرس', phone: '02100000000', hours: '', on: true };
     await expect(svc.updateSettings({ pickupPoints: [p, { ...p, name: 'ب' }] } as never)).rejects.toThrow('شناسه محل تحویل تکراری است');
   });
+  it('urgent lead hours may not exceed the normal lead hours (merged with the stored value)', async () => {
+    const { svc } = setup({ settings: [{ _id: 'main', prices: {} }] });
+    await expect(svc.updateSettings({ dispatch: { urgentLeadHours: 60 } } as never)).rejects.toThrow('مهلت سفارش فوری نباید بیشتر از مهلت سفارش عادی باشد');
+    await expect(svc.updateSettings({ dispatch: { leadHours: 12 } } as never)).rejects.toThrow('مهلت سفارش فوری');
+    await expect(svc.updateSettings({ dispatch: { leadHours: 12, urgentLeadHours: 12 } } as never)).resolves.toMatchObject({ dispatch: { leadHours: 12, urgentLeadHours: 12 } });
+  });
 });
