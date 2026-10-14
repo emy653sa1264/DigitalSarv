@@ -147,3 +147,84 @@ describe('ProviderJobsService — delivery role and shop pickup (§61–62)', ()
     expect(s.orders.docs[0].status).toBe('delivered');
   });
 });
+
+const VIEW_KEYS = ['assignedAt', 'deadline', 'delivery', 'id', 'late', 'orderCode', 'priority', 'providerSubtotal', 'respondBy', 'roles', 'services', 'status', 'statusLabel', 'summary'];
+const DETAIL_KEYS = [...VIEW_KEYS, 'collectFrom', 'contact', 'files', 'history', 'homePickup', 'itemsReceived', 'lines', 'pricing', 'qc'];
+const by = (id: string) => new Types.ObjectId(id);
+const ent = (o: Doc) => ({ at: new Date(), action: 'status', byRole: 'provider', ...o });
+
+describe('ProviderJobsService — fix round 1', () => {
+  it('I1: a status change carries the assignment id; a stale one is a 409 and changes nothing', async () => {
+    const s = setup({ status: 'accepted' });
+    const own = vi.spyOn(s.svc as never, 'own' as never);
+    const stale = { ...s.job, assignment: { ...s.job.assignment, id: new Types.ObjectId() } };
+    own.mockResolvedValueOnce(stale as never);
+    await expect(s.svc.setStatus(String(P), s.id, { status: 'in_production' } as never, USER)).rejects.toThrow('هم‌زمان');
+    expect(s.jobsModel.docs[0].status).toBe('accepted');
+  });
+  it('I2: a reassign between the read and the seen-write does not mark the new provider’s job as seen', async () => {
+    const s = setup();
+    const orig = s.jobsModel.updateOne.bind(s.jobsModel);
+    vi.spyOn(s.jobsModel, 'updateOne').mockImplementationOnce(((...a: unknown[]) => {
+      Object.assign(s.jobsModel.docs[0], { providerId: Q, assignment: { id: new Types.ObjectId(), providerId: Q, assignedAt: new Date() } });
+      return (orig as (...x: unknown[]) => unknown)(...a);
+    }) as never);
+    await expect(s.svc.detail(String(P), s.id)).rejects.toThrow('سفارش یافت نشد');
+    expect(s.jobsModel.docs[0].assignment.seenAt).toBeUndefined();
+  });
+  it('I3: the shop-handover producer sees the customer only from ready on; the delivery role not after completion', async () => {
+    const o = { status: 'packing', delivery: { method: 'customer_pickup', homePickup: false, note: '', pickupAt: 'provider' } };
+    for (const st of ['assigned', 'accepted', 'in_production', 'completed', 'cancelled']) {
+      const s = setup({ status: st, deliveryMethod: 'customer_pickup', pickupAt: 'provider' }, o);
+      expect((await s.svc.detail(String(P), s.id)).contact).toBeNull();
+    }
+    for (const st of ['ready', 'ready_for_pickup', 'delivered']) {
+      const s = setup({ status: st, deliveryMethod: 'customer_pickup', pickupAt: 'provider' }, o);
+      expect((await s.svc.detail(String(P), s.id)).contact).toEqual({ name: 'مریم رضایی', phone: '09120001122', address: '', note: '' });
+    }
+    const s = setup({ status: 'completed', deliveryMethod: 'provider', deliveryProviderId: F });
+    expect((await s.svc.detail(String(F), s.id)).contact).toBeNull();
+  });
+  it('I4: history shows each provider its own events only, and notes only when the caller wrote them', async () => {
+    const other = String(new Types.ObjectId());
+    const history = [
+      ent({ status: 'in_production', providerId: P, by: by(USER), reason: 'یادداشت تولید' }),
+      ent({ status: 'ready', providerId: P, deliveryProviderId: F, by: by(String(new Types.ObjectId())), byRole: 'admin', reason: 'یادداشت مدیر' }),
+      ent({ status: 'out_for_delivery', providerId: P, deliveryProviderId: F, by: by(other), reason: 'یادداشت پیک' }),
+    ];
+    const s = setup({ status: 'out_for_delivery', deliveryMethod: 'provider', deliveryProviderId: F, history });
+    const f = await s.svc.detail(String(F), s.id, other);
+    expect(f.history.map((h) => h.status)).toEqual(['ready', 'out_for_delivery']);
+    expect(f.history.map((h) => h.note)).toEqual([undefined, 'یادداشت پیک']);
+    expect(JSON.stringify(f.history)).not.toMatch(/یادداشت تولید|یادداشت مدیر/);
+    const p = await s.svc.detail(String(P), s.id, USER);
+    expect(p.history.map((h) => h.note)).toEqual(['یادداشت تولید', undefined, undefined]);
+    expect(JSON.stringify(await s.svc.detail(String(P), s.id))).not.toMatch(/یادداشت/);
+  });
+  it('M4: key sets of list items and of the delivery-only detail', async () => {
+    const s = setup();
+    const item = (await s.svc.list(String(P), { tab: 'new' } as never)).items[0];
+    expect(Object.keys(item).sort()).toEqual(VIEW_KEYS.filter((k) => k !== 'respondBy' || true).sort());
+    const d = setup({ status: 'ready', deliveryMethod: 'provider', deliveryProviderId: F });
+    const det = await d.svc.detail(String(F), d.id);
+    expect(Object.keys(det).sort()).toEqual(DETAIL_KEYS.filter((k) => !['assignedAt', 'respondBy'].includes(k)).sort());
+    expect(det.services).toEqual([]);
+    expect(det.history.length).toBe(0);
+  });
+  it('M4: the producer cannot deliver a provider-method job; the delivery provider gets 404 before ready; QC index past the labels is rejected', async () => {
+    const s = setup({ status: 'ready', deliveryMethod: 'provider', deliveryProviderId: F });
+    await expect(s.svc.setStatus(String(P), s.id, { status: 'out_for_delivery' } as never, USER)).rejects.toThrow(/مجاز نیست/);
+    const t = setup({ status: 'in_production', deliveryMethod: 'provider', deliveryProviderId: F });
+    await expect(t.svc.setStatus(String(F), t.id, { status: 'out_for_delivery' } as never, USER)).rejects.toThrow('سفارش یافت نشد');
+    await expect(t.svc.setQc(String(P), t.id, 5, true)).rejects.toThrow('ردیف چک‌لیست معتبر نیست');
+  });
+  it('M6: failed with «سایر» needs a written note', async () => {
+    const s = setup({ status: 'in_production' });
+    await expect(s.svc.setStatus(String(P), s.id, { status: 'failed', reasonCode: 'other' } as never, USER)).rejects.toThrow('برای «سایر» توضیح بنویسید');
+  });
+  it('M1: QC is not ticked once the order is packing', async () => {
+    const s = setup({ status: 'in_production' }, { status: 'packing' });
+    await expect(s.svc.setQc(String(P), s.id, 0, true)).rejects.toThrow();
+    expect(s.orders.docs[0].qc).toEqual([false]);
+  });
+});

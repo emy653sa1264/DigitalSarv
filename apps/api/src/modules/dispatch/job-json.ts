@@ -210,13 +210,18 @@ export function providerLines(order: Pick<Order, 'children' | 'services'>, names
 
 type ProviderOrder = Pick<Order, 'children' | 'services' | 'status' | 'customerName' | 'customerPhone' | 'pickup' | 'delivery' | 'qc' | 'qcLabels'>;
 
+/** Q21: a shop-handover producer sees the customer only while the parcel is at the shop; a delivery provider only while delivering. */
+const HANDOVER_CONTACT: JobStatus[] = ['ready', 'ready_for_pickup', 'delivered'];
+const DELIVERY_CONTACT: JobStatus[] = ['ready', 'out_for_delivery', 'delivered'];
+
 export function providerJobDetail(job: JobRow, order: ProviderOrder, me: string, ctx: {
-  summary: string; lines: ProviderJobLine[]; files: UploadView[]; collectFrom: ProviderJobDetail['collectFrom']; now: Date;
+  summary: string; lines: ProviderJobLine[]; files: UploadView[]; collectFrom: ProviderJobDetail['collectFrom']; now: Date; userId?: string;
 }): ProviderJobDetail {
   const view = providerJobView(job, me, ctx.summary, ctx.now);
   const production = view.roles.includes('production');
   const delivering = view.roles.includes('delivery');
-  const handover = production && job.deliveryMethod === 'customer_pickup' && job.pickupAt === 'provider';
+  const handover = production && job.deliveryMethod === 'customer_pickup' && job.pickupAt === 'provider' && HANDOVER_CONTACT.includes(job.status);
+  const showDelivery = delivering && DELIVERY_CONTACT.includes(job.status);
   const note = deliveryOf(order).note;
   const own = production && job.providerPricing?.providerId === me ? job.providerPricing : null;
   const labels = qcLabelsOf(order);
@@ -227,11 +232,12 @@ export function providerJobDetail(job: JobRow, order: ProviderOrder, me: string,
     qc: production ? { labels, done: labels.map((_, i) => order.qc?.[i] === true) } : null,
     pricing: own ? { lines: own.lines.map((l) => ({ label: l.label, unitPrice: l.unitPrice, quantity: l.quantity, subtotal: l.subtotal })), missing: own.missing.map((m) => m.label), subtotal: own.providerSubtotal } : null,
     // §62: only who delivers (or hands over at its shop) gets the customer's contact; the address only for delivery
-    contact: delivering || handover ? { name: order.customerName, phone: order.pickup?.phone || order.customerPhone, address: delivering ? (order.pickup?.address ?? '') : '', note: delivering ? note : '' } : null,
+    contact: showDelivery || handover ? { name: order.customerName, phone: order.pickup?.phone || order.customerPhone, address: showDelivery ? (order.pickup?.address ?? '') : '', note: showDelivery ? note : '' } : null,
     collectFrom: delivering && !production ? ctx.collectFrom : null,
     homePickup: job.homePickup, itemsReceived: !productionBlocked({ status: order.status, homePickup: job.homePickup }),
+    // only the caller's own events: production = entries it held; delivery = its delivery-visible entries. A note only when the caller wrote it
     history: (job.history ?? [])
-      .filter((e) => String(e.providerId) === me || String(e.deliveryProviderId) === me)
-      .map((e) => ({ at: iso(e.at)!, status: e.status, label: JOB_STATUS_LABELS[e.status], ...(e.byRole === 'provider' && e.reason ? { note: e.reason } : {}) })),
+      .filter((e) => (production && String(e.providerId) === me) || (delivering && String(e.deliveryProviderId) === me && DELIVERY_VISIBLE.includes(e.status)))
+      .map((e) => ({ at: iso(e.at)!, status: e.status, label: JOB_STATUS_LABELS[e.status], ...(ctx.userId && e.by && String(e.by) === ctx.userId && e.reason ? { note: e.reason } : {}) })),
   };
 }

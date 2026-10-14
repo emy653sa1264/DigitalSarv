@@ -73,7 +73,7 @@ export class ProviderJobsService {
     return job as JobRow;
   }
 
-  private async render(job: JobRow, providerId: string): Promise<ProviderJobDetail> {
+  private async render(job: JobRow, providerId: string, userId?: string): Promise<ProviderJobDetail> {
     const order = (await this.orders.findById(job.orderId).lean()) as OrderRow | null;
     if (!order) throw new NotFoundException(NOT_FOUND);
     const production = rolesOf(job, providerId).includes('production');
@@ -84,7 +84,7 @@ export class ProviderJobsService {
       !production && job.providerId ? this.collectFrom(job.providerId) : null,
     ]);
     const names = { colors: new Map(colors.map((c) => [c.key, c.name])), extras: new Map(extras.map((x) => [x.key, x.label])) };
-    return providerJobDetail(job, order, providerId, { summary: orderSummary(order), lines: production ? providerLines(order, names) : [], files, collectFrom, now: new Date() });
+    return providerJobDetail(job, order, providerId, { summary: orderSummary(order), lines: production ? providerLines(order, names) : [], files, collectFrom, now: new Date(), userId });
   }
 
   /** The order's line files (never the courier's pickup photos, §65). */
@@ -100,13 +100,13 @@ export class ProviderJobsService {
     return c ? { name: c.businessName || c.name, address: c.address ?? '', phone: c.phone ?? '' } : null;
   }
 
-  async detail(providerId: string, id: string): Promise<ProviderJobDetail> {
+  async detail(providerId: string, id: string, userId?: string): Promise<ProviderJobDetail> {
     let job = await this.own(providerId, id);
     if (job.status === 'assigned' && String(job.providerId) === providerId && !job.assignment?.seenAt) {
-      await this.jobModel.updateOne({ _id: job._id, status: 'assigned', 'assignment.seenAt': { $exists: false } }, { $set: { 'assignment.seenAt': new Date() } });
+      await this.jobModel.updateOne({ _id: job._id, status: 'assigned', providerId: new Types.ObjectId(providerId), 'assignment.id': job.assignment?.id, 'assignment.seenAt': { $exists: false } }, { $set: { 'assignment.seenAt': new Date() } });
       job = await this.own(providerId, id);
     }
-    return this.render(job, providerId);
+    return this.render(job, providerId, userId);
   }
 
   private assertWaiting(job: JobRow, providerId: string) {
@@ -117,14 +117,14 @@ export class ProviderJobsService {
     const job = await this.own(providerId, id);
     this.assertWaiting(job, providerId);
     await this.jobs.move(id, 'accepted', { actor: 'production', byRole: 'provider', by: userId, providerId, ...(job.assignment ? { assignmentId: String(job.assignment.id) } : {}) });
-    return this.render(await this.own(providerId, id), providerId);
+    return this.render(await this.own(providerId, id), providerId, userId);
   }
 
   async reject(providerId: string, id: string, dto: RejectJobDto, userId: string): Promise<{ ok: true }> {
-    this.assertWaiting(await this.own(providerId, id), providerId);
+    const job = await this.own(providerId, id);
+    this.assertWaiting(job, providerId);
     if (dto.reasonCode === 'other' && !dto.note?.trim()) throw new BadRequestException('برای «سایر» توضیح بنویسید');
-    const job = await this.jobs.byId(id);
-    await this.jobs.giveBack(job, 'rejected', {
+    await this.jobs.giveBack(job as never, 'rejected', {
       byRole: 'provider', by: userId, providerId, reasonCode: dto.reasonCode, reason: dto.note?.trim() || REJECT_REASON_LABELS[dto.reasonCode],
       ...(job.assignment ? { assignmentId: String(job.assignment.id) } : {}),
     });
@@ -138,16 +138,18 @@ export class ProviderJobsService {
     const actor = rolesOf(job, providerId).find((r) => canMove(job.status, dto.status, r, ctx));
     if (!actor) throw new BadRequestException(`تغییر وضعیت از «${JOB_STATUS_LABELS[job.status]}» به «${JOB_STATUS_LABELS[dto.status]}» مجاز نیست`);
     if (dto.status === 'failed' && !dto.reasonCode) throw new BadRequestException('دلیل را انتخاب کنید');
+    if (dto.status === 'failed' && dto.reasonCode === 'other' && !dto.note?.trim()) throw new BadRequestException('برای «سایر» توضیح بنویسید');
     await this.jobs.move(id, dto.status, {
       actor, byRole: 'provider', by: userId, providerId, reasonCode: dto.reasonCode,
+      ...(job.assignment ? { assignmentId: String(job.assignment.id) } : {}),
       reason: dto.note?.trim() || (dto.reasonCode ? REJECT_REASON_LABELS[dto.reasonCode] : undefined),
     });
     if (dto.status === 'failed') return { ok: true };
-    return this.render(await this.own(providerId, id), providerId);
+    return this.render(await this.own(providerId, id), providerId, userId);
   }
 
   /** The production provider ticks the order's QC checklist (the `ready` step needs it complete). One item per write. */
-  async setQc(providerId: string, id: string, index: number, done: boolean): Promise<ProviderJobDetail> {
+  async setQc(providerId: string, id: string, index: number, done: boolean, userId?: string): Promise<ProviderJobDetail> {
     const job = await this.own(providerId, id);
     if (String(job.providerId) !== providerId || !['accepted', 'in_production'].includes(job.status)) {
       throw new BadRequestException('چک‌لیست کنترل کیفیت فقط حین انجام سفارش ثبت می‌شود');
@@ -155,8 +157,14 @@ export class ProviderJobsService {
     const order = (await this.orders.findById(job.orderId).lean()) as OrderRow | null;
     if (!order) throw new NotFoundException(NOT_FOUND);
     if (index >= qcLabelsOf(order).length) throw new BadRequestException('ردیف چک‌لیست معتبر نیست');
-    const res = await this.orders.updateOne({ _id: order._id, status: { $nin: ['cancelled', 'delivered'] } }, { $set: { [`qc.${index}`]: done }, $inc: { __v: 1 } });
+    // the job guard (holder, assignment, status) is one atomic write; the order write is then guarded by the order status
+    const held = await this.jobModel.updateOne(
+      { _id: job._id, providerId: job.providerId, 'assignment.id': job.assignment?.id, status: { $in: ['accepted', 'in_production'] } },
+      { $set: { updatedAt: new Date() } },
+    );
+    if (!held.modifiedCount) throw raced();
+    const res = await this.orders.updateOne({ _id: order._id, status: { $nin: ['packing', 'out_for_delivery', 'delivered', 'cancelled'] } }, { $set: { [`qc.${index}`]: done }, $inc: { __v: 1 } });
     if (!res.modifiedCount) throw raced();
-    return this.render(await this.own(providerId, id), providerId);
+    return this.render(await this.own(providerId, id), providerId, userId);
   }
 }

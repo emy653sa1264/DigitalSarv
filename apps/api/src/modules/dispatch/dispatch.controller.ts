@@ -57,7 +57,7 @@ export class ProviderJobsController {
   constructor(private readonly jobs: ProviderJobsService) {}
 
   @Get() list(@CurrentProvider() pid: string, @Query() q: ProviderJobsQueryDto) { return this.jobs.list(pid, q); }
-  @Get(':id') detail(@CurrentProvider() pid: string, @Param('id') id: string) { return this.jobs.detail(pid, id); }
+  @Get(':id') detail(@CurrentProvider() pid: string, @Param('id') id: string, @CurrentUser() user: AuthUser) { return this.jobs.detail(pid, id, user.id); }
 
   @Post(':id/accept') @HttpCode(200)
   accept(@CurrentProvider() pid: string, @Param('id') id: string, @CurrentUser() user: AuthUser) { return this.jobs.accept(pid, id, user.id); }
@@ -69,5 +69,5 @@ export class ProviderJobsController {
   status(@CurrentProvider() pid: string, @Param('id') id: string, @Body() dto: ProviderJobStatusDto, @CurrentUser() user: AuthUser) { return this.jobs.setStatus(pid, id, dto, user.id); }
 
   @Patch(':id/qc')
-  qc(@CurrentProvider() pid: string, @Param('id') id: string, @Body() dto: QcDto) { return this.jobs.setQc(pid, id, dto.index, dto.done); }
+  qc(@CurrentProvider() pid: string, @Param('id') id: string, @Body() dto: QcDto, @CurrentUser() user: AuthUser) { return this.jobs.setQc(pid, id, dto.index, dto.done, user.id); }
 }
