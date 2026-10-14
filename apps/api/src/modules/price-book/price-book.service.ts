@@ -231,18 +231,29 @@ export class PriceBookService {
     const bulkId = randomUUID();
     const effectiveFrom = input.effectiveFrom ? new Date(input.effectiveFrom) : new Date();
     if (Number.isNaN(effectiveFrom.getTime())) throw new BadRequestException('تاریخ معتبر نیست');
-    const docs = [];
-    for (const row of preview.rows) {
-      docs.push(await this.insertVersion({
-        layer: 'customer', providerId: null, comboKey: row.comboKey, mode: 'manual', price: row.next,
-        rounding: 0, effectiveFrom, state: 'published', reason: why, createdBy: new Types.ObjectId(by), bulkId,
-      }));
+    const docs: Awaited<ReturnType<PriceBookService['insertVersion']>>[] = [];
+    const skipped = [...preview.skipped];
+    const future = effectiveFrom.getTime() > Date.now();
+    const applied: BulkPreview['rows'] = [];
+    try {
+      for (const row of preview.rows) {
+        if (future && (await this.versions.exists({ layer: 'customer', providerId: null, comboKey: row.comboKey, state: 'published', effectiveFrom }))) {
+          skipped.push({ comboKey: row.comboKey, label: row.label, reason: 'قیمت دیگری با همین زمان شروع منتشر شده است' });
+          continue;
+        }
+        docs.push(await this.insertVersion({
+          layer: 'customer', providerId: null, comboKey: row.comboKey, mode: 'manual', price: row.next,
+          rounding: 0, effectiveFrom, state: 'published', reason: why, createdBy: new Types.ObjectId(by), bulkId,
+        }));
+        applied.push(row);
+      }
+    } finally {
+      if (docs.length) {
+        await this.catalog.invalidate();
+        await this.audit('bulk', docs, why, by, { op: input.op, value: input.value, rounding: input.rounding ?? 0, filter: input.filter }, applied);
+      }
     }
-    if (docs.length) {
-      await this.audit('bulk', docs, why, by, { op: input.op, value: input.value, rounding: input.rounding ?? 0, filter: input.filter }, preview.rows);
-      await this.catalog.invalidate();
-    }
-    return { bulkId, created: docs.length, skipped: preview.skipped };
+    return { bulkId, created: docs.length, skipped };
   }
 
   // ------------------------------------------------------------ spiral ranges

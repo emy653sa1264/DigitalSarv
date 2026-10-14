@@ -125,4 +125,28 @@ describe('bulk', () => {
     const { svc } = setup();
     await expect(svc.bulkPreview({ layer: 'provider' as never, filter: {}, op: 'replace', value: 1 })).rejects.toThrow();
   });
+  it('audits and invalidates what it wrote when an insert fails mid-way', async () => {
+    const { svc, versions, audits, catalog, by } = setup();
+    await svc.create(base, by);
+    await svc.create({ ...base, comboKey: 'bw|A4|double', price: 5000 }, by);
+    catalog.invalidate.mockClear();
+    const real = versions.create.getMockImplementation()!;
+    let calls = 0;
+    versions.create.mockImplementation(async (d: never) => { if (++calls === 2) throw new Error('boom'); return real(d); });
+    const body = { layer: 'customer' as const, filter: { service: 'bw' as const, size: 'A4' as const }, op: 'inc_fixed' as const, value: 100, reason: 'تست' };
+    await expect(svc.bulkApply(body, by)).rejects.toThrow('boom');
+    const bulk = audits.docs.filter((a) => a.action === 'bulk');
+    expect(bulk).toHaveLength(1);
+    expect(bulk[0].comboKeys).toHaveLength(1);
+    expect(catalog.invalidate).toHaveBeenCalled();
+  });
+  it('skips combos that already have a published version at the same future start', async () => {
+    const { svc, by } = setup();
+    const at = new Date(Date.now() + 3_600_000).toISOString();
+    await svc.create(base, by);
+    await svc.create({ ...base, price: 4000, effectiveFrom: at }, by);
+    const res = await svc.bulkApply({ layer: 'customer', filter: { comboKeys: ['bw|A4|single'] }, op: 'replace', value: 1, effectiveFrom: at, reason: 'x' }, by);
+    expect(res.created).toBe(0);
+    expect(res.skipped).toEqual([expect.objectContaining({ comboKey: 'bw|A4|single', reason: 'قیمت دیگری با همین زمان شروع منتشر شده است' })]);
+  });
 });
