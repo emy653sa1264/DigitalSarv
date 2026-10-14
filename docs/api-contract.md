@@ -622,3 +622,206 @@ next scheduled price change. `GET /admin/settings` / `PUT /admin/settings` gain 
 - Campaign services gain `black_white_printing`, `color_printing` (`DEFAULT_CAMPAIGN_SERVICES` too; `seed:base` adds
   both to every campaign that lists `print`). QC checklist of both kinds = `checklists.qc.print`. Extras with scope
   `print` apply to both kinds.
+## v4.1 — providers and provider prices (Master Specification V4, Milestone 2)
+
+Design: `docs/v4-design.md` (D1, D8, D9, D13, D16). Everything is additive; v1–v4.0 behaviour is unchanged unless stated.
+
+### Roles and sessions
+
+- `Role` gains `provider`. `User.providerId?: string` (only for role `provider`). `User.permissions?: Permission[]`
+  is serialized for admins (absent = super-admin).
+- **Session revocation:** when an account's role or provider link changes (provider login linked to an existing
+  account, unlinked or replaced; staff demoted), every token issued before that moment is rejected with 401.
+  Redis `user:revoked:<userId>` = unix seconds, TTL 30 days; a token whose `iat` is ≤ that value is invalid
+  (second precision: a login in the very second of the change has to be repeated).
+- `ADMIN_PHONES` admins are always super-admins: the boot upsert also removes `permissions` and `providerId`.
+
+### Providers («مجریان» — the centres, extended; D1)
+
+```ts
+type ProviderStatus = 'active' | 'inactive' | 'busy' | 'suspended';   // فعال / غیرفعال / مشغول / تعلیق‌شده
+type ProviderService = 'black_white_printing' | 'color_printing' | 'docs' | 'school' | 'flyer' | 'cart' | 'repair';
+type CapabilityAddon = 'mixed' | 'spiral' | 'glue' | 'hardcover' | 'staple' | 'lam_cover' | 'lam_sheet';
+type EquipmentKind = 'printer' | 'binder' | 'laminator' | 'cutter' | 'other';
+type EquipmentTag = 'A3' | 'A4' | 'A5' | 'A6' | 'bw' | 'color' | 'high_volume' | 'spiral' | 'glue' | 'hardcover' | 'staple' | 'laminate';
+interface Capability {
+  service: ProviderService;
+  sizes: PrintSize[]; colorTypes: ColorType[]; papers: string[] /* Paper.key */; sides: ('single' | 'double')[];
+  addons: CapabilityAddon[];
+}
+interface WorkingHours { weekday: number /* JS getDay of the Tehran date, 0 = Sunday … 6 = Saturday */; from: string; to: string /* 'HH:mm' */ }
+interface Equipment { name: string; kind: EquipmentKind; capabilities: EquipmentTag[] }
+interface Capacity { dailySheets?: number; hourlySheets?: number; perService: { service: ProviderService; perDay: number }[] }
+interface ProviderAdmin {
+  id: string; name: string; businessName: string; contactName: string; phone: string; address: string; lat?: number; lng?: number;
+  zone: string;                                   // v1 free-text zone (kept)
+  status: ProviderStatus; availableForOrders: boolean; workingHours: WorkingHours[];
+  serviceZoneIds: string[]; serviceZones: { id: string; name: string }[];
+  canDeliver: boolean; deliveryFee: number; allowCustomerPickup: boolean; adminNotes: string;
+  capacity: Capacity; equipment: Equipment[]; capabilities: Capability[];
+  capacityPerDay: number; processingHours: number; commissionPct: number; rating: number;  // v1 fields (kept)
+  login: { userId: string; phone: string; name: string } | null;
+  createdAt: string; updatedAt: string;
+}
+type ProviderSelf = Omit<ProviderAdmin, 'adminNotes' | 'commissionPct' | 'rating' | 'login' | 'serviceZoneIds' | 'zone' | 'capacityPerDay' | 'processingHours'>;
+interface CenterListItem { id: string; name: string; zone: string; capacityPerDay: number; processingHours: number; commissionPct: number;
+  rating: number; address: string; lat?: number; lng?: number; status: ProviderStatus; availableForOrders: boolean }
+```
+
+Validation (400, Persian): weekday 0–6, `HH:mm`, `from < to`, no overlapping intervals on one weekday, ≤ 28 intervals;
+service zones must exist (no duplicates); one capability per service; print services (`black_white_printing`,
+`color_printing`) need ≥ 1 size and ≥ 1 side; colour also ≥ 1 colour type and ≥ 1 existing paper; B/W has no colour
+types / papers / `mixed`; other services carry no options; ≤ 30 equipment items, each with a name; capacities and
+`deliveryFee` are integers ≥ 0; one per-service capacity per service. Contact `phone` is normalized (400 «شماره تماس
+معتبر نیست»). Centres saved before v4.1 read with defaults (`status: 'active'`, `availableForOrders: true`, empty lists,
+`canDeliver: false`, `deliveryFee: 0`, `allowCustomerPickup: false`); `seed:base` writes those defaults once (only
+while `status` is missing).
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/admin/providers` | `provider_view` | `ProviderAdmin[]` by `_id` |
+| GET | `/admin/providers/:id` | `provider_view` | `ProviderAdmin` |
+| POST | `/admin/providers` | `provider_manage` | body: every `ProviderAdmin` field except `id`, `serviceZones`, `login`, timestamps; `name` required (400 «نام مجری را وارد کنید») |
+| PATCH | `/admin/providers/:id` | `provider_edit` | partial body; list fields are replaced as a whole |
+| DELETE | `/admin/providers/:id` | `provider_manage` | 409 «این مجری N سفارش باز دارد؛ ابتدا سفارش‌ها را به مجری دیگری بدهید»; 409 «این مجری قیمت ثبت‌شده دارد؛ به‌جای حذف آن را غیرفعال کنید» when it has provider-layer versions or is the base of a customer version; unlinks the login |
+| PUT | `/admin/providers/:id/login` | `provider_manage` | `{ phone }` → `ProviderAdmin`. Creates the user (role `provider`) or converts an existing customer; 409 «این شماره متعلق به مدیر سیستم است» (admin), «این شماره متعلق به یک پیک است» (courier), «این شماره به مجری دیگری متصل است»; a previous login of this provider goes back to `customer` |
+| DELETE | `/admin/providers/:id/login` | `provider_manage` | → `ProviderAdmin`; the user goes back to `customer` |
+| GET | `/admin/centers` | admin | `CenterListItem[]` (assignment selects; no permission needed) |
+| POST · PATCH/DELETE | `/admin/centers` · `/admin/centers/:id` | as `/admin/providers` | aliases of the provider writes |
+| GET | `/provider/me` | provider | `ProviderSelf` |
+
+**Provider scope.** Every `/provider/*` route requires a `provider` token whose user — re-read from Mongo per request —
+has role `provider`, a `providerId`, and is that provider's linked login (`Center.userId`); otherwise **403**
+«حساب مجری برای این کاربر تعریف نشده است». The provider id is never read from the URL, query or body.
+
+Admin menu: «مراکز چاپ» becomes «مدیریت مجریان» (`/admin/providers`; `/admin/centers` redirects there). New menu item
+«کارکنان و دسترسی‌ها» (`/admin/staff`). Unlimited providers.
+
+### Provider price layer (D8, §16–29)
+
+- Versions with `layer: 'provider'` and `providerId`; mode **`manual` only** (`price` integer toman ≥ 0, rounding 0).
+  Same combination keys, time resolution, display statuses, history, audit, scheduling, disable, rollback as the
+  customer layer. 400 «قیمت مجری فقط به‌صورت دستی ثبت می‌شود» for other modes.
+- `PriceVersion` gains `baseProviderId?: string` (customer markup / `provider_price` formula), `reviewNote?: string`
+  (approve/reject note — the rejection reason the provider sees), `reviewedAt?: string`. `PriceAudit.action` gains
+  `submit`; audit entries carry `providerId: string | null`.
+- **Submission:** a provider submits a price → `pending_approval` (never effective). At most one pending submission
+  per provider + combo: 409 «برای این ترکیب یک قیمت در انتظار تأیید دارید».
+- **Approve** → `published`, `effectiveFrom = max(requested effectiveFrom, now)` (a future request becomes scheduled);
+  409 «قیمت دیگری با همین زمان شروع (هم‌زمان) منتشر شده است» like M1. **Reject** → `rejected` with
+  `reviewNote = reason`. Approving never creates or changes a customer version.
+- Admins may also create provider versions directly (draft or published) — §22/§24 «Admin changes Provider Price».
+- Missing provider price (no effective version) = «قیمت مجری تنظیم نشده» in every UI; never a fallback (§53).
+
+Admin endpoints — the M1 routes gain the provider layer; the permission is `<layer>_price_<action>` of the request's
+`layer` (or of the stored version's layer for `:id` routes):
+
+| Method | Path | Permission | Notes |
+|---|---|---|---|
+| GET | `/admin/price-book?layer=customer\|provider&providerId=&service=` | `<layer>_price_view` | `MatrixRow[]`, rows gain `pending: PriceVersion \| null` and `lastRejected: PriceVersion \| null` (only when newer than current/pending); `providerId` required for `provider` (400 «مجری را انتخاب کنید») |
+| GET | `/admin/price-book/history?layer=&providerId=&comboKey=` | `<layer>_price_view` | |
+| POST | `/admin/price-book/versions` | `<layer>_price_edit` (+ `<layer>_price_publish` when `publish`) | body adds `providerId` (provider layer), `baseProviderId`, `confirmNegativeMargin?: boolean` |
+| POST | `/admin/price-book/versions/:id/publish` | `<layer>_price_publish` | `{ reason, confirmNegativeMargin? }` |
+| POST | `/admin/price-book/versions/:id/disable` | `<layer>_price_publish` | `{ reason }` |
+| POST | `/admin/price-book/versions/:id/rollback` | `<layer>_price_rollback` | `{ reason, confirmNegativeMargin? }` |
+| POST | `/admin/price-book/versions/:id/approve` | `provider_price_publish` | `{ reason, confirmNegativeMargin? }`; 400 «فقط قیمت‌های مجری تأیید می‌شوند»; 409 «وضعیت این نسخه تغییر کرده است؛ صفحه را تازه کنید» unless pending |
+| POST | `/admin/price-book/versions/:id/reject` | `provider_price_publish` | `{ reason }` |
+| GET | `/admin/price-book/pending?page=&limit=` | `provider_price_view` | paged `PendingItem` newest first |
+| GET | `/admin/price-book/compare?service=&providerId=` | `provider_price_view` + `customer_price_view` | `CompareRow[]` (`service` required) |
+| POST | `/admin/price-book/preview` | `<layer>_price_view` | body adds `layer?` (default `customer`), `baseProviderId?` |
+| POST | `/admin/price-book/bulk/preview` | `<layer>_price_bulk_update` | `BulkBody` (below); rows gain `negativeMargin: boolean` |
+| POST | `/admin/price-book/bulk/apply` | `<layer>_price_bulk_update` + `<layer>_price_publish` | `BulkBody & { reason, confirmNegativeMargin? }` |
+| GET | `/admin/price-book/audit?page=&limit=` | `customer_price_view` or `provider_price_view` | only entries of the layers the admin may view; items gain `providerId` |
+
+```ts
+interface BulkBody {
+  layer: 'customer' | 'provider';          // exactly one layer per operation
+  providerId?: string;                     // required for 'provider'
+  filter: { service?: 'bw'|'color'|'spiral'|'addon'; size?: PrintSize; colorType?: ColorType; paper?: string; side?: 'single'|'double'; comboKeys?: string[] };
+  op: 'inc_pct' | 'dec_pct' | 'inc_fixed' | 'dec_fixed' | 'replace'; value: number; rounding?: 0|100|500|1000; effectiveFrom?: string;
+}
+interface MarginConflict { comboKey: string; providerId: string; providerName: string; providerPrice: number; customerPrice: number }
+interface PendingItem { version: PriceVersion; providerName: string; label: string; currentProviderPrice: number | null; customerPrice: number | null }
+interface CompareRow {
+  comboKey: string; label: string; service: 'bw'|'color'|'spiral'|'addon';
+  providerId: string; providerName: string; providerStatus: ProviderStatus;
+  providerPrice: number | null; pendingPrice: number | null;
+  customerPrice: number | null; customerMode: 'manual'|'fixed_markup'|'percent_markup'|'formula' | null;
+  difference: number | null; marginPct: number | null; negative: boolean;
+}
+```
+`difference = customer − provider` (both known); `marginPct = round((customer − provider) / provider × 100, 1 decimal)`
+only when `provider > 0` (§42); `negative = difference < 0`. Margins are admin-only.
+
+**Negative margin (§25).** Publishing (create with `publish`, publish, rollback, approve, bulk apply) answers **409**
+`{ statusCode: 409, code: 'NEGATIVE_MARGIN', message: 'قیمت مشتری کمتر از قیمت مجری است', conflicts: MarginConflict[] }`
+when, at the version's `effectiveFrom`, the effective customer unit price (quantity 1) of the combo would be lower than
+any provider's effective price. Resend with `confirmNegativeMargin: true` to proceed; the audit entry's `after` then
+carries `negativeMargin: MarginConflict[]`. Bulk: `confirmNegativeMargin` covers every flagged row.
+
+**Customer price modes (§21).** In addition to `manual` and `formula`:
+- `fixed_markup`: unit = `provider_price + markup` (markup integer toman ≥ 0);
+- `percent_markup`: unit = `provider_price × (1 + markup / 100)` (markup integer 0–1000);
+- both require `baseProviderId` (an existing provider; 400 «مجری پایه را انتخاب کنید»); rounding applies afterwards;
+- `formula` may use `provider_price` only with `baseProviderId` (400 «برای استفاده از provider_price مجری پایه را انتخاب کنید»);
+- `provider_price` = the base provider's effective price of the **same combo** at the same time; missing/disabled →
+  the customer combo is UNAVAILABLE (quote `unavailable`, absent from `catalog.printing.prices`).
+- A markup version is the explicit automatic rule of §24: when the base provider's price changes, the customer unit
+  price follows. Every provider-layer change invalidates the catalog, and the cache TTL is capped at the next scheduled
+  change of any base provider.
+- Bulk on the customer layer skips non-`manual` versions («قیمت فرمولی یا وابسته به مجری است»).
+
+### Provider app endpoints (role `provider`, scoped)
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/provider/prices?service=bw\|color\|spiral\|addon` | `ProviderPriceRow[]` — every known combination with the caller's own versions |
+| GET | `/provider/prices/history?comboKey=` | `ProviderPriceView[]` — own versions, newest first |
+| POST | `/provider/prices` | `{ comboKey, price, effectiveFrom?, reason }` → `ProviderPriceView` (`pending_approval`); 400 «زمان اعمال نمی‌تواند در گذشته باشد» (60 s grace), 400 «ترکیب قیمت معتبر نیست», 409 pending exists |
+
+```ts
+interface ProviderPriceView { id: string; comboKey: string; version: number; price: number | null; effectiveFrom: string;
+  effectiveUntil?: string; status: PriceStatus; reason: string; reviewNote?: string; createdAt: string }
+interface ProviderPriceRow { comboKey: string; service: 'bw'|'color'|'spiral'|'addon'; options: ComboOptions; label: string;
+  capable: boolean;            // inside the provider's capabilities (hint; submission is allowed regardless)
+  current: ProviderPriceView | null; next: ProviderPriceView | null; pending: ProviderPriceView | null; lastRejected: ProviderPriceView | null }
+```
+
+### Staff permissions (§81)
+
+| Method | Path | Notes |
+|---|---|---|
+| GET | `/admin/staff` | `StaffMember[]` `{ id, name, phone, superAdmin: boolean, bootstrap: boolean, permissions: Permission[] \| null, createdAt }` (`null` = super-admin; `bootstrap` = listed in `ADMIN_PHONES`) |
+| POST | `/admin/staff` | `{ phone, name?, permissions?: Permission[] \| null }` → `StaffMember`. Creates the user or promotes a customer; omitted `permissions` = `[]` (no granular permission), `null` = super-admin; 409 «این شماره قبلاً مدیر است», «این شماره متعلق به یک پیک است», «این شماره متعلق به یک مجری است» |
+| PATCH | `/admin/staff/:id` | `{ name?, permissions?: Permission[] \| null }` (`null` = super-admin) |
+| DELETE | `/admin/staff/:id` | demotes to `customer`, removes `permissions`, revokes sessions → `{ ok: true }` |
+
+Only super-admins may call `/admin/staff*` (403 «به این بخش دسترسی ندارید»). 409 «حداقل یک مدیر کل باید باقی بماند»
+when a change would leave no super-admin (demotion or restriction). 400 «این مدیر از تنظیمات سرور (ADMIN_PHONES) تعیین
+شده و همیشه مدیر کل است» for bootstrap admins. Permissions are read live, so a permission change applies on the next
+request. Provider-management and provider-layer endpoints carry the §81 permissions listed above.
+
+### Zibal (D16)
+
+`PAYMENT_DRIVER=mock|zarinpal|zibal`; `ZIBAL_MERCHANT` (required with `zibal`; `zibal` = the sandbox merchant, refused
+in production unless `PAYMENT_ALLOW_MOCK=1`). Request `POST https://gateway.zibal.ir/v1/request`
+`{ merchant, amount /* rial = toman × 10 */, callbackUrl, orderId /* order code */, description, mobile? }` →
+`{ result: 100, trackId }` (any other result → gateway error, `POST /orders` 503 as today). Pay URL
+`https://gateway.zibal.ir/start/<trackId>`. Callback `GET /api/payments/zibal/callback?trackId=&success=1|0&status=&orderId=`
+(authority = `trackId`; `success=1` ≙ `Status=OK`). Verify `POST https://gateway.zibal.ir/v1/verify` `{ merchant, trackId }`:
+`result 100` (verified) or `201` (already verified) = paid (`refNumber` → `payment.refId`, `cardNumber` → `payment.cardPan`);
+any other result = definitive failure; network error, timeout (15 s), HTTP 5xx or non-JSON = retryable (`verifying`).
+Every v2 idempotency / verifying / never-drop rule applies unchanged.
+
+### Seed (dev)
+
+`seed:base`: centres missing `status` get the provider defaults (data kept). Demo `seed` adds: provider login
+**09122222222** → «چاپ نگین» (capabilities B/W + colour A4/A5, spiral; canDeliver); provider prices
+`bw|A4|single` چاپ نگین 3,500 · دیجیتال آرت 3,700 · چاپخانه مهر 3,400 (published, §87); one pending submission of
+چاپ نگین `bw|A4|double` 3,600. The customer `bw|A4|single` stays 3,500 manual (so the pricing center shows a
+negative margin against دیجیتال آرت).
+
+### PWA
+
+`/provider/` is the 5th installable app «سرو مجری» (manifest `manifest-provider.webmanifest`, theme `#0fa9bd`, `noindex`):
+login (OTP), «قیمت‌های من», «پروفایل».

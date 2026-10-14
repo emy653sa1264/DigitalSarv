@@ -37,7 +37,7 @@ The four v2 files share one prototype script (logic/pricing unchanged from v1); 
 - [x] V2-5b Brand: owner logo (vector trace → `logo-path.ts`, app icons, favicon) and owner hero illustration on the landing (WebP srcset + OG cover)
 - [x] V2-6 Integration: build all, Docker images, Playwright pass on all 4 apps (desktop + phone, mock gateway payment, PDF upload), security review (10 findings fixed), CI green on GitHub
 - [x] V4-M1 Pricing core — `docs/superpowers/plans/2026-10-14-v4-m1-pricing-core.md` (design `docs/v4-design.md`)
-- [ ] V4-M2 Providers, provider prices, staff permissions, Zibal
+- [ ] V4-M2 Providers, provider prices, staff permissions, Zibal — `docs/superpowers/plans/2026-10-15-v4-m2-providers.md`
 - [ ] V4-M3 Dispatch center, provider panel, fulfillment and delivery
 - [ ] V4-M4 Provider ledger and settlement
 - [ ] V4-M5 Security and regression verification
@@ -45,5 +45,5 @@ The four v2 files share one prototype script (logic/pricing unchanged from v1); 
 ## Needs from the owner before going live
 
 Zarinpal merchant ID, Kavenegar API key + OTP template, production domain + TLS, admin phone numbers, server/VPS. Everything runs locally with `mock`/`log` drivers until then.
-- Zibal merchant ID (needed for V4-M2).
+- Zibal merchant ID (`ZIBAL_MERCHANT`) for production; until then `zibal` (sandbox) on staging only.
 - Confirmation of the 5 assumptions in `docs/v4-design.md`.
