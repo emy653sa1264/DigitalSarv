@@ -1,0 +1,82 @@
+import { displayStatus, nextChangeAt, pickEffective, roundTo, unitPrice, type VersionLike } from './resolve.js';
+
+const d = (s: string) => new Date(s);
+const v = (o: Partial<VersionLike> & { id: string; version: number }): VersionLike => ({
+  state: 'published', mode: 'manual', price: 1000, rounding: 0, effectiveFrom: d('2026-01-01T00:00:00Z'), ...o,
+});
+
+describe('pickEffective', () => {
+  const at = d('2026-06-01T00:00:00Z');
+  it('takes the latest effectiveFrom, then the highest version', () => {
+    const a = v({ id: 'a', version: 1, effectiveFrom: d('2026-01-01T00:00:00Z') });
+    const b = v({ id: 'b', version: 2, effectiveFrom: d('2026-03-01T00:00:00Z') });
+    const c = v({ id: 'c', version: 3, effectiveFrom: d('2026-03-01T00:00:00Z') });
+    expect(pickEffective([a, b, c], at)?.id).toBe('c');
+  });
+  it('ignores future, draft, pending and rejected versions', () => {
+    const live = v({ id: 'live', version: 1 });
+    const future = v({ id: 'f', version: 2, effectiveFrom: d('2026-07-01T00:00:00Z') });
+    const draft = v({ id: 'dr', version: 3, state: 'draft', effectiveFrom: d('2026-05-01T00:00:00Z') });
+    expect(pickEffective([live, future, draft], at)?.id).toBe('live');
+  });
+  it('disabled latest hides older', () => {
+    const old = v({ id: 'old', version: 1 });
+    const off = v({ id: 'off', version: 2, state: 'disabled', effectiveFrom: d('2026-02-01T00:00:00Z') });
+    expect(pickEffective([old, off], at)).toBeNull();
+    const back = v({ id: 'back', version: 3, effectiveFrom: d('2026-04-01T00:00:00Z') });
+    expect(pickEffective([old, off, back], at)?.id).toBe('back');
+  });
+  it('a temporary price ends and the previous applies again', () => {
+    const base = v({ id: 'base', version: 1 });
+    const promo = v({ id: 'promo', version: 2, effectiveFrom: d('2026-05-01T00:00:00Z'), effectiveUntil: d('2026-05-15T00:00:00Z') });
+    expect(pickEffective([base, promo], d('2026-05-10T00:00:00Z'))?.id).toBe('promo');
+    expect(pickEffective([base, promo], at)?.id).toBe('base');
+  });
+  it('none → null', () => expect(pickEffective([], at)).toBeNull());
+});
+
+describe('displayStatus', () => {
+  const at = d('2026-06-01T00:00:00Z');
+  it('labels every state', () => {
+    expect(displayStatus(v({ id: 'a', version: 1 }), 'a', at)).toBe('active');
+    expect(displayStatus(v({ id: 'b', version: 1 }), 'a', at)).toBe('expired');
+    expect(displayStatus(v({ id: 'c', version: 1, effectiveFrom: d('2026-07-01T00:00:00Z') }), 'a', at)).toBe('scheduled');
+    expect(displayStatus(v({ id: 'e', version: 1, state: 'draft' }), 'a', at)).toBe('draft');
+    expect(displayStatus(v({ id: 'f', version: 1, state: 'disabled' }), null, at)).toBe('disabled');
+  });
+});
+
+describe('unitPrice', () => {
+  it('manual price, rounded', () => {
+    expect(unitPrice(v({ id: 'a', version: 1, price: 3549, rounding: 100 }), {})).toBe(3500);
+    expect(unitPrice(v({ id: 'a', version: 1, price: 3550, rounding: 100 }), {})).toBe(3600);
+    expect(unitPrice(v({ id: 'a', version: 1, price: 3550, rounding: 0 }), {})).toBe(3550);
+  });
+  it('formula with variables; invalid → null', () => {
+    const f = v({ id: 'f', version: 1, mode: 'formula', price: undefined, formula: '2 * base_price - paper_cost' });
+    expect(unitPrice(f, { base_price: 35000, paper_cost: 4000 })).toBe(66000);
+    expect(unitPrice(f, { base_price: 35000 })).toBeNull(); // paper cost not set
+    expect(unitPrice(f, { base_price: 35000, paper_cost: 80000 })).toBeNull(); // negative
+  });
+  it('manual without a price → null', () => {
+    expect(unitPrice(v({ id: 'a', version: 1, price: undefined }), {})).toBeNull();
+  });
+});
+
+describe('roundTo / nextChangeAt', () => {
+  it('rounds to the nearest multiple', () => {
+    expect(roundTo(1250, 500)).toBe(1500);
+    expect(roundTo(1249, 500)).toBe(1000);
+    expect(roundTo(12.5, 0)).toBe(13);
+  });
+  it('finds the next future boundary', () => {
+    const at = d('2026-06-01T00:00:00Z');
+    const list = [
+      v({ id: 'a', version: 1 }),
+      v({ id: 'b', version: 2, effectiveFrom: d('2026-08-01T00:00:00Z') }),
+      v({ id: 'c', version: 3, effectiveFrom: d('2026-05-01T00:00:00Z'), effectiveUntil: d('2026-07-01T00:00:00Z') }),
+      v({ id: 'dr', version: 4, state: 'draft', effectiveFrom: d('2026-06-02T00:00:00Z') }),
+    ];
+    expect(nextChangeAt(list, at)?.toISOString()).toBe('2026-07-01T00:00:00.000Z');
+  });
+});
