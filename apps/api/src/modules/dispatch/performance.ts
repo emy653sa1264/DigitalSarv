@@ -1,4 +1,6 @@
 /** §67 provider performance — pure, from the job history. Collected for admins only; never used to penalize. */
+import { BadRequestException } from '@nestjs/common';
+import { addDays, tehranDayStart, tehranYmd } from '../../common/utils/dates.js';
 import { REJECT_REASON_LABELS, type JobStatus, type RejectReason } from '../../common/constants.js';
 import { HELD, isLate, type JobHistoryEntry } from './job-model.js';
 
@@ -9,8 +11,18 @@ export interface ProviderPerformance {
   activeJobs: number; todaySheets: number;
 }
 export interface PerfJob {
-  status: JobStatus; providerId?: unknown; deadline: Date; readyAt?: Date; sheets?: number;
+  status: JobStatus; providerId?: unknown; deliveryMethod?: string; deadline: Date; readyAt?: Date; sheets?: number;
   assignment?: { assignedAt: Date }; history: JobHistoryEntry[]; cancel?: { at: Date; providerId?: unknown; stage?: string; byRole?: string };
+}
+
+/** Default: the last 30 Tehran days; rejects an inverted or over-a-year range (400). */
+export function performanceRange(q: { from?: string; to?: string }, now: Date): { from: Date; to: Date; todayStart: Date } {
+  const todayStart = tehranDayStart(tehranYmd(now));
+  const to = q.to ? addDays(tehranDayStart(q.to), 1) : addDays(todayStart, 1);
+  const from = q.from ? tehranDayStart(q.from) : addDays(to, -30);
+  if (from.getTime() >= to.getTime()) throw new BadRequestException('بازه تاریخ معتبر نیست');
+  if (to.getTime() - from.getTime() > 366 * 86_400_000) throw new BadRequestException('بازه حداکثر یک سال است');
+  return { from, to, todayStart };
 }
 
 const ACTIVE: JobStatus[] = [...HELD, 'ready', 'ready_for_pickup', 'out_for_delivery'];
@@ -40,8 +52,12 @@ export function performanceRows(jobs: PerfJob[], providers: { id: string; name: 
           assignedAt = t; acceptedAt = undefined; readyAt = undefined;
           if (counted) a!.assigned++;
           break;
+        case 'migrated': // v1 assignment carried over: counts as assigned + accepted, no response time (Q23)
+          assignedAt = t; acceptedAt = t; readyAt = undefined;
+          if (counted) { a!.assigned++; a!.accepted++; }
+          break;
         case 'accepted':
-          if (counted) { a!.accepted++; if (assignedAt) a!.response.push(minutes(assignedAt, t)); }
+          if (counted) { a!.accepted++; if (assignedAt && e.byRole === 'provider') a!.response.push(minutes(assignedAt, t)); }
           acceptedAt = t;
           break;
         case 'rejected':
@@ -55,7 +71,7 @@ export function performanceRows(jobs: PerfJob[], providers: { id: string; name: 
           if (e.status === 'ready') {
             readyAt = t;
             if (counted && acceptedAt) a!.production.push(minutes(acceptedAt, t));
-          } else if (e.status === 'delivered' && readyAt) {
+          } else if (e.status === 'delivered' && readyAt && j.deliveryMethod === 'provider') {
             const d = acc.get(String(e.deliveryProviderId ?? e.providerId));
             if (d && within(t)) d.delivery.push(minutes(readyAt, t));
           }
@@ -66,7 +82,7 @@ export function performanceRows(jobs: PerfJob[], providers: { id: string; name: 
     }
     const holder = j.providerId ? acc.get(String(j.providerId)) : undefined;
     if (!holder) continue;
-    if (isLate(j, now) && (!j.readyAt || within(new Date(j.readyAt)))) holder.late++;
+    if (isLate(j, now) && (j.readyAt ? within(new Date(j.readyAt)) : new Date(j.deadline).getTime() < range.to.getTime())) holder.late++;
     if (ACTIVE.includes(j.status)) holder.activeJobs++;
     if (todayStart && j.assignment?.assignedAt && new Date(j.assignment.assignedAt) >= todayStart && j.status !== 'cancelled') holder.todaySheets += j.sheets ?? 0;
   }
