@@ -37,8 +37,9 @@ export interface DocsSpec {
   sides: 'single' | 'double';
   copies: number;
   /** v3.3: `BindColor.key` (unknown / switched-off → the first `on` bind colour). */
-  bindColor: string;
-  stamp: 'gold' | 'silver';
+  /** Omitted when `binding` is 'spiral' (hardcover-only options). */
+  bindColor?: string;
+  stamp?: 'gold' | 'silver';
   colorRanges?: { from: number; to: number }[];
   colorPages?: string;
   desc?: string;

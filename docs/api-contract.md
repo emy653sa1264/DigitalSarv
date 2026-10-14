@@ -608,6 +608,7 @@ next scheduled price change. `GET /admin/settings` / `PUT /admin/settings` gain 
   'قیمت سفارش تغییر کرده است', previousTotal, newTotal }`, nothing is created or charged.
 - `Order.services[i].pricing?: { calculatedAt, currency: 'toman', lines: { comboKey, versionId, version, unitPrice,
   quantity, subtotal }[], customerSubtotal }` — snapshot for v4 kinds (and docs spiral). Never rewritten.
+  Docs spiral lines: `docs_print` (per-page printing, versionId '') + `spiral|…` + `spiral_color|…`; extras use `extra|<key>`; non-price-book lines carry versionId '' / version 0.
 - Campaign services gain `black_white_printing`, `color_printing` (`DEFAULT_CAMPAIGN_SERVICES` too; `seed:base` adds
   both to every campaign that lists `print`). QC checklist of both kinds = `checklists.qc.print`. Extras with scope
   `print` apply to both kinds.

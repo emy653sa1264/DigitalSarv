@@ -158,3 +158,28 @@ describe('integration with priceService', () => {
     expect(legacyPrintToV4({ pages: 3, scope: 'all', paper: '', size: 'A4', ink: 'bw', sides: 'single', copies: 1, binding: 'none', staple: false, laminate: 'none' }).kind).toBe('black_white_printing');
   });
 });
+
+describe('task 9 fixes', () => {
+  it('docs spiral snapshot lines sum to the price and drop hardcover options', () => {
+    const docs = { pages: 12, scope: 'all', ink: 'bw', sides: 'single', copies: 3, bindColor: 'maroon', stamp: 'gold', binding: 'spiral', spiralColor: 'white' };
+    const r = priceService({ kind: 'docs', spec: docs as never }, DEFAULT_PRICES, cat());
+    expect(r.pricing!.lines.reduce((s, l) => s + l.subtotal, 0)).toBe(r.price);
+    expect(r.pricing!.lines[0].comboKey).toBe('docs_print');
+    expect(r.service.spec).not.toHaveProperty('bindColor');
+    expect(r.service.spec).not.toHaveProperty('stamp');
+  });
+  it('formula quantity is the line final quantity (sheets x copies)', () => {
+    const c = cat();
+    c.priceBook!.customer['bw|A4|single'] = { versionId: 'q', version: 1, mode: 'formula', formula: 'quantity', rounding: 0 } as never;
+    expect(priceBwPrint(bw({ copies: 3 }), c).lines[0].unitPrice).toBe(30);
+  });
+  it('paper side support flags', () => {
+    const c = cat();
+    const p = c.papers.find((x) => x.key === 'glossy200')!;
+    p.supportsDouble = false;
+    c.priceBook!.customer['color|A4|full|glossy200|double'] = entry(40000);
+    expect(priceColorPrint(color({ paper: 'glossy200', sides: 'double' }), c).unavailable).toBeTruthy();
+    p.supportsDouble = true; p.supportsSingle = false;
+    expect(priceColorPrint(color({ paper: 'glossy200' }), c).unavailable).toBeTruthy();
+  });
+});

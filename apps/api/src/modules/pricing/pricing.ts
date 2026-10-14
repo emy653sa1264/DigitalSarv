@@ -136,10 +136,10 @@ export function normalizeDocs(spec: Partial<DocsSpec> | undefined, cat: ServiceC
     ink: oneOf(s.ink, ['bw', 'color', 'mixed'] as const, 'bw'),
     sides: oneOf(s.sides, ['single', 'double'] as const, 'single'),
     copies: Math.max(1, int(s.copies, 1) || 1),
-    bindColor,
+    ...(binding === 'spiral' ? {} : { bindColor }),
     binding,
     ...(spiralColor ? { spiralColor } : {}),
-    stamp: oneOf(s.stamp, ['gold', 'silver'] as const, 'gold'),
+    ...(binding === 'spiral' ? {} : { stamp: oneOf(s.stamp, ['gold', 'silver'] as const, 'gold') }),
     colorRanges,
     colorPages: text(s.colorPages, 200),
     desc: text(s.desc, 1000),
@@ -150,7 +150,15 @@ export function normalizeDocs(spec: Partial<DocsSpec> | undefined, cat: ServiceC
   };
 }
 
-/** `round(pagesN × inkRate × sidesMul × copies + bind × copies)`, `bind = docBind + stamp + BindColor.extra` */
+/** Snapshot of a docs spiral service: `docs_print` (printing part) + spiral lines x copies; sums exactly to `total`. */
+function docsSpiralLines(lines: PricingLine[], copies: number, total: number): PricingLine[] {
+  const spiral = lines.map((l) => ({ ...l, quantity: l.quantity * copies, subtotal: l.subtotal * copies }));
+  const printPart = total - spiral.reduce((s, l) => s + l.subtotal, 0);
+  return [{ comboKey: 'docs_print', versionId: '', version: 0, unitPrice: printPart, quantity: 1, subtotal: printPart }, ...spiral];
+}
+
+/** Unavailable (spiral without a price/range) returns 0 here; callers go through `priceService`, which flags it.
+ * `round(pagesN × inkRate × sidesMul × copies + bind × copies)`, `bind = docBind + stamp + BindColor.extra` */
 export function docsPrice(spec: Partial<DocsSpec> | undefined, p: Prices, cat: ServiceCatalog = {}): number {
   const d = normalizeDocs(spec, cat);
   const inkRate = d.ink === 'color' ? p.docColor : d.ink === 'mixed' ? p.docMixed : p.docBw;
@@ -476,15 +484,16 @@ export function priceService(
         (d.copies > 1 ? ' · ' + fa(d.copies) + ' سری' : '');
       // v3: «پایان‌نامه و صحافی» (v1–v2 orders keep their stored «چاپ اسناد» label)
       const docsLabel = 'پایان‌نامه و صحافی';
+      const docsTotal = docsPrice(d, p, cat);
       if (spiral && 'unavailable' in spiral) {
         return { service: { kind: 'docs', ...at, spec }, price: 0, label: docsLabel, detail, unavailable: spiral.unavailable };
       }
       return {
         service: { kind: 'docs', ...at, spec },
-        price: docsPrice(d, p, cat),
+        price: docsTotal,
         label: docsLabel,
         detail,
-        ...(spiral ? { pricing: { lines: spiral.lines.map((l) => ({ ...l, quantity: l.quantity * d.copies, subtotal: l.subtotal * d.copies })) } } : {}),
+        ...(spiral ? { pricing: { lines: docsSpiralLines(spiral.lines, d.copies, docsTotal) } } : {}),
       };
     }
     case 'flyer': {

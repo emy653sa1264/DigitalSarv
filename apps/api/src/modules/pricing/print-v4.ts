@@ -7,7 +7,7 @@ import { defaultPrintAddons, type PrintAddons } from '../catalog/catalog.default
 import { comboKey, singleSideKey } from '../price-book/combo.js';
 import { findRange } from '../price-book/ranges.js';
 import { unitPrice } from '../price-book/resolve.js';
-import { extraFor, mergePages, type ServiceCatalog } from './pricing.js';
+import { extraFor, mergePages, resolveOn, type ServiceCatalog } from './pricing.js';
 import type { BwPrintSpec, ColorPrintSpec, DocsSpec, PricingLine, PrintSize, PrintSpec, PrintV4Base, ServiceDraft } from './pricing.types.js';
 
 export const UNAVAILABLE_PRICE = 'این ترکیب در حال حاضر قابل سفارش نیست';
@@ -39,7 +39,7 @@ function normalizeBase(spec: unknown, cat: ServiceCatalog): PrintV4Base & { page
   const laminate = (lam === 'cover' && a.lamCover) || (lam === 'all' && a.lamAll) ? lam : 'none';
   const allowedExtras = new Set((cat.extras ?? []).filter((x) => extraFor(x, 'print')).map((x) => x.key));
   const extras = a.extras ? [...new Set((Array.isArray(s.extras) ? s.extras : []).filter((k): k is string => typeof k === 'string' && allowedExtras.has(k)))].slice(0, 30) : [];
-  const spiralColor = binding === 'spiral' ? (cat.colors ?? []).find((c) => c.on && c.key === s.spiralColor)?.key ?? (cat.colors ?? []).find((c) => c.on)?.key : undefined;
+  const spiralColor = binding === 'spiral' ? resolveOn(s.spiralColor, cat.colors ?? [])?.key : undefined;
   const fileId = typeof s.fileId === 'string' && /^[a-f\d]{24}$/i.test(s.fileId) ? s.fileId : undefined;
   return {
     ...(fileId ? { fileId } : {}), fileName: text(s.fileName, 200), pages, scope, from, to,
@@ -104,23 +104,24 @@ function line(key: string, u: { price: number; versionId: string; version: numbe
 /** Add-ons charged per copy (spiral, glue, hardcover, staple, laminate, extras), as snapshot lines of one copy. */
 function addOnLines(d: PrintV4Base & { pagesN: number }, sheets: number, cat: ServiceCatalog): PricingLine[] {
   const out: PricingLine[] = [];
+  const q = d.copies; // formula `quantity` = the line's own final quantity (line qty x copies)
   if (d.binding === 'spiral') {
     const r = findRange((cat.priceBook?.ranges ?? []).map((x) => ({ ...x, on: true })), d.pagesN);
     if (!r) throw new Unavailable(UNAVAILABLE_SPIRAL);
     const key = comboKey({ service: 'spiral', rangeId: r.id! });
-    out.push(line(key, unit(key, cat, { quantity: 1 }, UNAVAILABLE_SPIRAL), 1));
+    out.push(line(key, unit(key, cat, { quantity: q }, UNAVAILABLE_SPIRAL), 1));
     const extra = d.spiralColor ? ((cat.colors ?? []).find((c) => c.key === d.spiralColor)?.extra ?? 0) : 0;
     if (extra) out.push({ comboKey: `spiral_color|${d.spiralColor}`, versionId: '', version: 0, unitPrice: extra, quantity: 1, subtotal: extra });
   }
   if (d.binding === 'glue' || d.binding === 'hardcover') {
     const key = comboKey({ service: 'addon', addon: d.binding });
-    out.push(line(key, unit(key, cat, { quantity: 1 }), 1));
+    out.push(line(key, unit(key, cat, { quantity: q }), 1));
   }
-  if (d.staple) out.push(line('addon|staple', unit('addon|staple', cat, { quantity: 1 }), 1));
-  if (d.laminate === 'cover') out.push(line('addon|lam_cover', unit('addon|lam_cover', cat, { quantity: 1 }), 1));
+  if (d.staple) out.push(line('addon|staple', unit('addon|staple', cat, { quantity: q }), 1));
+  if (d.laminate === 'cover') out.push(line('addon|lam_cover', unit('addon|lam_cover', cat, { quantity: q }), 1));
   if (d.laminate === 'all') {
     const key = comboKey({ service: 'addon', addon: 'lam_sheet', size: d.size });
-    out.push(line(key, unit(key, cat, { quantity: sheets }), sheets));
+    out.push(line(key, unit(key, cat, { quantity: sheets * q }), sheets));
   }
   for (const k of d.extras ?? []) {
     const x = (cat.extras ?? []).find((e) => e.key === k);
@@ -157,16 +158,16 @@ export function priceColorPrint(spec: unknown, cat: ServiceCatalog = {}): PrintV
     const paper = (cat.papers ?? []).find((p) => p.key === d.paper && p.on && p.colorPrint);
     const sideOk = d.sides === 'double' ? paper?.supportsDouble !== false : paper?.supportsSingle !== false;
     if (!paper || !(paper.supportedSizes ?? SIZES).includes(d.size) || !sideOk) throw new Unavailable(UNAVAILABLE_PAPER);
-    const vars = { quantity: sheets * d.copies, ...(typeof paper.paperCost === 'number' ? { paper_cost: paper.paperCost } : {}) };
+    const extraVars: Record<string, number> = typeof paper.paperCost === 'number' ? { paper_cost: paper.paperCost } : {};
     const colorKey = comboKey({ service: 'color', size: d.size, colorType: d.colorType, paper: d.paper, side: d.sides });
     const first = d.scope === 'range' ? d.from! : 1;
     const last = d.scope === 'range' ? d.to! : d.pages;
     const colorSheets = d.mixed ? colorSheetCount(first, last, d.colorRanges, d.colorPages, d.sides === 'double') : sheets;
     const lines: PricingLine[] = [];
-    if (colorSheets > 0) lines.push(line(colorKey, unit(colorKey, cat, vars), colorSheets));
+    if (colorSheets > 0) lines.push(line(colorKey, unit(colorKey, cat, { quantity: colorSheets * d.copies, ...extraVars }), colorSheets));
     if (colorSheets < sheets) {
       const bwKey = comboKey({ service: 'bw', size: d.size, side: d.sides });
-      lines.push(line(bwKey, unit(bwKey, cat, vars), sheets - colorSheets));
+      lines.push(line(bwKey, unit(bwKey, cat, { quantity: (sheets - colorSheets) * d.copies, ...extraVars }), sheets - colorSheets));
     }
     return finish([...lines, ...addOnLines(d, sheets, cat)], d.copies, sheets, d.pagesN, colorSheets);
   } catch (e) {
