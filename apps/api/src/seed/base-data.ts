@@ -155,3 +155,54 @@ export const SCHOOL_CAMPAIGN = {
   pickupHours: '۱۰ تا ۲۰',
   services: ['school', 'docs', 'print'] as CampaignService[],
 };
+
+/** v4 papers (spec §10–11); `tahrir80` is backfilled, the rest are inserted when missing. */
+export const V4_PAPERS = [
+  { key: 'glossy135', name: 'گلاسه ۱۳۵ گرم', price: 0, on: true, sort: 4, type: 'glossy', weight: 135, colorPrint: true },
+  { key: 'glossy200', name: 'گلاسه ۲۰۰ گرم', price: 0, on: true, sort: 5, type: 'glossy', weight: 200, colorPrint: true },
+  { key: 'card160', name: 'مقوا ۱۶۰ گرم', price: 0, on: true, sort: 6, type: 'cardstock', weight: 160, colorPrint: true },
+] as const;
+
+/** Backfill of the pre-v4 papers (applied only while `colorPrint` is missing — admin edits win). */
+export const V4_PAPER_BACKFILL = [
+  { key: 'tahrir80', set: { type: 'plain', weight: 80, colorPrint: true } },
+  { key: 'tahrir70', set: { type: 'plain', weight: 70, colorPrint: false } },
+  { key: 'glossy', set: { type: 'glossy', weight: 0, colorPrint: false } },
+] as const;
+
+/** Spiral ranges (spec §14). */
+export const SPIRAL_RANGES = [
+  { minPages: 10, maxPages: 12, price: 60000 }, { minPages: 14, maxPages: 16, price: 70000 }, { minPages: 18, maxPages: 20, price: 80000 },
+  { minPages: 22, maxPages: 25, price: 100000 }, { minPages: 30, maxPages: 35, price: 110000 }, { minPages: 40, maxPages: 40, price: 120000 },
+] as const;
+
+const V4_SIZES = ['A3', 'A4', 'A5', 'A6'] as const;
+const LAM_SHEET = { A3: 12000, A4: 6000, A5: 3600, A6: 2400 } as const;
+
+export interface V4PriceSeed { comboKey: string; mode: 'manual' | 'formula'; price?: number; formula?: string }
+
+/** Initial customer prices (v1 of every combo). Unspecified combos get nothing (= UNAVAILABLE, spec §13). */
+export function v4PriceSeeds(rangeIds: string[]): V4PriceSeed[] {
+  const out: V4PriceSeed[] = [];
+  const m = (comboKey: string, price: number) => out.push({ comboKey, mode: 'manual', price });
+  for (const size of V4_SIZES) {
+    m(`bw|${size}|single`, 3500); m(`bw|${size}|double`, 3800);
+    m(`color|${size}|text|tahrir80|single`, 10000); m(`color|${size}|text|tahrir80|double`, 13000);
+    m(`color|${size}|full|tahrir80|single`, 15000); m(`color|${size}|full|tahrir80|double`, 20000);
+    for (const ct of ['text', 'full']) {
+      m(`color|${size}|${ct}|glossy135|single`, 25000);
+      m(`color|${size}|${ct}|glossy200|single`, 35000);
+      m(`color|${size}|${ct}|card160|single`, 35000);
+      out.push({ comboKey: `color|${size}|${ct}|card160|double`, mode: 'formula', formula: '2 * base_price - paper_cost' });
+    }
+    m(`addon|lam_sheet|${size}`, LAM_SHEET[size]);
+  }
+  SPIRAL_RANGES.forEach((r, i) => { if (rangeIds[i]) m(`spiral|${rangeIds[i]}`, r.price); });
+  m('addon|glue', 45000); m('addon|hardcover', 120000); m('addon|staple', 2000); m('addon|lam_cover', 15000);
+  return out;
+}
+
+/** The v4 print services join the services of campaigns that already list `print`. */
+export const V4_CAMPAIGN_SERVICES = ['black_white_printing', 'color_printing'] as const;
+export const CMS_PRINT_OLD_LABEL = 'چاپ اسناد';
+export const CMS_PRINT_NEW_LABEL = 'چاپ سیاه‌وسفید و رنگی';

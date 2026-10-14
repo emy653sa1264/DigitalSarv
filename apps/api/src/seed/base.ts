@@ -17,12 +17,16 @@ import { Settings, SETTINGS_ID } from '../modules/catalog/schemas/settings.schem
 import { Center } from '../modules/centers/center.schema.js';
 import { CmsSection } from '../modules/cms/cms-section.schema.js';
 import { NotificationTemplate } from '../modules/notifications/notification-template.schema.js';
+import { BindingRange } from '../modules/price-book/schemas/binding-range.schema.js';
+import { PriceVersion } from '../modules/price-book/schemas/price-version.schema.js';
 import { PricingRule } from '../modules/rules/rule.schema.js';
 import { Zone } from '../modules/zones/zone.schema.js';
 import {
   CENTERS,
   CMS,
   CMS_DOCS_OLD_LABEL,
+  CMS_PRINT_NEW_LABEL,
+  CMS_PRINT_OLD_LABEL,
   COLORS,
   EXTRAS,
   GRADES,
@@ -33,7 +37,12 @@ import {
   RULES,
   SCHOOL_CAMPAIGN,
   SCHOOL_ONLY_EXTRAS,
+  SPIRAL_RANGES,
   TEXT_EXTRAS,
+  V4_CAMPAIGN_SERVICES,
+  V4_PAPERS,
+  V4_PAPER_BACKFILL,
+  v4PriceSeeds,
   ZONES,
 } from './base-data.js';
 
@@ -86,7 +95,8 @@ export async function seedBase(app: INestApplicationContext, log = new Logger('S
     colors: await insertMissing<Color>(Color.name, ['key'], COLORS),
     extras: await insertMissing<Extra>(Extra.name, ['key'], EXTRAS),
     grades: await insertMissing<Grade>(Grade.name, ['name'], GRADES),
-    papers: await insertMissing<Paper>(Paper.name, ['key'], PAPERS),
+    // fresh databases get the v4 fields right away (the backfill below only serves documents saved before v4)
+    papers: await insertMissing<Paper>(Paper.name, ['key'], PAPERS.map((p) => ({ ...p, ...V4_PAPER_BACKFILL.find((b) => b.key === p.key)?.set }))),
     bindColors: await insertMissing<BindColor>(BindColor.name, ['key'], BIND_COLORS.map((b) => ({ ...b }))),
     settings: await insertMissing<Settings>(Settings.name, ['_id'], [{ _id: SETTINGS_ID, prices: { ...DEFAULT_PRICES }, urgentEnabled: true }]),
     cms: await insertMissing<CmsSection>(CmsSection.name, ['key'], CMS.map(([key, label, on], i) => ({ key, label, on, order: i + 1 }))),
@@ -106,12 +116,43 @@ export async function seedBase(app: INestApplicationContext, log = new Logger('S
   await Extras.updateMany({ key: { $in: TEXT_EXTRAS }, needsText: { $exists: false } }, { $set: { needsText: true } });
   await Extras.updateMany({ needsText: { $exists: false } }, { $set: { needsText: false } });
 
+  // v4 papers: backfill the old ones once (only while `colorPrint` is missing), then insert the new ones
+  const Papers = model<Paper>(Paper.name);
+  for (const { key, set } of V4_PAPER_BACKFILL) {
+    await Papers.updateOne({ key, colorPrint: { $exists: false } }, { $set: set }, { timestamps: false });
+  }
+  counts.v4Papers = await insertMissing<Paper>(Paper.name, ['key'], V4_PAPERS.map((p) => ({ ...p })));
+
+  // v4 spiral ranges: only a database without any range gets the six defaults
+  const Ranges = model<BindingRange>(BindingRange.name);
+  counts.bindingRanges = 0;
+  if ((await Ranges.estimatedDocumentCount()) === 0) {
+    await Ranges.insertMany(SPIRAL_RANGES.map(({ minPages, maxPages }, i) => ({ minPages, maxPages, on: true, sort: i + 1 })));
+    counts.bindingRanges = SPIRAL_RANGES.length;
+  }
+  const rangeIds = (await Ranges.find().sort({ minPages: 1 }).lean()).slice(0, SPIRAL_RANGES.length).map((r) => String(r._id));
+
+  // v4 initial customer prices: version 1 of a combination, only while it has no version at all
+  // (`providerId: null` is part of the filter, so it is stored explicitly on insert)
+  counts.priceVersions = await insertMissing<PriceVersion>(
+    PriceVersion.name,
+    ['layer', 'providerId', 'comboKey'],
+    v4PriceSeeds(rangeIds).map((seed) => ({
+      layer: 'customer', providerId: null, version: 1, rounding: 0, effectiveFrom: new Date(),
+      state: 'published', reason: 'مقدار اولیه (مشخصات V4)', ...seed,
+    })),
+  );
+
   // the exceptions to "never touch existing documents" — landing sections:
   // 1) sections the landing does not render are removed
   counts.cmsRemoved = (await Cms.deleteMany({ key: { $in: OBSOLETE_CMS_KEYS } })).deletedCount;
   // 2) v3.2: `docs` becomes «پایان‌نامه و صحافی», only while it still has the old default label (an admin rename wins)
   counts.cmsRelabelled = (
     await Cms.updateOne({ key: 'docs', label: CMS_DOCS_OLD_LABEL }, { $set: { label: 'پایان‌نامه و صحافی' } })
+  ).modifiedCount;
+  // 2b) v4: `print` becomes «چاپ سیاه‌وسفید و رنگی», only while it still has the old default label
+  counts.cmsRelabelled += (
+    await Cms.updateOne({ key: 'print', label: CMS_PRINT_OLD_LABEL }, { $set: { label: CMS_PRINT_NEW_LABEL } })
   ).modifiedCount;
   // 3) in the run that inserts `print`, place it right before `docs`: on an existing database its seeded
   //    position collides with `docs`, so `docs` and every section after it move down one place
@@ -145,6 +186,9 @@ export async function seedBase(app: INestApplicationContext, log = new Logger('S
 
   // campaigns saved before v2 get the design's default «سرویس‌های مشمول»
   await Campaigns.updateMany({ services: { $exists: false } }, { $set: { services: [...SCHOOL_CAMPAIGN.services] } });
+
+  // v4: campaigns that list `print` also cover the two new print services
+  await Campaigns.updateMany({ services: 'print' }, { $addToSet: { services: { $each: [...V4_CAMPAIGN_SERVICES] } } });
 
   // catalog cache: bump the version so nothing stale is served
   await app.get(RedisService).client.incr(REDIS_KEYS.catalogVer);
