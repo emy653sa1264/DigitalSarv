@@ -121,6 +121,9 @@ export class OrdersService {
     if (!dto.pickup) throw new BadRequestException('آدرس و زمان تحویل‌گیری را مشخص کنید');
     if (!dto.payMethod) throw new BadRequestException('روش پرداخت را انتخاب کنید');
     if (!dto.children.length && !dto.services.length) throw new BadRequestException('سفارش خالی است؛ حداقل یک مورد اضافه کنید');
+    if (dto.services.some((s) => s.kind === 'print')) {
+      throw new BadRequestException('چاپ اسناد به «چاپ سیاه‌وسفید» و «چاپ رنگی» تبدیل شده است؛ سرویس را دوباره انتخاب کنید');
+    }
     const pickupPhone = normalizePhone(dto.pickup.phone);
     if (!pickupPhone) throw new BadRequestException('شماره تماس تحویل‌گیری معتبر نیست');
 
@@ -138,6 +141,11 @@ export class OrdersService {
     const { quote, appliedRuleIds } = await this.pricing.quote(draft, planId, ctx);
     if (quote.minOrderShortfall) {
       throw new BadRequestException(`حداقل مبلغ سفارش ${fa(quote.subtotal + quote.minOrderShortfall)} تومان است`);
+    }
+    const unavailable = quote.services?.find((s) => s.unavailable)?.unavailable;
+    if (unavailable) throw new BadRequestException(unavailable);
+    if (dto.expectedTotal !== undefined && dto.expectedTotal !== quote.total) {
+      throw new ConflictException({ statusCode: 409, code: 'PRICE_CHANGED', message: 'قیمت سفارش تغییر کرده است', previousTotal: dto.expectedTotal, newTotal: quote.total });
     }
     // a zero total (e.g. repair-only, invoiced after diagnosis) has nothing to pay at the gateway
     const gateway = dto.payMethod === 'gateway' && quote.total > 0;

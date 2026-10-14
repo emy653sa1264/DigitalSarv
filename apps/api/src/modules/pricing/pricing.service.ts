@@ -13,6 +13,9 @@ import { Grade } from '../catalog/schemas/grade.schema.js';
 import { Paper } from '../catalog/schemas/paper.schema.js';
 import { Plan } from '../catalog/schemas/plan.schema.js';
 import { Order } from '../orders/order.schema.js';
+import { BindingRange } from '../price-book/schemas/binding-range.schema.js';
+import { PriceVersion } from '../price-book/schemas/price-version.schema.js';
+import { loadCustomerSnapshot } from '../price-book/snapshot.js';
 import { PricingRule } from '../rules/rule.schema.js';
 import { pricedServices, quoteDraft } from './pricing.js';
 import type { CampaignBlock, OrderDraft, PricingContext, QuoteResult } from './pricing.types.js';
@@ -31,10 +34,12 @@ export class PricingService {
     @InjectModel(PricingRule.name) private readonly rules: Model<PricingRule>,
     @InjectModel(Campaign.name) private readonly campaigns: Model<Campaign>,
     @InjectModel(Order.name) private readonly orders: Model<Order>,
+    @InjectModel(PriceVersion.name) private readonly versions: Model<PriceVersion>,
+    @InjectModel(BindingRange.name) private readonly ranges: Model<BindingRange>,
   ) {}
 
   async context(): Promise<PricingContext> {
-    const [settings, colors, extras, grades, papers, bindColors, plans, rules, campaign] = await Promise.all([
+    const [settings, colors, extras, grades, papers, bindColors, plans, rules, campaign, priceBook] = await Promise.all([
       this.catalog.getSettings(),
       // sorted like the catalog: print's spiral colour falls back to the first `on` one by sort, _id
       this.colors.find().sort({ sort: 1, _id: 1 }).lean(),
@@ -46,16 +51,21 @@ export class PricingService {
       this.plans.find().lean(),
       this.rules.find({ on: true }).sort({ order: 1 }).lean(),
       this.campaigns.findOne({ active: true }).lean(),
+      loadCustomerSnapshot(this.versions, this.ranges),
     ]);
     const blocked = campaign ? await this.campaignBlocked(campaign) : undefined;
     return {
       prices: settings.prices,
+      priceBook,
+      printAddons: settings.printAddons,
       urgentEnabled: settings.urgentEnabled,
       colors: colors.map((c) => ({ key: c.key, name: c.name, extra: c.extra, on: c.on, sort: c.sort })),
       // lean() skips schema defaults: an extra saved before v3.3 has no `services` (= both)
       extras: extras.map((e) => ({ key: e.key, label: e.label, price: e.price, on: e.on, ...(e.services ? { services: e.services } : {}) })),
       grades: grades.map((g) => ({ name: g.name, books: g.books })),
-      papers: papers.map((x) => ({ key: x.key, name: x.name, price: x.price, on: x.on, sort: x.sort })),
+      papers: papers.map((x) => ({ key: x.key, name: x.name, price: x.price, on: x.on, sort: x.sort, type: x.type ?? 'plain', weight: x.weight ?? 0,
+        ...(typeof x.paperCost === 'number' ? { paperCost: x.paperCost } : {}), colorPrint: !!x.colorPrint,
+        supportedSizes: x.supportedSizes?.length ? x.supportedSizes : ['A3', 'A4', 'A5', 'A6'], supportsSingle: x.supportsSingle !== false, supportsDouble: x.supportsDouble !== false })),
       bindColors: bindColors.map((b) => ({ key: b.key, name: b.name, extra: b.extra ?? 0, on: b.on, sort: b.sort })),
       plans: plans.map((p) => ({
         id: p._id,

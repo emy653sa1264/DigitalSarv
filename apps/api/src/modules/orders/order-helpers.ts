@@ -10,6 +10,7 @@ import {
 import { fa } from '../../common/utils/fa.js';
 import type { Checklists, QcListKey } from '../catalog/catalog.defaults.js';
 import { bookCount, distributeBooks } from '../pricing/pricing.js';
+import { legacyPrintToV4 } from '../pricing/print-v4.js';
 import type { ChildDraft, OrderDraft, PricingContext, ServiceDraft } from '../pricing/pricing.types.js';
 import type { Order, OrderChild, OrderService } from './order.schema.js';
 
@@ -63,6 +64,8 @@ export const CUSTOMER_CANCELLABLE: OrderStatus[] = ['pending_payment', 'register
 
 // ---------------------------------------------------------------- checklists (v3.3)
 
+const QC_KIND: Record<string, string> = { black_white_printing: 'print', color_printing: 'print' };
+
 /**
  * The QC checklist an order is created with: `qc.school` when it has children, then the list of each
  * distinct service kind in order of first appearance; identical labels appear once.
@@ -70,7 +73,7 @@ export const CUSTOMER_CANCELLABLE: OrderStatus[] = ['pending_payment', 'register
 export function orderQcLabels(hasChildren: boolean, kinds: string[], checklists: Checklists): string[] {
   const lists = [
     ...(hasChildren ? [checklists.qc.school] : []),
-    ...[...new Set(kinds)].map((k) => checklists.qc[k as QcListKey] ?? []),
+    ...[...new Set(kinds.map((k) => QC_KIND[k] ?? k))].map((k) => checklists.qc[k as QcListKey] ?? []),
   ];
   return [...new Set(lists.flat())];
 }
@@ -145,8 +148,8 @@ export function recountChildren<T extends ChildDraft>(children: T[], counted: nu
 export function draftFromOrder(order: Pick<Order, 'children' | 'services' | 'planId' | 'coupon' | 'urgent'>): OrderDraft {
   return {
     children: (order.children ?? []).map(({ total: _t, ...c }) => c as ChildDraft),
-    services: (order.services ?? []).map(
-      ({ price: _p, label: _l, detail: _d, childName: _n, ...s }: OrderService) => s as ServiceDraft,
+    services: (order.services ?? []).map(({ price: _p, label: _l, detail: _d, childName: _n, pricing: _s, ...s }: OrderService) =>
+      s.kind === 'print' ? { ...legacyPrintToV4(s.spec ?? {}), ...(s.childIndex !== undefined ? { childIndex: s.childIndex } : {}) } : (s as ServiceDraft),
     ),
     planId: order.planId,
     ...(order.coupon ? { coupon: order.coupon } : {}),

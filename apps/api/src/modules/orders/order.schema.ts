@@ -12,7 +12,7 @@ import {
   type PaymentStatus,
   type PlanId,
 } from '../../common/constants.js';
-import type { ChildDraft, Quote, ServiceDraft } from '../pricing/pricing.types.js';
+import type { ChildDraft, Quote, ServiceDraft, ServicePricing } from '../pricing/pricing.types.js';
 
 @Schema({ _id: false })
 export class Pickup {
@@ -88,7 +88,7 @@ export interface DeferredEffects {
 }
 
 export type OrderChild = ChildDraft & { total: number };
-export type OrderService = ServiceDraft & { price: number; label: string; detail: string; childName?: string };
+export type OrderService = ServiceDraft & { price: number; label: string; detail: string; childName?: string; pricing?: ServicePricing };
 
 // optimisticConcurrency: whole-document saves fail (VersionError → 409 via saveOrConflict) if the order
 // changed since it was loaded; every atomic findOneAndUpdate on orders must `$inc: { __v: 1 }`.

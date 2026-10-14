@@ -338,6 +338,49 @@ describe('OrdersService.create', () => {
     expect(users.updateOne).not.toHaveBeenCalled();
   });
 
+  it('expectedTotal mismatch → 409 PRICE_CHANGED and nothing is created or charged', async () => {
+    const { svc, orders, users, user } = setup();
+    user.walletBalance = 1_000_000;
+    pricingOf(svc).quote.mockResolvedValueOnce({
+      quote: { total: 35000, subtotal: 35000, planId: 'gold', children: [], services: [] },
+      appliedRuleIds: [],
+    });
+    await expect(svc.create(customer, { ...draft('wallet'), expectedTotal: 30000 } as OrderDraftDto)).rejects.toMatchObject({
+      status: 409,
+      response: expect.objectContaining({ code: 'PRICE_CHANGED', previousTotal: 30000, newTotal: 35000 }),
+    });
+    expect(orders.docs).toHaveLength(1);
+    expect(users.updateOne).not.toHaveBeenCalled();
+    expect(user.walletBalance).toBe(1_000_000);
+  });
+
+  it('a matching expectedTotal is accepted', async () => {
+    const { svc, orders, user } = setup();
+    user.walletBalance = 1_000_000;
+    await svc.create(customer, { ...draft('wallet'), expectedTotal: 300000 } as OrderDraftDto);
+    expect(orders.docs).toHaveLength(2);
+  });
+
+  it('refuses an unavailable service with its reason; nothing is charged', async () => {
+    const { svc, orders, users, user } = setup();
+    user.walletBalance = 1_000_000;
+    pricingOf(svc).quote.mockResolvedValueOnce({
+      quote: { total: 0, subtotal: 0, planId: 'gold', children: [], services: [{ index: 0, price: 0, label: 'x', detail: '', unavailable: 'فنری برای این تعداد صفحه موجود نیست' }] },
+      appliedRuleIds: [],
+    });
+    await expect(svc.create(customer, draft('wallet'))).rejects.toThrow('فنری برای این تعداد صفحه موجود نیست');
+    expect(orders.docs).toHaveLength(1);
+    expect(users.updateOne).not.toHaveBeenCalled();
+  });
+
+  it('refuses the legacy print kind for new orders', async () => {
+    const { svc, orders, users } = setup();
+    const legacy = { ...draft('wallet'), services: [{ kind: 'print', spec: {} }] } as unknown as OrderDraftDto;
+    await expect(svc.create(customer, legacy)).rejects.toThrow(/چاپ سیاه‌وسفید/);
+    expect(orders.docs).toHaveLength(1);
+    expect(users.updateOne).not.toHaveBeenCalled();
+  });
+
   it('v3.3: snapshots the QC checklist (school + each service kind, labels once) and the pickup checklist', async () => {
     const { svc, orders, user } = setup();
     user.walletBalance = 1_000_000;

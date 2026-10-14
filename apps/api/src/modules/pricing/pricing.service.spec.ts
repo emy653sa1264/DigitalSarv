@@ -20,6 +20,8 @@ function setup(campaign: Doc | null, orders: Doc[] = []) {
     empty() as never, // rules
     fakeModel(campaign ? [campaign] : []) as never,
     fakeModel(orders) as never,
+    empty() as never, // price versions
+    empty() as never, // binding ranges
   );
   return svc;
 }

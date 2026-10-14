@@ -1,5 +1,5 @@
 import type { OrderStatus } from '../../common/constants.js';
-import { canAdminTransition, orderChildren, recountChildren, refundableAmount } from './order-helpers.js';
+import { canAdminTransition, draftFromOrder, orderChildren, orderQcLabels, recountChildren, refundableAmount } from './order-helpers.js';
 
 describe('refundableAmount', () => {
   const base = { payMethod: 'wallet' as const, paid: true, refunded: false, chargedAmount: 500000, quote: { total: 420000 } };
@@ -111,5 +111,21 @@ describe('orderChildren', () => {
     );
     expect(a.linedCount).toBe(0);
     expect(b.linedCount).toBe(10);
+  });
+});
+
+describe('v4 order helpers', () => {
+  it('draftFromOrder converts legacy print and strips the pricing snapshot', () => {
+    const draft = draftFromOrder({ children: [], planId: 'bronze', urgent: false, services: [
+      { kind: 'print', childIndex: 1, spec: { pages: 2, scope: 'all', paper: 'tahrir80', size: 'A4', ink: 'bw', sides: 'single', copies: 1, binding: 'none', staple: false, laminate: 'none' }, price: 1, label: 'چاپ اسناد', detail: '' },
+      { kind: 'black_white_printing', spec: { pages: 2 }, price: 7000, label: 'چاپ سیاه‌وسفید', detail: '', pricing: { lines: [] } },
+    ] } as never);
+    expect(draft.services.map((s) => s.kind)).toEqual(['black_white_printing', 'black_white_printing']);
+    expect(draft.services[0]).toMatchObject({ childIndex: 1 });
+    expect(draft.services[1]).not.toHaveProperty('pricing');
+  });
+
+  it('orderQcLabels maps the v4 print kinds to the print checklist', () => {
+    expect(orderQcLabels(false, ['color_printing'], { qc: { print: ['a'] }, pickup: [] } as never)).toEqual(['a']);
   });
 });

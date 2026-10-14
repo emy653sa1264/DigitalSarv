@@ -166,7 +166,7 @@ export class UploadsService {
     const byId = new Map(docs.map((d) => [String(d._id), d]));
 
     const services = draft.services.map((s) => {
-      if (s.kind !== 'docs' && s.kind !== 'print') return s;
+      if (s.kind !== 'docs' && s.kind !== 'print' && s.kind !== 'black_white_printing' && s.kind !== 'color_printing') return s;
       const fileId = (s.spec as { fileId?: unknown })?.fileId;
       const upload = typeof fileId === 'string' ? byId.get(fileId) : undefined;
       if (!upload?.pages || upload.purpose !== 'docs') return s;

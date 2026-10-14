@@ -75,7 +75,7 @@ export class ChildDraftDto {
 }
 
 export class ServiceDraftDto {
-  @IsIn(['print', 'docs', 'flyer', 'cart', 'repair'], { message: 'نوع سرویس معتبر نیست' })
+  @IsIn(['print', 'black_white_printing', 'color_printing', 'docs', 'flyer', 'cart', 'repair'], { message: 'نوع سرویس معتبر نیست' })
   kind: ServiceKind;
 
   @IsOptional() @Type(() => Number) @IsInt() @Min(0)
@@ -121,6 +121,10 @@ export class OrderDraftDto {
 
   @IsOptional() @IsBoolean()
   urgent?: boolean;
+
+  /** The total the customer saw; a different server total → 409 PRICE_CHANGED. */
+  @IsOptional() @IsInt() @Min(0)
+  expectedTotal?: number;
 
   @IsOptional() @ValidateNested() @Type(() => PickupDto)
   pickup?: PickupDto;

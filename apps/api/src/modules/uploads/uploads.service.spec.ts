@@ -129,6 +129,18 @@ describe('UploadsService ownership', () => {
     await expect(svc.applyToDraft(printDraft(String(photo._id)), String(customerId), true)).rejects.toThrow(/برای این بخش/);
   });
 
+  it('applyToDraft takes pages from the PDF for the v4 printing kinds', async () => {
+    const { svc } = setup([mine]);
+    for (const kind of ['black_white_printing', 'color_printing'] as const) {
+      const { draft: d, uploadIds } = await svc.applyToDraft(
+        { children: [], services: [{ kind, spec: { fileId: String(mine._id), pages: 1 } }] } as unknown as OrderDraft,
+        String(customerId), true,
+      );
+      expect(d.services[0].spec).toMatchObject({ pages: 12, fileName: 'a.pdf' });
+      expect(uploadIds).toEqual([String(mine._id)]);
+    }
+  });
+
   it('the PDF page count still overrides `pages` for a v3 docs range (its ranges are clipped to it when priced)', async () => {
     const { svc } = setup([mine]);
     const rangeDraft: OrderDraft = {
