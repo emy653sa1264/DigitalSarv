@@ -135,6 +135,7 @@ export function comboWithinCapabilities(o: ComboOptions, caps: Capability[]): bo
       return o.addon === 'lam_sheet'
         ? prints.some((c) => c.addons.includes('lam_sheet') && c.sizes.includes(o.size))
         : prints.some((c) => c.addons.includes(o.addon));
+    default: return false;
   }
 }
 

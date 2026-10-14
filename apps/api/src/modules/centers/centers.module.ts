@@ -1,93 +1,45 @@
-import {
-  Body,
-  ConflictException,
-  Controller,
-  Delete,
-  Get,
-  Injectable,
-  Module,
-  NotFoundException,
-  Param,
-  Patch,
-  Post,
-  UseGuards,
-} from '@nestjs/common';
+import { Body, Controller, Delete, Get, Injectable, Module, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Type } from 'class-transformer';
-import { IsInt, IsNotEmpty, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
-import { Model, Types } from 'mongoose';
-import { Roles } from '../../common/auth/decorators.js';
+import { Model } from 'mongoose';
+import { RequirePermissions, Roles } from '../../common/auth/decorators.js';
 import { JwtAuthGuard, RolesGuard } from '../../common/auth/guards.js';
-import { defined } from '../../common/utils/defined.js';
-import { fa } from '../../common/utils/fa.js';
-import { assertObjectId } from '../../common/utils/object-id.js';
-import { TERMINAL_STATUSES } from '../orders/order-helpers.js';
-import { Order } from '../orders/order.schema.js';
+import { PermissionsGuard } from '../../common/auth/permissions.guard.js';
 import { Center } from './center.schema.js';
+import { ProviderDto } from './dto/provider.dto.js';
+import { centerListJson, type CenterListItem, type CenterRow } from './provider-json.js';
+import { ProviderScopeGuard } from './provider-scope.guard.js';
+import { AdminProvidersController, ProviderSelfController } from './providers.controller.js';
+import { ProvidersService } from './providers.service.js';
 
-export class CreateCenterDto {
-  @IsString() @IsNotEmpty({ message: 'نام مرکز چاپ را وارد کنید' }) @MaxLength(80) name: string;
-  @IsOptional() @IsString() @MaxLength(80) zone?: string;
-  @IsOptional() @Type(() => Number) @IsInt() @Min(0) capacityPerDay?: number;
-  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) processingHours?: number;
-  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) @Max(100) commissionPct?: number;
-  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) @Max(5) rating?: number;
-  @IsOptional() @IsString() @MaxLength(300) address?: string;
-  @IsOptional() @IsNumber() lat?: number;
-  @IsOptional() @IsNumber() lng?: number;
-}
-
-export class UpdateCenterDto {
-  @IsOptional() @IsString() @IsNotEmpty({ message: 'نام مرکز چاپ را وارد کنید' }) @MaxLength(80) name?: string;
-  @IsOptional() @IsString() @MaxLength(80) zone?: string;
-  @IsOptional() @Type(() => Number) @IsInt() @Min(0) capacityPerDay?: number;
-  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) processingHours?: number;
-  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) @Max(100) commissionPct?: number;
-  @IsOptional() @Type(() => Number) @IsNumber() @Min(0) @Max(5) rating?: number;
-  @IsOptional() @IsString() @MaxLength(300) address?: string;
-  @IsOptional() @IsNumber() lat?: number;
-  @IsOptional() @IsNumber() lng?: number;
-}
-
+/** v1 `/admin/centers` list — kept for the order assignment selects (any admin). */
 @Injectable()
 export class CentersService {
-  constructor(
-    @InjectModel(Center.name) private readonly centers: Model<Center>,
-    @InjectModel(Order.name) private readonly orders: Model<Order>,
-  ) {}
+  constructor(@InjectModel(Center.name) private readonly centers: Model<Center>) {}
 
-  list() { return this.centers.find().sort({ _id: 1 }); }
-  create(dto: CreateCenterDto) { return this.centers.create(defined(dto)); }
-
-  async update(id: string, dto: UpdateCenterDto) {
-    assertObjectId(id, 'مرکز چاپ');
-    const doc = await this.centers.findByIdAndUpdate(id, { $set: dto }, { returnDocument: 'after' });
-    if (!doc) throw new NotFoundException('مرکز چاپ یافت نشد');
-    return doc;
-  }
-
-  /** 409 while open (not delivered/cancelled) orders are assigned to the centre — they would be orphaned. */
-  async remove(id: string) {
-    assertObjectId(id, 'مرکز چاپ');
-    if (!(await this.centers.exists({ _id: id }))) throw new NotFoundException('مرکز چاپ یافت نشد');
-    const open = await this.orders.countDocuments({ centerId: new Types.ObjectId(id), status: { $nin: TERMINAL_STATUSES } });
-    if (open) throw new ConflictException(`این مرکز چاپ ${fa(open)} سفارش باز دارد؛ ابتدا سفارش‌ها را به مرکز دیگری بدهید`);
-    if (!(await this.centers.findByIdAndDelete(id))) throw new NotFoundException('مرکز چاپ یافت نشد');
-    return { ok: true };
+  async list(): Promise<CenterListItem[]> {
+    return ((await this.centers.find().sort({ _id: 1 }).lean()) as CenterRow[]).map(centerListJson);
   }
 }
 
+/** v1 paths: the list stays open to every admin; writes are aliases of `/admin/providers` (same permissions). */
 @Controller('admin/centers')
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Roles('admin')
 export class CentersController {
-  constructor(private readonly centers: CentersService) {}
+  constructor(
+    private readonly centers: CentersService,
+    private readonly providers: ProvidersService,
+  ) {}
 
   @Get() list() { return this.centers.list(); }
-  @Post() create(@Body() dto: CreateCenterDto) { return this.centers.create(dto); }
-  @Patch(':id') update(@Param('id') id: string, @Body() dto: UpdateCenterDto) { return this.centers.update(id, dto); }
-  @Delete(':id') remove(@Param('id') id: string) { return this.centers.remove(id); }
+  @Post() @RequirePermissions('provider_manage') create(@Body() dto: ProviderDto) { return this.providers.create(dto); }
+  @Patch(':id') @RequirePermissions('provider_edit') update(@Param('id') id: string, @Body() dto: ProviderDto) { return this.providers.update(id, dto); }
+  @Delete(':id') @RequirePermissions('provider_manage') remove(@Param('id') id: string) { return this.providers.remove(id); }
 }
 
-@Module({ controllers: [CentersController], providers: [CentersService] })
+@Module({
+  controllers: [CentersController, AdminProvidersController, ProviderSelfController],
+  providers: [CentersService, ProvidersService, ProviderScopeGuard],
+  exports: [ProvidersService, ProviderScopeGuard],
+})
 export class CentersModule {}

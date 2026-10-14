@@ -97,4 +97,12 @@ describe('CourierService admin (v3.2)', () => {
     expect(u.docs[0]).not.toHaveProperty('courierId');
     await expect(svc.remove(String(id))).rejects.toBeInstanceOf(NotFoundException);
   });
+  it('v4.1: refuses a phone that belongs to a provider', async () => {
+    const id = new Types.ObjectId();
+    const doc: Doc = { _id: id, code: '1', name: 'a', phone: '09121111111' };
+    Object.assign(doc, { set: vi.fn(), save: vi.fn(async () => doc), toJSON: () => ({ id: String(id) }) });
+    const { svc, c } = setup([], [], [{ _id: new Types.ObjectId(), phone: '09122222222', role: 'provider', providerId: new Types.ObjectId() }]);
+    c.findById.mockReturnValue(doc as never);
+    await expect(svc.update(String(id), { phone: '09122222222' })).rejects.toThrow('این شماره متعلق به یک مجری است');
+  });
 });

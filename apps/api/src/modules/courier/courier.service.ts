@@ -272,6 +272,7 @@ export class CourierService {
       (await this.users.findOne({ phone })) ??
       (await this.users.create({ phone, name, role: 'courier', planId: 'bronze', referralCode: makeReferralCode() }));
     if (user.role === 'admin') throw new ConflictException('این شماره متعلق به مدیر سیستم است');
+    if (user.role === 'provider') throw new ConflictException('این شماره متعلق به یک مجری است');
     user.role = 'courier';
     user.courierId = courierId;
     if (!user.name) user.name = name;
