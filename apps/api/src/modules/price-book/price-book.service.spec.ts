@@ -43,7 +43,7 @@ describe('PriceBookService', () => {
     await expect(svc.create({ ...base, comboKey: 'bw|A9|single' }, by)).rejects.toThrow(/ترکیب/);
     await expect(svc.create({ ...base, price: -1 }, by)).rejects.toThrow();
     await expect(svc.create({ ...base, price: 10.5 }, by)).rejects.toThrow();
-    await expect(svc.create({ ...base, mode: 'formula', price: undefined, formula: 'provider_price + 1' }, by)).rejects.toThrow(/provider_price/);
+    await expect(svc.create({ ...base, mode: 'formula', price: undefined, formula: 'foo_var + 1' }, by)).rejects.toThrow(/foo_var/);
     await expect(svc.create({ ...base, mode: 'fixed_markup' }, by)).rejects.toThrow();
     await expect(svc.create({ ...base, reason: '  ' }, by)).rejects.toThrow(/دلیل/);
   });

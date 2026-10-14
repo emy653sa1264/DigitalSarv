@@ -1,4 +1,4 @@
-import { displayStatus, nextChangeAt, pickEffective, roundTo, unitPrice, type VersionLike } from './resolve.js';
+import { displayStatus, margin, nextChangeAt, pickEffective, roundTo, unitPrice, type VersionLike } from './resolve.js';
 
 const d = (s: string) => new Date(s);
 const v = (o: Partial<VersionLike> & { id: string; version: number }): VersionLike => ({
@@ -84,5 +84,36 @@ describe('roundTo / nextChangeAt', () => {
       v({ id: 'dr', version: 4, state: 'draft', effectiveFrom: d('2026-06-02T00:00:00Z') }),
     ];
     expect(nextChangeAt(list, at)?.toISOString()).toBe('2026-07-01T00:00:00.000Z');
+  });
+});
+
+describe('markup modes (§21)', () => {
+  const mk = (o: Partial<VersionLike>) => v({ id: 'm', version: 1, price: undefined, ...o });
+  it('fixed and percent markup over the provider price, then rounding', () => {
+    expect(unitPrice(mk({ mode: 'fixed_markup', markup: 1000 }), { provider_price: 3500 })).toBe(4500);
+    expect(unitPrice(mk({ mode: 'percent_markup', markup: 20 }), { provider_price: 3500 })).toBe(4200);
+    expect(unitPrice(mk({ mode: 'percent_markup', markup: 15, rounding: 100 }), { provider_price: 3500 })).toBe(4000);
+  });
+  it('is unavailable without a provider price or markup', () => {
+    expect(unitPrice(mk({ mode: 'fixed_markup', markup: 1000 }), {})).toBeNull();
+    expect(unitPrice(mk({ mode: 'percent_markup' }), { provider_price: 3500 })).toBeNull();
+  });
+  it('formula may read provider_price', () => {
+    expect(unitPrice(mk({ mode: 'formula', formula: 'provider_price + 700' }), { provider_price: 3500 })).toBe(4200);
+  });
+});
+
+describe('margin (§42, §85)', () => {
+  it('spec examples', () => {
+    expect(margin(3500, 3500)).toEqual({ difference: 0, marginPct: 0, negative: false });
+    expect(margin(4000, 3500)).toEqual({ difference: 500, marginPct: 14.3, negative: false });
+    expect(margin(4500, 3500)).toEqual({ difference: 1000, marginPct: 28.6, negative: false });
+    expect(margin(5000, 3500)).toEqual({ difference: 1500, marginPct: 42.9, negative: false });
+    expect(margin(3000, 3500)).toEqual({ difference: -500, marginPct: -14.3, negative: true });
+  });
+  it('no margin % when the provider price is 0; nothing when a side is missing', () => {
+    expect(margin(1000, 0)).toEqual({ difference: 1000, marginPct: null, negative: false });
+    expect(margin(null, 3500)).toEqual({ difference: null, marginPct: null, negative: false });
+    expect(margin(3500, null)).toEqual({ difference: null, marginPct: null, negative: false });
   });
 });

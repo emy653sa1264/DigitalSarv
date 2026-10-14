@@ -13,6 +13,7 @@ export interface VersionLike {
   rounding?: number;
   effectiveFrom: Date;
   effectiveUntil?: Date | null;
+  baseProviderId?: string | null;
 }
 
 const inWindow = (v: VersionLike, at: Date) =>
@@ -53,8 +54,13 @@ export function unitPrice(v: VersionLike, vars: Partial<Record<string, number>>)
     } catch {
       return null;
     }
+  } else if (v.mode === 'fixed_markup' || v.mode === 'percent_markup') {
+    // §21 modes 2/3: over the base provider's price of the same combo (missing → unavailable, never a guess)
+    const base = vars.provider_price;
+    if (typeof base !== 'number' || !Number.isFinite(base) || typeof v.markup !== 'number' || !Number.isFinite(v.markup)) return null;
+    raw = v.mode === 'fixed_markup' ? base + v.markup : base * (1 + v.markup / 100);
   } else {
-    return null; // markup modes are evaluated by the provider layer (M2)
+    return null;
   }
   const out = roundTo(raw, v.rounding ?? 0);
   return Number.isFinite(out) && out >= 0 ? out : null;
@@ -70,4 +76,11 @@ export function nextChangeAt(versions: VersionLike[], at: Date): Date | null {
     }
   }
   return next === null ? null : new Date(next);
+}
+
+/** §42 gross difference and margin % (one decimal; only when the provider price is > 0). Admin-only metric. */
+export function margin(customer: number | null, provider: number | null): { difference: number | null; marginPct: number | null; negative: boolean } {
+  if (customer === null || provider === null) return { difference: null, marginPct: null, negative: false };
+  const difference = customer - provider;
+  return { difference, marginPct: provider > 0 ? Math.round((difference / provider) * 1000) / 10 : null, negative: difference < 0 };
 }
