@@ -96,6 +96,7 @@ export class PricingService {
           }
         : null,
       ops: settings.ops,
+      pickupPoints: settings.pickupPoints,
       checklists: settings.checklists,
     };
   }

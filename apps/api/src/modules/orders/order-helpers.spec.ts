@@ -1,5 +1,5 @@
 import type { OrderStatus } from '../../common/constants.js';
-import { canAdminTransition, draftFromOrder, orderChildren, orderQcLabels, recountChildren, refundableAmount } from './order-helpers.js';
+import { canAdminTransition, customerOrderJson, draftFromOrder, orderChildren, orderQcLabels, recountChildren, refundableAmount } from './order-helpers.js';
 
 describe('refundableAmount', () => {
   const base = { payMethod: 'wallet' as const, paid: true, refunded: false, chargedAmount: 500000, quote: { total: 420000 } };
@@ -137,5 +137,17 @@ describe('v4 order helpers', () => {
 
   it('orderQcLabels maps the v4 print kinds to the print checklist', () => {
     expect(orderQcLabels(false, ['color_printing'], { qc: { print: ['a'] }, pickup: [] } as never)).toEqual(['a']);
+  });
+});
+
+describe('v4.2 customer order view', () => {
+  it('drops centerId and providerPricing, adds the delivery (legacy default) and the fulfilment', () => {
+    const json = customerOrderJson({ id: 'o', code: '10300', centerId: 'c', providerPricing: { providerId: 'c' }, status: 'packing' }, { status: 'ready', label: 'آماده شد' });
+    expect(json).toEqual({ id: 'o', code: '10300', status: 'packing', delivery: { method: 'courier', homePickup: true, note: '' }, fulfillment: { status: 'ready', label: 'آماده شد' } });
+  });
+  it('a reorder keeps the customer-pickup choice', () => {
+    const d = draftFromOrder({ children: [], services: [], planId: 'bronze', urgent: false,
+      delivery: { method: 'customer_pickup', homePickup: false, note: '', pickupAt: 'point', pickupPoint: { id: 'pp1', name: 'x', address: '', phone: '', hours: '', kind: 'point' } } } as never);
+    expect(d.delivery).toEqual({ method: 'customer_pickup', pickupPointId: 'pp1' });
   });
 });

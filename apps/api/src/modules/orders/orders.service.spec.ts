@@ -462,3 +462,48 @@ describe('OrdersService.create', () => {
     expect(users.updateOne.mock.invocationCallOrder[planCall]).toBeGreaterThan(orders.create.mock.invocationCallOrder[0]);
   });
 });
+
+describe('OrdersService.create — v4.2 delivery (D12, D17)', () => {
+  type Ctx = { pricing: { context: ReturnType<typeof vi.fn> } };
+  const withPoints = (svc: OrdersService, points: Doc[]) => (svc as unknown as Ctx).pricing.context.mockResolvedValue({ grades: [], pickupPoints: points });
+  const printOnly = (o: Doc = {}) =>
+    ({ children: [], services: [{ kind: 'black_white_printing', spec: {} }], payMethod: 'wallet', pickup: { address: 'تهران، ونک', phone: '09123456789' }, ...o }) as unknown as OrderDraftDto;
+  const point = { id: 'pp1', name: 'دفتر مرکزی', address: 'تهران، ونک', phone: '02191002233', hours: '۹ تا ۱۸', on: false };
+
+  it('print-only checkout needs no pickup slot and is stored as a courier delivery without home pickup', async () => {
+    const { svc, orders, user } = setup();
+    user.walletBalance = 1_000_000;
+    await svc.create(customer, printOnly());
+    expect(orders.docs.at(-1)).toMatchObject({ delivery: { method: 'courier', homePickup: false, note: '' }, pickup: { address: 'تهران، ونک', phone: '09123456789' } });
+  });
+
+  it('switched-off pickup point → 400 before anything is charged; an `on` point is snapshotted', async () => {
+    const { svc, orders, users, user } = setup();
+    user.walletBalance = 1_000_000;
+    withPoints(svc, [point]);
+    const pick = printOnly({ delivery: { method: 'customer_pickup', pickupPointId: 'pp1' }, pickup: { phone: '09123456789' } });
+    await expect(svc.create(customer, pick)).rejects.toThrow('محل تحویل حضوری معتبر نیست');
+    expect(orders.docs).toHaveLength(1);
+    expect(users.updateOne).not.toHaveBeenCalled();
+    withPoints(svc, [{ ...point, on: true }]);
+    await svc.create(customer, pick);
+    expect(orders.docs.at(-1)!.delivery).toMatchObject({ method: 'customer_pickup', homePickup: false, pickupAt: 'point', pickupPoint: { id: 'pp1', name: 'دفتر مرکزی', kind: 'point' } });
+  });
+
+  it('school books still need a pickup slot; a courier delivery needs an address', async () => {
+    const { svc } = setup();
+    const school = { children: [{ name: 'a', grade: 'g', color: 'blue', books: 1 }], services: [], payMethod: 'wallet', pickup: { address: 'addr', phone: '09123456789' } } as unknown as OrderDraftDto;
+    await expect(svc.create(customer, school)).rejects.toThrow('زمان تحویل‌گیری را انتخاب کنید');
+    await expect(svc.create(customer, printOnly({ pickup: { phone: '09123456789' } }))).rejects.toThrow('آدرس ارسال را وارد کنید');
+  });
+
+  it('the customer view never contains centerId or providerPricing; the admin view keeps centerId', async () => {
+    const { svc } = setup({ centerId: new Types.ObjectId(), providerPricing: { providerId: 'x' } });
+    const view = await svc.getForUser(String(orderId), customer);
+    expect(view).not.toHaveProperty('centerId');
+    expect(view).not.toHaveProperty('providerPricing');
+    expect(view).toMatchObject({ delivery: { method: 'courier', homePickup: true } });
+    const admin = await svc.getForUser(String(orderId), { ...customer, role: 'admin' } as AuthUser);
+    expect(admin).toHaveProperty('centerId');
+  });
+});

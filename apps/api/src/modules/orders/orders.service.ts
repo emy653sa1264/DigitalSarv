@@ -49,17 +49,13 @@ import {
   orderSummary,
   qcComplete,
   qcLabelsOf,
+  customerOrderJson,
   refundableAmount,
   timelineEntry,
 } from './order-helpers.js';
+import { needsHomePickup, resolveDelivery } from './delivery-rules.js';
 import { Order, OrderDocument, type DeferredEffects } from './order.schema.js';
 import { pickupProblem } from './pickup-rules.js';
-
-/** `Order & { paymentUrl }` for a freshly created / re-opened gateway payment. */
-function withPaymentUrl(order: OrderDocument, paymentUrl: string) {
-  const json = (typeof order.toJSON === 'function' ? order.toJSON() : { ...order }) as unknown as Record<string, unknown>;
-  return { ...json, paymentUrl };
-}
 
 @Injectable()
 export class OrdersService {
@@ -117,7 +113,7 @@ export class OrdersService {
    * and return `paymentUrl` — their side effects (plan activation, rule/campaign usage, savings,
    * «registered» notification) are deferred until the payment is verified.
    */
-  async create(authUser: AuthUser, dto: OrderDraftDto): Promise<OrderDocument | (Record<string, unknown> & { paymentUrl: string })> {
+  async create(authUser: AuthUser, dto: OrderDraftDto): Promise<Record<string, unknown>> {
     if (!dto.pickup) throw new BadRequestException('آدرس و زمان تحویل‌گیری را مشخص کنید');
     if (!dto.payMethod) throw new BadRequestException('روش پرداخت را انتخاب کنید');
     if (!dto.children.length && !dto.services.length) throw new BadRequestException('سفارش خالی است؛ حداقل یک مورد اضافه کنید');
@@ -135,8 +131,14 @@ export class OrdersService {
     const { draft, uploadIds } = await this.uploads.applyToDraft(dto as unknown as OrderDraft, authUser.id, true);
     const ctx = await this.pricing.context();
     // v3.3: the pickup must be bookable (slot, booking window, closed days/holidays, same-day cutoff), Tehran time
-    const pickupError = pickupProblem(dto.pickup, ctx.ops ?? defaultOps());
-    if (pickupError) throw new BadRequestException(pickupError);
+    // v4.2 (D12): only orders the courier collects at home have a pickup slot (validated as v3.3)
+    const homePickup = needsHomePickup(draft);
+    const resolved = resolveDelivery(homePickup, dto.delivery, dto.pickup, ctx.pickupPoints ?? []);
+    if ('problem' in resolved) throw new BadRequestException(resolved.problem);
+    if (homePickup) {
+      const pickupError = pickupProblem({ date: dto.pickup.date!, slot: dto.pickup.slot! }, ctx.ops ?? defaultOps());
+      if (pickupError) throw new BadRequestException(pickupError);
+    }
     const planId = dto.planId ?? user.planId;
     const { quote, appliedRuleIds } = await this.pricing.quote(draft, planId, ctx);
     // the unavailable reason comes first (contract), then the minimum, then a stale total
@@ -179,7 +181,8 @@ export class OrdersService {
       children: orderChildren(draft.children, quote.children.map((c) => c.total), ctx),
       services,
       quote,
-      pickup: { ...dto.pickup, phone: pickupPhone },
+      pickup: { ...dto.pickup, address: dto.pickup.address ?? '', phone: pickupPhone },
+      delivery: resolved.delivery,
       payMethod: dto.payMethod,
       paid: charged,
       // the refundable amount is what was actually charged — later re-quotes never change it
@@ -231,7 +234,7 @@ export class OrdersService {
           code: order.code,
         });
       }
-      return withPaymentUrl(await this.findById(String(order._id)), paymentUrl);
+      return { ...customerOrderJson(await this.findById(String(order._id))), paymentUrl };
     }
     // choosing another plan at checkout activates it (membership payment is stubbed) — only once the
     // order exists, i.e. the wallet check passed and the insert succeeded
@@ -240,7 +243,7 @@ export class OrdersService {
       order,
       deferred,
     );
-    return order;
+    return customerOrderJson(order);
   }
 
   /** Opens a new gateway attempt for the customer's own unpaid order. */
@@ -250,8 +253,9 @@ export class OrdersService {
     return { paymentUrl: await this.payments.start(order) };
   }
 
-  mine(userId: string) {
-    return this.orders.find({ customerId: new Types.ObjectId(userId) }).sort({ createdAt: -1 });
+  async mine(userId: string) {
+    const list = await this.orders.find({ customerId: new Types.ObjectId(userId) }).sort({ createdAt: -1 });
+    return list.map((o) => customerOrderJson(o));
   }
 
   async findById(id: string): Promise<OrderDocument> {
@@ -261,10 +265,10 @@ export class OrdersService {
     return order;
   }
 
-  async getForUser(id: string, user: AuthUser): Promise<OrderDocument> {
+  async getForUser(id: string, user: AuthUser): Promise<OrderDocument | Record<string, unknown>> {
     const order = await this.findById(id);
     if (user.role === 'admin') return order;
-    if (user.role === 'customer' && String(order.customerId) === user.id) return order;
+    if (user.role === 'customer' && String(order.customerId) === user.id) return customerOrderJson(order);
     if (user.role === 'courier' && order.courierId) {
       const courier = await this.couriers.findOne({ userId: new Types.ObjectId(user.id) }, { _id: 1 });
       if (courier && String(courier._id) === String(order.courierId)) return order;
@@ -298,7 +302,7 @@ export class OrdersService {
     };
   }
 
-  async cancel(id: string, user: AuthUser): Promise<OrderDocument> {
+  async cancel(id: string, user: AuthUser): Promise<Record<string, unknown>> {
     const tooLate = () => new BadRequestException('این سفارش دیگر قابل لغو نیست؛ با پشتیبانی تماس بگیرید');
     // a gateway payment may land between the read and the compare-and-set (pending_payment → registered
     // stays cancellable but is now refundable): re-read and try again instead of cancelling unrefunded
@@ -306,7 +310,7 @@ export class OrdersService {
       const order = await this.ownOrder(id, user);
       if (!CUSTOMER_CANCELLABLE.includes(order.status)) throw tooLate();
       const cancelled = await this.cancelAndRefund(order, { customerId: order.customerId, status: { $in: CUSTOMER_CANCELLABLE } });
-      if (cancelled) return cancelled;
+      if (cancelled) return customerOrderJson(cancelled);
     }
     throw tooLate();
   }

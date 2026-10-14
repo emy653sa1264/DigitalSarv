@@ -90,20 +90,31 @@ export class ServiceDraftDto {
 }
 
 export class PickupDto {
-  @IsString() @IsNotEmpty({ message: 'آدرس تحویل‌گیری را وارد کنید' }) @MaxLength(300)
-  address: string;
+  @IsOptional() @IsString() @MaxLength(300)
+  address?: string;
 
   @IsString({ message: 'شماره تماس را وارد کنید' }) @MaxLength(20, { message: 'شماره تماس معتبر نیست' })
   phone: string;
 
-  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'تاریخ تحویل‌گیری معتبر نیست' })
-  date: string;
+  @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'تاریخ تحویل‌گیری معتبر نیست' })
+  date?: string;
 
-  @IsString() @IsNotEmpty({ message: 'بازه زمانی تحویل‌گیری را انتخاب کنید' }) @MaxLength(40)
-  slot: string;
+  @IsOptional() @IsString() @MaxLength(40)
+  slot?: string;
 
   @IsOptional() @IsNumber() lat?: number;
   @IsOptional() @IsNumber() lng?: number;
+}
+
+export class DeliveryDto {
+  @IsIn(['courier', 'customer_pickup'], { message: 'روش تحویل معتبر نیست' })
+  method: 'courier' | 'customer_pickup';
+
+  @IsOptional() @IsString() @MaxLength(40)
+  pickupPointId?: string;
+
+  @IsOptional() @IsString() @MaxLength(300, { message: 'توضیحات تحویل حداکثر ۳۰۰ کاراکتر است' })
+  note?: string;
 }
 
 export class OrderDraftDto {
@@ -128,6 +139,9 @@ export class OrderDraftDto {
 
   @IsOptional() @ValidateNested() @Type(() => PickupDto)
   pickup?: PickupDto;
+
+  @IsOptional() @ValidateNested() @Type(() => DeliveryDto)
+  delivery?: DeliveryDto;
 
   @IsOptional() @IsIn(PAY_METHODS, { message: 'روش پرداخت معتبر نیست' })
   payMethod?: PayMethod;

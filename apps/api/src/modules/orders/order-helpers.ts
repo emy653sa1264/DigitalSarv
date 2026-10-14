@@ -5,6 +5,7 @@ import {
   QC_LABELS,
   STATUS_FLOW,
   STATUS_LABELS,
+  type JobStatus,
   type OrderStatus,
 } from '../../common/constants.js';
 import { fa } from '../../common/utils/fa.js';
@@ -12,7 +13,18 @@ import type { Checklists, QcListKey } from '../catalog/catalog.defaults.js';
 import { bookCount, distributeBooks } from '../pricing/pricing.js';
 import { legacyPrintToV4 } from '../pricing/print-v4.js';
 import type { ChildDraft, OrderDraft, PricingContext, ServiceDraft } from '../pricing/pricing.types.js';
-import type { Order, OrderChild, OrderService } from './order.schema.js';
+import { deliveryOf } from './delivery-rules.js';
+import type { Order, OrderChild, OrderService, PlaceSnapshot } from './order.schema.js';
+
+export interface CustomerFulfillment { status: JobStatus; label: string; place?: PlaceSnapshot }
+
+/** The customer's view of an order (contract v4.2): never the provider id or provider prices. */
+export function customerOrderJson(order: unknown, fulfillment?: CustomerFulfillment): Record<string, unknown> {
+  const o = order as { toJSON?: () => Record<string, unknown> };
+  const json = typeof o.toJSON === 'function' ? o.toJSON() : { ...(order as Record<string, unknown>) };
+  const { centerId: _center, providerPricing: _pricing, ...rest } = json;
+  return { ...rest, delivery: deliveryOf(rest as { delivery?: never }), ...(fulfillment ? { fulfillment } : {}) };
+}
 
 export function timelineEntry(status: OrderStatus, at: Date = new Date()) {
   return { status, label: STATUS_LABELS[status], at };
@@ -146,7 +158,7 @@ export function recountChildren<T extends ChildDraft>(children: T[], counted: nu
 
 /** Turns a stored order back into an editable draft. */
 export function draftFromOrder(
-  order: Pick<Order, 'children' | 'services' | 'planId' | 'coupon' | 'urgent'>,
+  order: Pick<Order, 'children' | 'services' | 'planId' | 'coupon' | 'urgent' | 'delivery'>,
   { convertLegacy = false }: { convertLegacy?: boolean } = {},
 ): OrderDraft {
   return {
@@ -157,6 +169,9 @@ export function draftFromOrder(
     planId: order.planId,
     ...(order.coupon ? { coupon: order.coupon } : {}),
     urgent: !!order.urgent,
+    ...(order.delivery?.method === 'customer_pickup'
+      ? { delivery: { method: 'customer_pickup' as const, ...(order.delivery.pickupPoint ? { pickupPointId: order.delivery.pickupPoint.id } : {}) } }
+      : {}),
   };
 }
 

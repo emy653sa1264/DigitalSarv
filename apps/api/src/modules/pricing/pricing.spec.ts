@@ -751,3 +751,28 @@ describe('computeQuote fixedServices (courier recount)', () => {
     expect(fixed.total).toBe(fresh.total - fresh.servicesTotal + 77_000);
   });
 });
+
+describe('v4.2 fees are byte-identical to M2 (D22)', () => {
+  const flyer = { kind: 'flyer', spec: { mode: 'have', qty: 500, ink: 'color', size: 'A5', paper: 'glossy' } } as ServiceDraft;
+  const drafts: OrderDraft[] = [
+    { children: [], services: [flyer] }, // no home pickup
+    { children: [SARA], services: [cart(1)], coupon: 'SCHOOL1405', urgent: true },
+    { children: [], services: [cart(1)] },
+  ];
+  it('the delivery choice never changes the quote: same JSON with and without `delivery`', () => {
+    for (const d of drafts) {
+      for (const plan of ['bronze', 'gold', 'platinum'] as const) {
+        const base = JSON.stringify(quoteDraft(d, makeCtx(), plan));
+        expect(JSON.stringify(quoteDraft({ ...d, delivery: { method: 'customer_pickup', pickupPointId: 'pp1' } }, makeCtx(), plan))).toBe(base);
+        expect(JSON.stringify(quoteDraft({ ...d, delivery: { method: 'courier', note: 'زنگ دوم' } }, makeCtx(), plan))).toBe(base);
+      }
+    }
+  });
+  it('a print-only order still pays today’s pickup and delivery fee, with today’s lines', () => {
+    const q = computeQuote({ children: [], services: [flyer], delivery: { method: 'customer_pickup', pickupPointId: 'pp1' } }, makeCtx(), 'bronze').quote;
+    expect(q).toMatchObject({ pickupFee: 35000, deliveryFee: 35000 });
+    expect(q).not.toHaveProperty('homePickup');
+    expect(q.lines.map((l) => l.key)).toEqual(['binding', 'services', 'pickup', 'delivery', 'plan', 'coupon', 'rules', 'urgent']);
+    expect(q.lines.find((l) => l.key === 'delivery')!.label).toBe('تحویل');
+  });
+});

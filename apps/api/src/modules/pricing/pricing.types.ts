@@ -1,5 +1,5 @@
 import type { CampaignService, ExtraService, PlanId, Tone, PayMethod } from '../../common/constants.js';
-import type { Checklists, OpsSettings, Prices } from '../catalog/catalog.defaults.js';
+import type { Checklists, OpsSettings, PickupPoint, Prices } from '../catalog/catalog.defaults.js';
 import type { RuleCondition, RuleEffect } from '../rules/rule.schema.js';
 import type { PrintAddons } from '../catalog/catalog.defaults.js';
 import type { PriceBookSnapshot } from '../price-book/snapshot.js';
@@ -155,6 +155,8 @@ export interface OrderDraft {
   coupon?: string;
   urgent?: boolean;
   pickup?: Pickup;
+  /** v4.2 delivery choice — ignored by pricing (D22). */
+  delivery?: { method: 'courier' | 'customer_pickup'; pickupPointId?: string; note?: string };
   payMethod?: PayMethod;
 }
 
@@ -211,6 +213,8 @@ export interface RuleLike {
 }
 
 export interface PricingContext {
+  /** v4.2 «محل‌های تحویل حضوری» (order placement). */
+  pickupPoints?: PickupPoint[];
   prices: Prices;
   urgentEnabled: boolean;
   /** All colours, sorted by `sort`; `name`/`on`/`sort` let print resolve and name the spiral colour. */
