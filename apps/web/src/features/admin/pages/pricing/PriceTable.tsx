@@ -1,49 +1,45 @@
 import { TONES } from '@/components/brand'
 import { fa, money } from '@/lib/format'
-import type { MatrixRow, PriceVersionView } from '@/lib/types'
+import { NO_PROVIDER_PRICE } from '@/lib/provider-labels'
+import type { MatrixRow, PriceLayer, PriceVersionView } from '@/lib/types'
 import { IconAction, Tag } from '../../components/controls'
 import { AdminRow, AdminTable } from '../../components/table'
 import { MODE_LABEL, STATUS_LABEL, STATUS_TONE, safeJalali } from './labels'
 
 const COLUMNS = 'minmax(200px,2.2fr) minmax(130px,1.2fr) minmax(130px,1.1fr) 112px 120px'
 
-const UNAVAILABLE = (
-  <Tag bg="#eef2fb" fg="#4a5268">
-    ناموجود
-  </Tag>
+const missing = (layer: PriceLayer) => (
+  <Tag bg="#eef2fb" fg="#4a5268">{layer === 'provider' ? NO_PROVIDER_PRICE : 'ناموجود'}</Tag>
 )
 
-function PriceCell({ v }: { v: PriceVersionView | null }) {
-  if (!v) return UNAVAILABLE
-  if (v.status === 'disabled' || v.unitPrice === null) {
+function PriceCell({ v, layer, providerNames }: { v: PriceVersionView | null; layer: PriceLayer; providerNames?: Map<string, string> }) {
+  if (!v || v.status === 'disabled' || v.unitPrice === null) {
     return (
       <div className="min-w-0">
-        {UNAVAILABLE}
-        {v.mode === 'formula' && v.formula && (
-          <div dir="ltr" className="mt-1 truncate text-start font-mono text-[11px] text-muted-2" title={v.formula}>
-            {v.formula}
-          </div>
-        )}
+        {missing(layer)}
+        {v?.mode === 'formula' && v.formula && <div dir="ltr" className="mt-1 truncate text-start font-mono text-[11px] text-muted-2" title={v.formula}>{v.formula}</div>}
+        {v?.baseProviderId && <div className="mt-1 text-[11px] font-bold text-muted-2">مجری پایه {providerNames?.get(v.baseProviderId) ?? ''} قیمت فعال ندارد</div>}
       </div>
     )
   }
-  if (v.mode === 'formula') return <FormulaCell v={v} />
-  return <span className="font-extrabold">{money(v.unitPrice)}</span>
-}
-
-function FormulaCell({ v }: { v: PriceVersionView }) {
+  if (v.mode === 'manual') return <span className="font-extrabold">{money(v.unitPrice)}</span>
   return (
     <div className="min-w-0">
-      <div className="font-extrabold">{v.unitPrice === null ? 'ناموجود' : money(v.unitPrice)}</div>
-      <div className="text-[11px] font-bold text-muted-2">{MODE_LABEL.formula}</div>
-      <div dir="ltr" className="truncate text-start font-mono text-[11px] text-muted-2" title={v.formula}>
-        {v.formula}
+      <div className="font-extrabold">{money(v.unitPrice)}</div>
+      <div className="text-[11px] font-bold text-muted-2">
+        {MODE_LABEL[v.mode]}
+        {v.mode === 'fixed_markup' && v.markup !== undefined && ` (${money(v.markup)})`}
+        {v.mode === 'percent_markup' && v.markup !== undefined && ` (${fa(v.markup)}٪)`}
+        {v.baseProviderId && ` · ${providerNames?.get(v.baseProviderId) ?? ''}`}
       </div>
+      {v.mode === 'formula' && <div dir="ltr" className="truncate text-start font-mono text-[11px] text-muted-2" title={v.formula}>{v.formula}</div>}
     </div>
   )
 }
 
-export function PriceTable({ rows, onEdit, onHistory }: { rows: MatrixRow[]; onEdit: (row: MatrixRow) => void; onHistory: (row: MatrixRow) => void }) {
+export function PriceTable({ rows, onEdit, onHistory, layer = 'customer', providerNames }: {
+  rows: MatrixRow[]; onEdit: (row: MatrixRow) => void; onHistory: (row: MatrixRow) => void; layer?: PriceLayer; providerNames?: Map<string, string>
+}) {
   return (
     <AdminTable columns={COLUMNS} minWidth={780} head={['ترکیب', 'قیمت فعلی', 'قیمت بعدی', 'وضعیت', '']}>
       {rows.map((row) => {
@@ -52,19 +48,18 @@ export function PriceTable({ rows, onEdit, onHistory }: { rows: MatrixRow[]; onE
         return (
           <AdminRow key={row.comboKey}>
             <span className="font-bold">{row.label}</span>
-            <PriceCell v={row.current} />
+            <PriceCell v={row.current} layer={layer} providerNames={providerNames} />
             {row.next ? (
               <div>
-                <div className="font-extrabold">{row.next.status === 'disabled' || row.next.unitPrice === null ? UNAVAILABLE : money(row.next.unitPrice)}</div>
+                <div className="font-extrabold">{row.next.status === 'disabled' || row.next.unitPrice === null ? missing(layer) : money(row.next.unitPrice)}</div>
                 <div className="text-[11px] font-bold text-muted-2">{safeJalali(row.next.effectiveFrom)}</div>
               </div>
             ) : (
               <span className="text-muted-3">—</span>
             )}
-            <span>
-              <Tag bg={t.soft} fg={t.ink}>
-                {row.hasVersions ? STATUS_LABEL[status] : 'بدون قیمت'}
-              </Tag>
+            <span className="grid justify-items-start gap-1">
+              <Tag bg={t.soft} fg={t.ink}>{row.hasVersions ? STATUS_LABEL[status] : layer === 'provider' ? NO_PROVIDER_PRICE : 'بدون قیمت'}</Tag>
+              {row.pending && <Tag bg={TONES.amber.soft} fg={TONES.amber.ink}>در انتظار تأیید{row.pending.unitPrice !== null ? `: ${money(row.pending.unitPrice)}` : ''}</Tag>}
             </span>
             <div className="flex items-center gap-2">
               <IconAction kind="edit" label={`ویرایش قیمت ${row.label}`} onClick={() => onEdit(row)} />

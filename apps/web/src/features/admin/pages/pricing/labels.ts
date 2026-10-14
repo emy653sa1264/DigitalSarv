@@ -20,7 +20,8 @@ export const STATUS_TONE = {
   expired: 'ink',
 } as const satisfies Record<PriceStatus, string>
 
-export const MODE_LABEL = { manual: 'دستی', formula: 'فرمول', fixed_markup: 'سود ثابت', percent_markup: 'سود درصدی' } as const
+export const MODE_LABEL = { manual: 'دستی', formula: 'فرمول', fixed_markup: 'قیمت مجری + مبلغ ثابت', percent_markup: 'قیمت مجری + درصد' } as const
+export const CUSTOMER_MODE_OPTIONS = (['manual', 'fixed_markup', 'percent_markup', 'formula'] as const).map((m) => ({ value: m, label: MODE_LABEL[m] }))
 export const BULK_OP_LABEL: Record<BulkOp, string> = {
   inc_pct: 'افزایش درصدی',
   dec_pct: 'کاهش درصدی',
@@ -39,6 +40,7 @@ export const AUDIT_LABEL: Record<string, string> = {
   bulk: 'تغییر گروهی',
   approve: 'تأیید',
   reject: 'رد',
+  submit: 'درخواست مجری',
   range: 'بازه فنری',
 }
 

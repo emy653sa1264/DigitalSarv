@@ -1,19 +1,24 @@
 import { useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { Chip } from '@/components/brand'
+import { fa } from '@/lib/format'
+import { useCan } from '@/lib/permissions'
 import type { MatrixRow } from '@/lib/types'
 import { usePapers } from '../../api'
 import { AdminSelect, type SelectOption } from '../../components/controls'
 import { PageHeader, QueryView } from '../../components/kit'
 import { SearchInput } from '../../components/table'
-import { usePriceMatrix, type PriceService } from '../../pricing-api'
+import { usePendingPrices, usePriceMatrix, type PriceService } from '../../pricing-api'
+import { useProviders } from '../../providers-api'
 import { AddonsCard } from './AddonsCard'
 import { AuditCard } from './AuditCard'
 import { BulkDialog } from './BulkDialog'
 import { COLOR_TYPE_OPTIONS, SIDE_OPTIONS, SIZE_OPTIONS } from './labels'
+import { PendingTab } from './PendingTab'
 import { PriceEditDialog } from './PriceEditDialog'
 import { PriceHistoryDialog } from './PriceHistoryDialog'
 import { PriceTable } from './PriceTable'
+import { ProviderLayerTab } from './ProviderLayerTab'
 import { RangesCard } from './RangesCard'
 
 type Tab = PriceService | 'audit'
@@ -26,45 +31,68 @@ const TABS: { key: Tab; label: string }[] = [
 ]
 const ALL = '__all'
 
+type View = 'customer' | 'provider' | 'pending'
+
 export function PricingCenterPage() {
   const [params, setParams] = useSearchParams()
+  const canCustomer = useCan('customer_price_view')
+  const canProvider = useCan('provider_price_view')
+  const pending = usePendingPrices(1, canProvider)
+  const views: { key: View; label: string; show: boolean }[] = [
+    { key: 'customer', label: 'قیمت مشتری', show: canCustomer },
+    { key: 'provider', label: 'قیمت مجریان', show: canProvider },
+    { key: 'pending', label: `درخواست‌های مجریان${pending.data?.total ? ` (${fa(pending.data.total)})` : ''}`, show: canProvider },
+  ]
+  const visible = views.filter((v) => v.show)
+  const rawView = params.get('view')
+  const view: View | undefined = visible.find((v) => v.key === rawView)?.key ?? visible[0]?.key
   const raw = params.get('tab')
   const tab: Tab = TABS.some((t) => t.key === raw) ? (raw as Tab) : 'bw'
-  const setTab = (t: Tab) => setParams({ tab: t }, { replace: true })
+  const setView = (v: View) => setParams({ view: v }, { replace: true })
+  const setTab = (t: Tab) => setParams({ view: 'customer', tab: t }, { replace: true })
   const [bulkOpen, setBulkOpen] = useState(false)
 
   return (
     <>
       <PageHeader
         title="مرکز مدیریت قیمت"
-        subtitle="قیمت مشتری هر ترکیب · نسخه‌بندی، زمان‌بندی و تاریخچه"
-        actions={
-          <button
-            type="button"
-            onClick={() => setBulkOpen(true)}
-            className="cursor-pointer rounded-full border-[1.5px] border-line bg-white px-[18px] py-[11px] text-[13px] font-extrabold hover:bg-shell"
-          >
-            تغییر گروهی
-          </button>
-        }
+        subtitle="قیمت مشتری و قیمت مجریان — دو لایه جدا، با نسخه‌بندی، زمان‌بندی، تأیید و تاریخچه"
+        actions={view === 'customer' ? (
+          <button type="button" onClick={() => setBulkOpen(true)} className="cursor-pointer rounded-full border-[1.5px] border-line bg-white px-[18px] py-[11px] text-[13px] font-extrabold hover:bg-shell">تغییر گروهی</button>
+        ) : undefined}
       />
-      <div className="no-scrollbar -mx-1 mb-4 flex gap-1.5 overflow-x-auto px-1 pb-1" role="tablist" aria-label="بخش‌های مرکز قیمت">
-        {TABS.map((t) => (
-          <Chip key={t.key} size="sm" role="tab" aria-selected={tab === t.key} selected={tab === t.key} onClick={() => setTab(t.key)} className="shrink-0 whitespace-nowrap">
-            {t.label}
-          </Chip>
-        ))}
-      </div>
-
-      {tab === 'audit' ? <AuditCard /> : <ServiceTab key={tab} service={tab} />}
-
-      <BulkDialog open={bulkOpen} onOpenChange={setBulkOpen} defaultService={tab === 'audit' ? 'bw' : tab} />
+      {visible.length === 0 ? (
+        <div className="rounded-[22px] border border-line bg-white px-5 py-8 text-center text-sm font-bold text-muted-2">به این بخش دسترسی ندارید</div>
+      ) : (
+        <>
+          <div className="mb-3 flex flex-wrap gap-1.5" role="tablist" aria-label="لایه قیمت">
+            {visible.map((v) => (
+              <Chip key={v.key} role="tab" aria-selected={view === v.key} selected={view === v.key} onClick={() => setView(v.key)}>{v.label}</Chip>
+            ))}
+          </div>
+          {view === 'customer' && (
+            <>
+              <div className="no-scrollbar -mx-1 mb-4 flex gap-1.5 overflow-x-auto px-1 pb-1" role="tablist" aria-label="بخش‌های قیمت مشتری">
+                {TABS.map((t) => (
+                  <Chip key={t.key} size="sm" role="tab" aria-selected={tab === t.key} selected={tab === t.key} onClick={() => setTab(t.key)} className="shrink-0 whitespace-nowrap">{t.label}</Chip>
+                ))}
+              </div>
+              {tab === 'audit' ? <AuditCard /> : <ServiceTab key={tab} service={tab} />}
+              <BulkDialog open={bulkOpen} onOpenChange={setBulkOpen} defaultService={tab === 'audit' ? 'bw' : tab} />
+            </>
+          )}
+          {view === 'provider' && <ProviderLayerTab />}
+          {view === 'pending' && <PendingTab />}
+        </>
+      )}
     </>
   )
 }
 
 function ServiceTab({ service }: { service: PriceService }) {
   const query = usePriceMatrix(service)
+  const providers = useProviders(useCan('provider_view'))
+  const providerNames = new Map((providers.data ?? []).map((p) => [p.id, p.name]))
   const papers = usePapers()
   const [search, setSearch] = useState('')
   const [size, setSize] = useState(ALL)
@@ -108,7 +136,7 @@ function ServiceTab({ service }: { service: PriceService }) {
           return shown.length === 0 ? (
             <div className="rounded-[22px] border border-line bg-white px-5 py-8 text-center text-sm font-bold text-muted-2">موردی با این فیلتر پیدا نشد.</div>
           ) : (
-            <PriceTable rows={shown} onEdit={setEditing} onHistory={setHistory} />
+            <PriceTable rows={shown} onEdit={setEditing} onHistory={setHistory} providerNames={providerNames} />
           )
         }}
       </QueryView>
