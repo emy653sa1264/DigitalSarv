@@ -217,3 +217,12 @@ Out of scope (spec §93): automated/AI matching, bidding, ratings, SLA, forecast
    `printLamCover 15,000`, `printLamSheet 6,000` per A4 sheet; A3 ×2, A5 ×0.6, A6 ×0.4 rounded to 100) and
    are switched off.
 5. «خدمات اضافی» keep their existing per-item prices (not versioned in V1); the order snapshot stores them.
+
+## Owner decisions for M3/M4 (2026-10-15)
+
+| # | Decision |
+|---|---|
+| D18 | **All services** go through provider assignment (print, thesis, school-book binding, flyer, cartridge, repair). Couriers keep doing home pickup/delivery where an order needs it. |
+| D19 | Provider notifications: **in-app inbox + web push** in «سرو مجری» (no SMS). |
+| D20 | Provider payouts are settled **weekly** (settlement weekday configurable in تنظیمات); balance accrues per delivered order; admin records each payout. |
+| D21 | A rejected **or unanswered** assignment returns to «تخصیص‌نیافته» and alerts the admin; the response timeout is configurable (default 2 hours). |
