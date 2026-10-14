@@ -32,6 +32,10 @@ export class User {
   @Prop({ type: MongooseSchema.Types.ObjectId })
   courierId?: Types.ObjectId;
 
+  /** v4.1: the provider («مجری») this login belongs to (role `provider` only). */
+  @Prop({ type: MongooseSchema.Types.ObjectId })
+  providerId?: Types.ObjectId;
+
   /** v4: granular admin permissions; absent = every permission (super-admin). */
   @Prop({ type: [String], enum: PERMISSIONS, default: undefined })
   permissions?: Permission[];

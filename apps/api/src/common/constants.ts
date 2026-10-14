@@ -1,4 +1,4 @@
-export const ROLES = ['customer', 'courier', 'admin'] as const;
+export const ROLES = ['customer', 'courier', 'admin', 'provider'] as const;
 export type Role = (typeof ROLES)[number];
 
 export const PLAN_IDS = ['bronze', 'silver', 'gold', 'platinum'] as const;
@@ -141,7 +141,12 @@ export const REDIS_KEYS = {
   otpTries: (phone: string) => `otp:tries:${phone}`,
   otpRate: (phone: string) => `otp:rl:${phone}`,
   jwtDeny: (jti: string) => `jwt:deny:${jti}`,
+  /** Unix seconds; tokens of this user issued earlier are rejected (role / provider-link changes, demotion). */
+  userRevoked: (userId: string) => `user:revoked:${userId}`,
 } as const;
+
+/** Kept longer than any JWT lifetime (`JWT_EXPIRES_IN`, default 7 d). */
+export const SESSION_REVOKE_TTL_S = 30 * 86_400;
 
 /** First order code handed out when no orders exist (`INCR` returns this). */
 export const FIRST_ORDER_CODE = 10250;

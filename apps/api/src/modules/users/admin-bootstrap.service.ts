@@ -29,7 +29,8 @@ export class AdminBootstrapService implements OnApplicationBootstrap {
             { phone },
             {
               $set: { role: 'admin' },
-              $unset: { courierId: 1 },
+              // ADMIN_PHONES are always super-admins (v4.1): no permission list, no courier/provider link
+              $unset: { courierId: 1, providerId: 1, permissions: 1 },
               $setOnInsert: { phone, name: 'مدیر سیستم', planId: 'bronze', referralCode: makeReferralCode() },
             },
             { upsert: true },
