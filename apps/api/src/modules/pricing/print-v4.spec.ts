@@ -183,3 +183,24 @@ describe('task 9 fixes', () => {
     expect(priceColorPrint(color({ paper: 'glossy200' }), c).unavailable).toBeTruthy();
   });
 });
+
+describe('customer markup over a provider (v4.1)', () => {
+  const markup = (o: object = {}) => {
+    const c = cat();
+    c.priceBook!.customer['bw|A4|single'] = { versionId: 'mk', version: 3, mode: 'fixed_markup', markup: 1000, rounding: 0, baseProviderId: 'P1', ...o };
+    return c;
+  };
+  it('prices from the base provider price + markup and snapshots only customer data', () => {
+    const c = markup();
+    c.priceBook!.provider = { P1: { 'bw|A4|single': 3500 } };
+    const r = priceBwPrint(bw(), c);
+    expect(r.price).toBe(10 * 4500);
+    expect(r.lines[0]).toEqual({ comboKey: 'bw|A4|single', versionId: 'mk', version: 3, unitPrice: 4500, quantity: 10, subtotal: 45000 });
+    expect(JSON.stringify(r)).not.toMatch(/P1|provider/);
+  });
+  it('is unavailable while the base provider has no price', () => {
+    const r = priceBwPrint(bw(), markup());
+    expect(r.unavailable).toEqual(expect.any(String));
+    expect(r.price).toBe(0);
+  });
+});

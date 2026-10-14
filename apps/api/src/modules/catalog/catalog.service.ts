@@ -11,7 +11,7 @@ import { BindingRange } from '../price-book/schemas/binding-range.schema.js';
 import { PriceVersion } from '../price-book/schemas/price-version.schema.js';
 import { PRINT_SIZES, singleSideKey } from '../price-book/combo.js';
 import { unitPrice } from '../price-book/resolve.js';
-import { loadCustomerSnapshot } from '../price-book/snapshot.js';
+import { loadCustomerSnapshot, providerVars } from '../price-book/snapshot.js';
 import { Campaign, campaignJson } from '../campaigns/campaign.schema.js';
 import {
   DEFAULT_PRICES,
@@ -147,7 +147,7 @@ export class CatalogService {
       const e = snapshot.customer[key];
       if (!e) return null;
       const o = key.split('|');
-      const vars: Record<string, number> = { quantity: 1 };
+      const vars: Record<string, number> = { quantity: 1, ...providerVars(snapshot, e, key) };
       if (o[0] === 'color' && paperCost.has(o[3])) vars.paper_cost = paperCost.get(o[3])!;
       const sib = singleSideKey(key);
       const base = sib ? evalKey(sib) : null;

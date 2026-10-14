@@ -1,3 +1,4 @@
+import { Types } from 'mongoose';
 import { fakeModel } from '../../../test/fake-model.js';
 import { FakeRedis, fakeRedisService } from '../../../test/fake-redis.js';
 import { CatalogService } from './catalog.service.js';
@@ -77,5 +78,22 @@ describe('CatalogService printing', () => {
     const { svc } = setup([ver({ comboKey: 'color|A4|double|cardstock', mode: 'formula', price: undefined, formula: 'paper_cost + 100' })]);
     const cat = (await svc.getCatalog()) as { printing: { prices: Record<string, number> } };
     expect(cat.printing.prices).toEqual({});
+  });
+  it('markup follows a scheduled provider price; no provider data leaks', async () => {
+    const P = new Types.ObjectId();
+    const pv = (price: number, o: Record<string, unknown> = {}) => ({
+      layer: 'provider', providerId: P, comboKey: 'bw|A4|single', version: 1, mode: 'manual', price, rounding: 0, state: 'published',
+      reason: 'p', effectiveFrom: new Date(Date.now() - 86_400_000), ...o,
+    });
+    const { svc, redis } = setup([
+      ver({ mode: 'percent_markup', price: undefined, markup: 20, baseProviderId: P }),
+      pv(3500),
+      pv(4000, { version: 2, effectiveFrom: new Date(Date.now() + 90_000) }),
+    ]);
+    const cat = (await svc.getCatalog()) as { printing: { prices: Record<string, number> } };
+    expect(cat.printing.prices['bw|A4|single']).toBe(4200);
+    expect(JSON.stringify(cat)).not.toMatch(/providerId|baseProviderId|provider_price|"provider"/);
+    const key = [...redis.client.store.keys()].find((k) => k.startsWith('catalog:v1:'))!;
+    expect(redis.client.ttl(key)).toBeLessThanOrEqual(90);
   });
 });

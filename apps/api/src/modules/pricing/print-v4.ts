@@ -7,6 +7,7 @@ import { defaultPrintAddons, type PrintAddons } from '../catalog/catalog.default
 import { comboKey, singleSideKey } from '../price-book/combo.js';
 import { findRange } from '../price-book/ranges.js';
 import { unitPrice } from '../price-book/resolve.js';
+import { providerVars } from '../price-book/snapshot.js';
 import { extraFor, mergePages, resolveOn, type ServiceCatalog } from './pricing.js';
 import type { BwPrintSpec, ColorPrintSpec, DocsSpec, PricingLine, PrintSize, PrintSpec, PrintV4Base, ServiceDraft } from './pricing.types.js';
 
@@ -87,12 +88,12 @@ export function colorSheetCount(first: number, last: number, ranges: { from: num
 function unit(key: string, cat: ServiceCatalog, vars: Record<string, number>, reason = UNAVAILABLE_PRICE): { price: number; versionId: string; version: number } {
   const e = cat.priceBook?.customer[key];
   if (!e) throw new Unavailable(reason);
-  const all = { ...vars };
+  const all = { ...vars, ...providerVars(cat.priceBook, e, key) };
   const sibling = singleSideKey(key);
   if (sibling && cat.priceBook?.customer[sibling]) {
     try { all.base_price = unit(sibling, cat, vars, reason).price; } catch { /* formula without base → unavailable below */ }
   }
-  const v = unitPrice({ id: e.versionId, version: e.version, state: 'published', effectiveFrom: new Date(0), mode: e.mode, price: e.price, formula: e.formula, markup: e.markup, discount: e.discount, rounding: e.rounding }, all);
+  const v = unitPrice({ id: e.versionId, version: e.version, state: 'published', effectiveFrom: new Date(0), mode: e.mode, price: e.price, formula: e.formula, markup: e.markup, discount: e.discount, rounding: e.rounding, baseProviderId: e.baseProviderId ?? null }, all);
   if (v === null) throw new Unavailable(reason);
   return { price: v, versionId: e.versionId, version: e.version };
 }

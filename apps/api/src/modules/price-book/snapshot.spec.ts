@@ -1,5 +1,6 @@
 import { Types } from 'mongoose';
 import { fakeModel } from '../../../test/fake-model.js';
+import { unitPrice } from './resolve.js';
 import { effectiveProviderPrices, loadCustomerSnapshot, providerVars } from './snapshot.js';
 
 const id = () => new Types.ObjectId();
@@ -40,6 +41,15 @@ describe('snapshot — provider prices of base providers', () => {
     const versions = fakeModel([customer, pv(A, 3500), pv(A, 4000, { version: 2, effectiveFrom: new Date('2026-07-01') })]);
     const snap = await loadCustomerSnapshot(versions as never, fakeModel([]) as never, at);
     expect(snap.nextChangeAt).toBe('2026-07-01T00:00:00.000Z');
+  });
+  it('after a scheduled provider change the markup customer unit follows the new price', async () => {
+    const customer = { _id: new Types.ObjectId(), layer: 'customer', providerId: null, comboKey: 'bw|A4|single', version: 1, state: 'published', mode: 'percent_markup', markup: 20, baseProviderId: A, rounding: 0, effectiveFrom: new Date('2026-01-01') };
+    const versions = fakeModel([customer, pv(A, 3500), pv(A, 4000, { version: 2, effectiveFrom: new Date('2026-07-01') })]);
+    const later = new Date('2026-08-01T00:00:00Z');
+    const snap = await loadCustomerSnapshot(versions as never, fakeModel([]) as never, later);
+    expect(snap.provider![String(A)]['bw|A4|single']).toBe(4000);
+    const e = snap.customer['bw|A4|single'];
+    expect(unitPrice({ id: e.versionId, version: e.version, state: 'published', effectiveFrom: new Date(0), mode: e.mode, markup: e.markup, rounding: e.rounding }, providerVars(snap, e, 'bw|A4|single'))).toBe(4800);
   });
   it('effectiveProviderPrices skips disabled winners and other layers', () => {
     const rows = [pv(A, 3500), pv(A, 0, { version: 2, state: 'disabled', effectiveFrom: new Date('2026-03-01') }), pv(B, 3700), { ...pv(B, 1), layer: 'customer' }];
