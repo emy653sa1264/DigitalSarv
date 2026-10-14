@@ -58,6 +58,13 @@ export interface PendingItem { version: VersionView; providerName: string; label
 const PENDING_EXISTS = 'برای این ترکیب یک قیمت در انتظار تأیید دارید';
 const STALE = 'وضعیت این نسخه تغییر کرده است؛ صفحه را تازه کنید';
 
+/** M2-R1: provider names/prices in an audit `after.negativeMargin` are shown only to readers with `provider_price_view`. */
+function redactAfter(after: unknown): unknown {
+  const nm = (after as { negativeMargin?: { comboKey: string }[] } | null | undefined)?.negativeMargin;
+  if (!Array.isArray(nm)) return after;
+  return { ...(after as object), negativeMargin: nm.map((c) => ({ comboKey: c.comboKey })) };
+}
+
 /**
  * The provider's own view of a version — an explicit whitelist (no author, layer, markup or customer data; §26).
  * `reason` is only the caller's own note (P4): admin/rollback/bulk reasons are never shown, so it is '' for those.
@@ -68,7 +75,7 @@ function providerView(v: VersionView | null, userId?: string): ProviderPriceView
     id: v.id, comboKey: v.comboKey, version: v.version, price: v.unitPrice, effectiveFrom: v.effectiveFrom,
     ...(v.effectiveUntil ? { effectiveUntil: v.effectiveUntil } : {}), status: v.status,
     reason: userId && v.createdBy?.id === userId ? v.reason : '',
-    ...(v.reviewNote ? { reviewNote: v.reviewNote } : {}), createdAt: v.createdAt,
+    ...(v.reviewNote && v.state === 'rejected' ? { reviewNote: v.reviewNote } : {}), createdAt: v.createdAt,
   };
 }
 export interface CompareRow {
@@ -259,7 +266,8 @@ export class PriceBookService {
     return this.viewOne(doc);
   }
 
-  async auditLog(page = 1, limit = 20, layers: PriceLayer[] = [...PRICE_LAYERS]) {
+  async auditLog(page = 1, limit = 20, layers: PriceLayer[] = [...PRICE_LAYERS], readerId?: string) {
+    const canSeeProviders = readerId ? await this.canViewProviderPrices(readerId) : false;
     const skip = (Math.max(1, page) - 1) * limit;
     const filter = { layer: { $in: layers } };
     const [items, total] = await Promise.all([
@@ -270,7 +278,7 @@ export class PriceBookService {
     return {
       items: items.map((a) => ({
         id: String(a._id), action: a.action, layer: a.layer, providerId: a.providerId ? String(a.providerId) : null,
-        comboKeys: a.comboKeys, reason: a.reason, at: new Date(a.at).toISOString(), before: a.before, after: a.after,
+        comboKeys: a.comboKeys, reason: a.reason, at: new Date(a.at).toISOString(), before: a.before, after: canSeeProviders ? a.after : redactAfter(a.after),
         ...(a.by ? { by: { id: String(a.by), name: names.get(String(a.by)) ?? '' } } : {}),
       })),
       total, page, limit,
@@ -300,15 +308,24 @@ export class PriceBookService {
 
   /** Admin approval: published at max(requested, now); a customer version is never created or changed. */
   async approve(id: string, reason: string, by: string, confirmNegativeMargin = false): Promise<VersionView> {
+    await this.assertCan(by, 'provider_price_publish');
     const before = await this.findVersion(id);
     if (before.layer !== 'provider') throw new BadRequestException('فقط قیمت‌های مجری تأیید می‌شوند');
-    await this.assertCan(by, 'provider_price_publish');
     const why = this.reason(reason);
     if (before.state !== 'pending_approval') throw new ConflictException(STALE);
     const now = new Date();
     const requested = new Date(before.effectiveFrom);
-    const effectiveFrom = requested.getTime() > now.getTime() ? requested : now;
-    if (effectiveFrom !== now && (await this.versions.exists({ layer: 'provider', providerId: before.providerId, comboKey: before.comboKey, state: 'published', effectiveFrom }))) {
+    let effectiveFrom = requested;
+    if (requested.getTime() <= now.getTime()) {
+      // like `transition`: strictly after the latest already-started published version, so the approval deterministically wins
+      effectiveFrom = now;
+      const latest = await this.versions
+        .findOne({ layer: 'provider', providerId: before.providerId, comboKey: before.comboKey, state: 'published', effectiveFrom: { $lte: now } })
+        .sort({ effectiveFrom: -1 })
+        .lean();
+      if (latest && new Date(latest.effectiveFrom).getTime() >= now.getTime()) effectiveFrom = new Date(new Date(latest.effectiveFrom).getTime() + 1);
+    }
+    if (requested.getTime() > now.getTime() && (await this.versions.exists({ layer: 'provider', providerId: before.providerId, comboKey: before.comboKey, state: 'published', effectiveFrom }))) {
       throw new ConflictException('قیمت دیگری با همین زمان شروع (هم‌زمان) منتشر شده است');
     }
     const negative = await this.checkMargin(before.comboKey, effectiveFrom, 'provider', before.providerId, this.valueOf(before), confirmNegativeMargin, by);
@@ -324,9 +341,9 @@ export class PriceBookService {
   }
 
   async reject(id: string, reason: string, by: string): Promise<VersionView> {
+    await this.assertCan(by, 'provider_price_publish');
     const before = await this.findVersion(id);
     if (before.layer !== 'provider') throw new BadRequestException('فقط قیمت‌های مجری تأیید می‌شوند');
-    await this.assertCan(by, 'provider_price_publish');
     const why = this.reason(reason);
     const doc = await this.versions.findOneAndUpdate(
       { _id: before._id, state: 'pending_approval' },
@@ -342,7 +359,8 @@ export class PriceBookService {
    * Pending submissions, newest first, with the provider's current price and the customer price beside them.
    * Batched (P13): one read of the page's combos (+ single-sided siblings) instead of a history per row.
    */
-  async pendingList(page = 1, limit = 20) {
+  async pendingList(page = 1, limit = 20, readerId?: string) {
+    const seeCustomer = readerId ? await this.canView(readerId, 'customer_price_view') : false;
     const filter = { layer: 'provider' as const, state: 'pending_approval' as const };
     const skip = (Math.max(1, page) - 1) * limit;
     const at = new Date();
@@ -374,7 +392,7 @@ export class PriceBookService {
         providerName: providerName.get(pid) ?? '',
         label: options ? comboLabel(options, names) : r.comboKey,
         currentProviderPrice: providerPrices[pid]?.[r.comboKey] ?? null,
-        customerPrice: eff ? unitPrice(eff, vars(r.comboKey, eff.baseProviderId)) : null,
+        customerPrice: seeCustomer && eff ? unitPrice(eff, vars(r.comboKey, eff.baseProviderId)) : null,
       };
     });
     return { items, total, page, limit };
@@ -564,21 +582,25 @@ export class PriceBookService {
   }
 
   /** 409 NEGATIVE_MARGIN unless confirmed; returns the (confirmed) conflicts for the audit. */
-  private async checkMargin(comboKey: string, at: Date, layer: PriceLayer, providerId: Types.ObjectId | null, value: VersionValue, confirmed: boolean, by: string): Promise<MarginWarning[]> {
+  private async checkMargin(comboKey: string, at: Date, layer: PriceLayer, providerId: Types.ObjectId | null, value: VersionValue, confirmed: boolean, by: string): Promise<MarginConflict[]> {
     const m = await this.marginChecker(at, comboKey);
     const found = m.conflicts(comboKey, layer, providerId ? String(providerId) : null, m.unitOf(value, comboKey, layer));
     // M2-R1: provider names and prices only for admins who may view provider prices (the count stays visible)
     const shown: MarginWarning[] = found.length && !(await this.canViewProviderPrices(by)) ? found.map((c) => ({ comboKey: c.comboKey })) : found;
     if (found.length && !confirmed) throw new ConflictException({ statusCode: 409, code: 'NEGATIVE_MARGIN', message: NEGATIVE_MSG, conflicts: shown });
-    return shown;
+    return found; // the audit keeps the full list; it is redacted for the reader at read time (M2-R1)
   }
 
-  private async canViewProviderPrices(userId: string): Promise<boolean> {
+  private canViewProviderPrices(userId: string): Promise<boolean> {
+    return this.canView(userId, 'provider_price_view');
+  }
+
+  private async canView(userId: string, permission: Permission): Promise<boolean> {
     const user = Types.ObjectId.isValid(userId) ? await this.users.findById(userId).lean() : null;
-    return !!user && user.role === 'admin' && (!user.permissions || user.permissions.includes('provider_price_view'));
+    return !!user && user.role === 'admin' && (!user.permissions || user.permissions.includes(permission));
   }
 
-  private withNegative(after: Record<string, unknown>, conflicts: MarginWarning[]) {
+  private withNegative(after: Record<string, unknown>, conflicts: MarginConflict[]) {
     return conflicts.length ? { ...after, negativeMargin: conflicts } : after;
   }
 

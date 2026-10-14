@@ -31,15 +31,15 @@ export class AdminPriceBookController {
   compare(@Query() q: CompareQueryDto) { return this.book.compare(q.service, q.providerId); }
 
   @Get('price-book/pending') @RequirePermissions('provider_price_view')
-  pending(@Query() q: PageQueryDto) {
+  pending(@Query() q: PageQueryDto, @CurrentUser() user: AuthUser) {
     const { page, limit } = pageParams(q);
-    return this.book.pendingList(page, limit);
+    return this.book.pendingList(page, limit, user.id);
   }
 
   @Get('price-book/audit')
   async audit(@Query() q: PageQueryDto, @CurrentUser() user: AuthUser) {
     const { page, limit } = pageParams(q);
-    return this.book.auditLog(page, limit, await this.book.viewableLayers(user.id));
+    return this.book.auditLog(page, limit, await this.book.viewableLayers(user.id), user.id);
   }
 
   @Post('price-book/preview') @HttpCode(200)

@@ -757,7 +757,7 @@ only when `provider > 0` (§42); `negative = difference < 0`. Margins are admin-
 `{ statusCode: 409, code: 'NEGATIVE_MARGIN', message: 'قیمت مشتری کمتر از قیمت مجری است', conflicts: MarginConflict[] }`
 when, at the version's `effectiveFrom`, the effective customer unit price (quantity 1) of the combo would be lower than
 any provider's effective price. Resend with `confirmNegativeMargin: true` to proceed; the audit entry's `after` then
-carries `negativeMargin: MarginConflict[]`. Admins without `provider_price_view` get `conflicts` (and the audit `negativeMargin`) reduced to `{ comboKey }[]` — no provider names or prices. Bulk: `confirmNegativeMargin` covers every flagged row.
+carries `negativeMargin: MarginConflict[]`. Admins without `provider_price_view` get `conflicts` (and the audit `negativeMargin`) reduced to `{ comboKey }[]` — no provider names or prices. The audit stores the full list; `GET /admin/price-book/audit` redacts it for readers without `provider_price_view`. `PendingItem.customerPrice` is null without `customer_price_view`. Bulk: `confirmNegativeMargin` covers every flagged row.
 
 **Customer price modes (§21).** In addition to `manual` and `formula`:
 - `fixed_markup`: unit = `provider_price + markup` (markup integer toman ≥ 0);
@@ -781,7 +781,7 @@ carries `negativeMargin: MarginConflict[]`. Admins without `provider_price_view`
 
 ```ts
 interface ProviderPriceView { id: string; comboKey: string; version: number; price: number | null; effectiveFrom: string;
-  effectiveUntil?: string; status: PriceStatus; reason: string /* only the caller's own note; '' for admin-created versions */; reviewNote?: string; createdAt: string }
+  effectiveUntil?: string; status: PriceStatus; reason: string /* '' unless the caller created the version */; reviewNote?: string /* rejected versions only */; createdAt: string }
 interface ProviderPriceRow { comboKey: string; service: 'bw'|'color'|'spiral'|'addon'; options: ComboOptions; label: string;
   capable: boolean;            // inside the provider's capabilities (hint; submission is allowed regardless)
   current: ProviderPriceView | null; next: ProviderPriceView | null; pending: ProviderPriceView | null; lastRejected: ProviderPriceView | null }
