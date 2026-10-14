@@ -147,6 +147,7 @@ export function RowInput({ className, ...props }: ComponentProps<'input'>) {
 export interface SelectOption {
   value: string
   label: string
+  disabled?: boolean
 }
 
 /** Pill-styled select. Use `NONE` for an empty option (Radix forbids ''). */
@@ -177,7 +178,7 @@ export function AdminSelect({
       </SelectTrigger>
       <SelectContent position="popper" className="rounded-[18px] border-line bg-white p-1">
         {options.map((o) => (
-          <SelectItem key={o.value} value={o.value} className="rounded-xl py-2 text-[13.5px] focus:bg-accent-soft focus:text-accent-soft-ink">
+          <SelectItem key={o.value} value={o.value} disabled={o.disabled} className="rounded-xl py-2 text-[13.5px] focus:bg-accent-soft focus:text-accent-soft-ink">
             {o.label}
           </SelectItem>
         ))}

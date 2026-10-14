@@ -1,5 +1,5 @@
-import { REJECT_REASON_LABEL } from '@/lib/dispatch-labels'
-import type { AssignmentView, DispatchJobDetail } from '@/lib/types'
+import { PRIORITY_LABEL, REJECT_REASON_LABEL } from '@/lib/dispatch-labels'
+import type { AssignmentView, DispatchJobDetail, JobPriority } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { when } from './format'
 
@@ -44,7 +44,9 @@ export function JobHistory({ job }: { job: DispatchJobDetail }) {
             <div className="pb-2.5 text-[12.5px] leading-6">
               <div className="font-bold">{ACTION[h.action] ?? h.action} · {h.label}{h.providerName ? ` · ${h.providerName}` : ''}</div>
               <div className="text-muted-2">{when(h.at)} · {h.byName ?? BY[h.byRole]}{h.stage ? ` · مرحله: ${STAGE[h.stage]}` : ''}</div>
-              {h.reason && <div className="text-muted-1">{h.reason}</div>}
+              {(h.reasonCode || h.reason) && <div className="text-muted-1">{h.reasonCode ? REJECT_REASON_LABEL[h.reasonCode] : ''}{h.reason && h.reason !== (h.reasonCode && REJECT_REASON_LABEL[h.reasonCode]) ? `${h.reasonCode ? ' — ' : ''}${h.reason}` : ''}</div>}
+              {h.changes?.priority && <div className="text-muted-1">اولویت: {PRIORITY_LABEL[h.changes.priority[0] as JobPriority] ?? h.changes.priority[0]} ← {PRIORITY_LABEL[h.changes.priority[1] as JobPriority] ?? h.changes.priority[1]}</div>}
+              {h.changes?.deadline && <div className="text-muted-1">مهلت: {when(h.changes.deadline[0])} ← {when(h.changes.deadline[1])}</div>}
             </div>
           </li>
         ))}

@@ -15,6 +15,7 @@ import { AdminSelect, Tag } from '../../components/controls'
 import { Field, FormDialog } from '../../components/FormDialog'
 import { QueryView } from '../../components/kit'
 import { dk, useDispatchMutations, useEligibility } from '../../dispatch-api'
+import { deliveryOptions, pickActive, type DeliveryProviderOption } from './format'
 
 /** §52: each provider with capability, availability, its own price (or «قیمت مجری تنظیم نشده», §53) and capacity. Never auto-picked. */
 export function AssignPanel({ job, mode }: { job: DispatchJobDetail; mode: 'assign' | 'reassign' }) {
@@ -23,6 +24,7 @@ export function AssignPanel({ job, mode }: { job: DispatchJobDetail; mode: 'assi
   const [method, setMethod] = useState<DeliveryMethod>(pickup ? 'customer_pickup' : job.deliveryMethod === 'provider' ? 'provider' : 'courier')
   const query = useEligibility(job.id, method)
   const [picked, setPicked] = useState<EligibilityRow | null>(null)
+  const noActiveDelivery = !!query.data && query.data.deliveryProviders.every((d) => d.status !== 'active')
   return (
     <section className="rounded-[22px] border border-line bg-white p-4">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -30,10 +32,11 @@ export function AssignPanel({ job, mode }: { job: DispatchJobDetail; mode: 'assi
         {!pickup && (
           <div className="flex items-center gap-2 text-[12.5px] font-bold">
             <span>ارسال توسط مجری</span>
-            <DsSwitch checked={method === 'provider'} onCheckedChange={(on) => setMethod(on ? 'provider' : 'courier')} label="ارسال توسط مجری" />
+            <DsSwitch checked={method === 'provider'} disabled={method !== 'provider' && noActiveDelivery} onCheckedChange={(on) => setMethod(on ? 'provider' : 'courier')} label="ارسال توسط مجری" />
           </div>
         )}
       </div>
+      {!pickup && noActiveDelivery && <InfoBanner tone="amber" className="mb-2">مجری فعالِ تحویل وجود ندارد</InfoBanner>}
       {!allowed && <InfoBanner tone="amber" className="mb-2">شما دسترسی {mode === 'assign' ? 'سپردن سفارش' : 'تغییر مجری'} را ندارید.</InfoBanner>}
       <QueryView query={query} rows={3} isEmpty={(e) => e.eligible.length + e.others.length === 0} empty={{ title: 'مجری‌ای ثبت نشده است' }}>
         {(e) => (
@@ -103,11 +106,11 @@ interface ServerProblem { code?: string; problems?: string[]; missing?: string[]
 
 function AssignDialog({ job, row, mode, method, deliveryProviders, onClose }: {
   job: DispatchJobDetail; row: EligibilityRow; mode: 'assign' | 'reassign'; method: DeliveryMethod
-  deliveryProviders: { id: string; name: string; deliveryFee: number | null; zoneOk: boolean }[]; onClose: () => void
+  deliveryProviders: DeliveryProviderOption[]; onClose: () => void
 }) {
   const m = useDispatchMutations(job.id)
   const qc = useQueryClient()
-  const [deliveryProviderId, setDeliveryProviderId] = useState(row.canDeliver ? row.providerId : (deliveryProviders[0]?.id ?? ''))
+  const [deliveryProviderId, setDeliveryProviderId] = useState(pickActive(deliveryProviders, mode === 'reassign' ? job.deliveryProvider?.id : undefined, row.canDeliver ? row.providerId : undefined))
   const [pickupAt, setPickupAt] = useState<PickupAt>('point')
   const [reason, setReason] = useState('')
   const [confirmMissing, setConfirmMissing] = useState(false)
@@ -124,7 +127,7 @@ function AssignDialog({ job, row, mode, method, deliveryProviders, onClose }: {
 
   const submit = () => {
     if (needsReason && !reason.trim()) return toast.error(override ? 'دلیل نادیده‌گرفتن شرایط را بنویسید' : 'دلیل تغییر مجری را بنویسید')
-    if (method === 'provider' && !deliveryProviderId) return toast.error('مجری ارسال‌کننده را انتخاب کنید')
+    if (method === 'provider' && !deliveryProviderId) return toast.error('مجری فعالِ تحویل وجود ندارد')
     if (missing && !confirmMissing) return toast.error('قیمت مجری تنظیم نشده؛ برای ادامه آن را تأیید کنید')
     setHardProblems(null)
     const body = {
@@ -152,7 +155,7 @@ function AssignDialog({ job, row, mode, method, deliveryProviders, onClose }: {
       {method === 'provider' && (
         <Field label="مجری ارسال‌کننده">
           <AdminSelect ariaLabel="مجری ارسال‌کننده" value={deliveryProviderId} onValueChange={setDeliveryProviderId}
-            options={deliveryProviders.map((d) => ({ value: d.id, label: `${d.name}${d.deliveryFee === null ? '' : ` · ${money(d.deliveryFee)}`}${d.zoneOk ? '' : ' · خارج از منطقه'}` }))} />
+            options={deliveryOptions(deliveryProviders)} />
         </Field>
       )}
       {method === 'customer_pickup' && (

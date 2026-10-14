@@ -35,7 +35,7 @@ export function useDispatchMutations(id: string) {
     qc.setQueryData(dk.job(id), job)
     return Promise.all([qc.invalidateQueries({ queryKey: dk.all }), qc.invalidateQueries({ queryKey: ak.orders }), qc.invalidateQueries({ queryKey: ak.order(job.orderId) }), qc.invalidateQueries({ queryKey: ak.production })])
   }
-  const quiet = { quietCodes: ['PROVIDER_NOT_ELIGIBLE', 'PROVIDER_PRICE_MISSING'] }
+  const quiet = { quietCodes: ['PROVIDER_NOT_ELIGIBLE', 'PROVIDER_PRICE_MISSING', 'NOT_CAPABLE'] }
   const post = (path: string) => (body: object) => api.post<DispatchJobDetail>(`/admin/dispatch/jobs/${id}/${path}`, body)
   return {
     assign: useMutation({ mutationFn: post('assign') as (b: AssignBody) => Promise<DispatchJobDetail>, onSuccess: refresh, meta: quiet }),
