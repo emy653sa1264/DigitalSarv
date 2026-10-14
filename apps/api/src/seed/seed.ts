@@ -276,6 +276,43 @@ async function main() {
       customers[key] = { id: u._id, name: u.name, phone: u.phone, planId: u.planId, zone: c.zone };
       userDates.push({ _id: u._id, createdAt: addDays(todayStart, -daysAgo) });
     }
+
+    // v4.1 demo providers (§43–50, §87): profiles, one provider login and provider prices --------------
+    const Centers = model<Center>(Center.name);
+    const negin = centerId(0);
+    const art = centerId(1);
+    const mehr = centerId(2);
+    const bwCap = (sizes: string[]) => ({ service: 'black_white_printing', sizes, colorTypes: [], papers: [], sides: ['single', 'double'], addons: ['spiral', 'staple'] });
+    await Centers.updateOne({ _id: negin }, {
+      $set: {
+        businessName: 'چاپ و تکثیر نگین', contactName: 'علی نگینی', phone: '02122334455', canDeliver: true, deliveryFee: 30000,
+        serviceZoneIds: [zoneByName.get(ZONES[0].name)!],
+        workingHours: [6, 0, 1, 2, 3].map((weekday) => ({ weekday, from: '08:00', to: '20:00' })).concat([{ weekday: 4, from: '08:00', to: '14:00' }]),
+        capacity: { dailySheets: 2000, hourlySheets: 300, perService: [{ service: 'color_printing', perDay: 500 }] },
+        equipment: [
+          { name: 'پرینتر لیزری رنگی A3', kind: 'printer', capabilities: ['A3', 'A4', 'color', 'high_volume'] },
+          { name: 'دستگاه فنر', kind: 'binder', capabilities: ['spiral'] },
+        ],
+        capabilities: [
+          bwCap(['A4', 'A5']),
+          { service: 'color_printing', sizes: ['A4', 'A5'], colorTypes: ['text', 'full'], papers: ['tahrir80', 'glossy200'], sides: ['single', 'double'], addons: ['spiral', 'mixed'] },
+        ],
+      },
+    });
+    await Centers.updateOne({ _id: art }, { $set: { capabilities: [bwCap(['A4'])] } });
+    await Centers.updateOne({ _id: mehr }, { $set: { status: 'busy', capabilities: [bwCap(['A3', 'A4'])] } });
+    const providerUser = await Users.create({ phone: '09122222222', name: 'علی نگینی', role: 'provider', planId: 'bronze', referralCode: 'NEGIN-1405', providerId: negin });
+    await Centers.updateOne({ _id: negin }, { $set: { userId: providerUser._id } });
+    userDates.push({ _id: providerUser._id, createdAt: addDays(todayStart, -60) });
+    const providerPrice = (providerId: Types.ObjectId, comboKey: string, price: number, state: 'published' | 'pending_approval' = 'published') =>
+      ({ layer: 'provider', providerId, comboKey, version: 1, mode: 'manual', price, rounding: 0, effectiveFrom: new Date(), state, reason: 'داده نمایشی' });
+    await model<PriceVersion>(PriceVersion.name).insertMany([
+      providerPrice(negin, 'bw|A4|single', 3500),
+      providerPrice(art, 'bw|A4|single', 3700),
+      providerPrice(mehr, 'bw|A4|single', 3400),
+      providerPrice(negin, 'bw|A4|double', 3600, 'pending_approval'),
+    ]);
+
     await Users.collection.bulkWrite(
       userDates.map((u) => ({ updateOne: { filter: { _id: u._id }, update: { $set: { createdAt: u.createdAt, updatedAt: u.createdAt } } } })),
     );
@@ -373,7 +410,7 @@ async function main() {
       `Demo: 2 campaigns, ${COURIERS.length} couriers, ${userDates.length} users, ${ORDERS.length} orders ` +
         `(next code ${maxCode + 1}); cleared ${otpKeys} OTP keys`,
     );
-    log.log('Logins — admin 09120000000 · courier 09121111111 (رضا موسوی, 247) · customer 09123456789 (مریم رضایی)');
+    log.log('Logins — admin 09120000000 · courier 09121111111 (رضا موسوی, 247) · provider 09122222222 (چاپ نگین) · customer 09123456789 (مریم رضایی)');
   } finally {
     await app.close();
   }
