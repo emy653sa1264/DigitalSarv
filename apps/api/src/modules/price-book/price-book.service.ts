@@ -159,6 +159,7 @@ export class PriceBookService {
   async rollback(id: string, reason: string, by: string): Promise<VersionView> {
     const src = (await this.findVersion(id)) as Row;
     const why = this.reason(reason);
+    if (src.state !== 'published' && src.state !== 'disabled') throw new BadRequestException('فقط نسخه‌های منتشرشده قابل بازگردانی هستند');
     const doc = await this.insertVersion({
       layer: src.layer, providerId: src.providerId, comboKey: src.comboKey, mode: src.mode,
       ...(src.price !== undefined ? { price: src.price } : {}), ...(src.formula ? { formula: src.formula } : {}),
@@ -166,8 +167,8 @@ export class PriceBookService {
       rounding: src.rounding ?? 0, effectiveFrom: new Date(), state: 'published', reason: why,
       createdBy: new Types.ObjectId(by), rollbackOf: src._id,
     });
-    await this.audit('rollback', [doc], why, by, this.plain(src), this.plain(doc));
     await this.catalog.invalidate();
+    await this.audit('rollback', [doc], why, by, this.plain(src), this.plain(doc));
     return this.viewOne(doc);
   }
 
@@ -253,17 +254,19 @@ export class PriceBookService {
   private async transition(id: string, from: PriceVersion['state'], to: PriceVersion['state'], action: PriceAuditAction, reason: string, by: string) {
     const why = this.reason(reason);
     const before = await this.findVersion(id);
-    if (to === 'published' && new Date(before.effectiveFrom).getTime() > Date.now() && (await this.versions.exists({ _id: { $ne: before._id }, layer: before.layer, providerId: before.providerId, comboKey: before.comboKey, state: 'published', effectiveFrom: before.effectiveFrom }))) {
+    const now = new Date();
+    const future = new Date(before.effectiveFrom).getTime() > now.getTime();
+    if (to === 'published' && future && (await this.versions.exists({ _id: { $ne: before._id }, layer: before.layer, providerId: before.providerId, comboKey: before.comboKey, state: 'published', effectiveFrom: before.effectiveFrom }))) {
       throw new ConflictException('قیمت دیگری با همین زمان شروع (هم‌زمان) منتشر شده است');
     }
     const doc = await this.versions.findOneAndUpdate(
       { _id: before._id, state: from },
-      { $set: { state: to, updatedBy: new Types.ObjectId(by) } },
+      { $set: { state: to, updatedBy: new Types.ObjectId(by), ...(to === 'published' && !future ? { effectiveFrom: now } : {}) } },
       { returnDocument: 'after' },
     );
     if (!doc) throw new ConflictException('وضعیت این نسخه تغییر کرده است؛ صفحه را تازه کنید');
-    await this.audit(action, [doc], why, by, this.plain(before), this.plain(doc));
     await this.catalog.invalidate();
+    await this.audit(to === 'published' && future ? 'schedule' : action, [doc], why, by, this.plain(before), this.plain(doc));
     return this.viewOne(doc);
   }
 
@@ -298,8 +301,8 @@ export class PriceBookService {
   }
 
   private async rangeAudit(doc: { _id: unknown; minPages: number; maxPages: number; on: boolean }, reason: string, by: string) {
-    await this.audits.create({ action: 'range', layer: 'customer', providerId: null, comboKeys: [`spiral|${String(doc._id)}`], versionIds: [], reason, by: new Types.ObjectId(by), after: { minPages: doc.minPages, maxPages: doc.maxPages, on: doc.on } });
     await this.catalog.invalidate();
+    await this.audits.create({ action: 'range', layer: 'customer', providerId: null, comboKeys: [`spiral|${String(doc._id)}`], versionIds: [], reason, by: new Types.ObjectId(by), after: { minPages: doc.minPages, maxPages: doc.maxPages, on: doc.on } });
   }
 
   private async rangeLikes() {

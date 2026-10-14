@@ -91,4 +91,19 @@ describe('PriceBookService', () => {
     await expect(svc.assertCan(limited, 'customer_price_publish')).rejects.toThrow(/دسترسی/);
     await expect(svc.assertCan(String(new Types.ObjectId()), 'customer_price_view')).rejects.toThrow(/دسترسی/);
   });
+  it('publishing a stale draft makes it current', async () => {
+    const { svc, by } = setup();
+    await svc.create(base, by);
+    const draft = await svc.create({ ...base, price: 4000, publish: false }, by);
+    await svc.create({ ...base, price: 5000 }, by);
+    const pub = await svc.publish(draft.id, 'انتشار', by);
+    expect(pub.status).toBe('active');
+    const row = (await svc.matrix('customer', 'bw')).find((r) => r.comboKey === 'bw|A4|single')!;
+    expect(row.current?.id).toBe(draft.id);
+  });
+  it('rollback refuses drafts', async () => {
+    const { svc, by } = setup();
+    const draft = await svc.create({ ...base, publish: false }, by);
+    await expect(svc.rollback(draft.id, 'x', by)).rejects.toThrow(/قابل بازگردانی/);
+  });
 });
