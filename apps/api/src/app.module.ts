@@ -23,6 +23,7 @@ import { DashboardModule } from './modules/dashboard/dashboard.module.js';
 import { HealthModule } from './modules/health/health.module.js';
 import { NotificationsModule } from './modules/notifications/notifications.module.js';
 import { OrdersModule } from './modules/orders/orders.module.js';
+import { DispatchModule } from './modules/dispatch/dispatch.module.js';
 import { PaymentsModule } from './modules/payments/payments.module.js';
 import { PriceBookModule } from './modules/price-book/price-book.module.js';
 import { PricingModule } from './modules/pricing/pricing.module.js';
@@ -76,6 +77,7 @@ export const infraImports = [
     PaymentsModule,
     UploadsModule,
     OrdersModule,
+    DispatchModule,
     CourierModule,
     ZonesModule,
     CentersModule,
