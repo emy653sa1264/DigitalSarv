@@ -45,3 +45,5 @@ The four v2 files share one prototype script (logic/pricing unchanged from v1); 
 ## Needs from the owner before going live
 
 Zarinpal merchant ID, Kavenegar API key + OTP template, production domain + TLS, admin phone numbers, server/VPS. Everything runs locally with `mock`/`log` drivers until then.
+- Zibal merchant ID (needed for V4-M2).
+- Confirmation of the 5 assumptions in `docs/v4-design.md`.

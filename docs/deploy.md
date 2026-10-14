@@ -90,6 +90,8 @@ The runtime image contains only `dist/` and production dependencies. It has no p
 dc run --rm api node dist/seed/seed-base.js
 ```
 
+Run `seed:base` during deploy, before traffic is switched to the new version: it publishes the v4 price book (idempotent, a second run inserts 0 price versions).
+
 
 Re-running it is safe (upserts). Admins then edit everything in `/admin/`.
 
