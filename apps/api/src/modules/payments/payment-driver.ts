@@ -1,4 +1,5 @@
 import { randomBytes, randomInt } from 'node:crypto';
+import { Logger } from '@nestjs/common';
 import type { PaymentDriverName } from '../../common/constants.js';
 
 export interface PaymentRequestInput {
@@ -127,7 +128,7 @@ export class ZarinpalPaymentDriver implements PaymentDriver {
   }
 }
 
-interface ZibalBody { result?: number; message?: string; trackId?: number | string; refNumber?: number | string | null; cardNumber?: string | null }
+interface ZibalBody { amount?: number | string; result?: number; message?: string; trackId?: number | string; refNumber?: number | string | null; cardNumber?: string | null }
 
 export interface ZibalOptions { merchant: string; fetch?: FetchLike; timeoutMs?: number }
 
@@ -174,7 +175,7 @@ export class ZibalPaymentDriver implements PaymentDriver {
     return { authority: trackId, url: `${this.baseUrl}/start/${trackId}` };
   }
 
-  async verify({ authority }: { authority: string; amount: number }): Promise<PaymentVerifyResult> {
+  async verify({ authority, amount }: { authority: string; amount: number }): Promise<PaymentVerifyResult> {
     if (!/^\d{1,20}$/.test(authority)) return { ok: false, message: 'trackId نامعتبر است', retryable: false };
     let body: ZibalBody;
     try {
@@ -183,6 +184,12 @@ export class ZibalPaymentDriver implements PaymentDriver {
       return { ok: false, message: (err as Error).message, retryable: true };
     }
     if (body.result === 100 || body.result === 201) {
+      // 201 may omit the amount; when present it must match what we asked for (never silently pay a mismatch)
+      if (body.amount !== undefined && body.amount !== null && Number(body.amount) !== tomanToRial(amount)) {
+        const message = `zibal amount mismatch for trackId ${authority}: provider ${String(body.amount)} rial, expected ${tomanToRial(amount)}`;
+        new Logger('ZibalPaymentDriver').error(message);
+        return { ok: false, message, retryable: false };
+      }
       return { ok: true, refId: String(body.refNumber ?? authority), ...(body.cardNumber ? { cardPan: body.cardNumber } : {}) };
     }
     return { ok: false, message: `${body.result ?? '?'} ${body.message ?? ''}`.trim(), retryable: false };

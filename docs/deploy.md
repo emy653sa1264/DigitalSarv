@@ -156,7 +156,7 @@ When a release changes data shape, restore the Mongo backup taken before the upd
    ```
    Zibal redirects with `trackId`, `success`, `status` and `orderId`; the API verifies with `/v1/verify` and redirects to `${WEB_PUBLIC_URL}/app/pay/return?order=…&status=ok|failed|pending`.
 3. Test on a staging box with `ZIBAL_MERCHANT=zibal` (sandbox; needs `PAYMENT_ALLOW_MOCK=1` when `NODE_ENV=production`), then put the real merchant and `dc up -d api`.
-4. Zarinpal stays available: switching back is `PAYMENT_DRIVER=zarinpal`. Orders keep the driver they were paid with (`payment.driver`).
+4. Switching drivers (either direction): first drain `pending_payment` and `verifying` orders. In-flight attempts of the old driver are **not** completed after the switch (their callback returns 404 and the re-verify job skips them, logging a warning). `payment.driver` on each order is recorded for reference only. Switching back is `PAYMENT_DRIVER=zarinpal`.
 
 ## 8. Kavenegar (SMS)
 

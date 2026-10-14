@@ -308,3 +308,32 @@ describe('mock gateway page', () => {
     await expect(svc.mockPage('nope')).rejects.toBeInstanceOf(NotFoundException);
   });
 });
+
+describe('PaymentsService: driver switch (zibal active)', () => {
+  const zibalDriver = (verify = vi.fn(async () => ({ ok: false as const, message: 'trackId نامعتبر است', retryable: false }))): PaymentDriver => ({
+    name: 'zibal',
+    request: vi.fn(),
+    verify,
+  });
+
+  it('a zarinpal `verifying` order is untouched by reverify/expiry; its callback is 404', async () => {
+    const now = new Date();
+    const ago = (m: number) => new Date(now.getTime() - m * MINUTE);
+    const old = pendingOrder({ createdAt: ago(45), payment: { driver: 'zarinpal', authority: 'A00000000000000000000000000000000001', status: 'verifying', amount: 500000, requestedAt: ago(40) } });
+    const verify = vi.fn(async () => ({ ok: false as const, message: 'x', retryable: false }));
+    const { svc } = setup([old], zibalDriver(verify));
+    await expect(svc.expireStale(now)).resolves.toBe(0);
+    expect(verify).not.toHaveBeenCalled();
+    expect(old.status).toBe('pending_payment');
+    expect(old.payment.status).toBe('verifying');
+    await expect(svc.handleCallback('zarinpal', old.payment.authority, 'OK')).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('a NOK callback does not downgrade an attempt already `verifying`', async () => {
+    const o = pendingOrder({ payment: { driver: 'zibal', authority: '159', status: 'verifying', amount: 500000, requestedAt: new Date() } });
+    const { svc } = setup([o], zibalDriver());
+    await expect(svc.handleCallback('zibal', '159', 'NOK')).resolves.toBe(pending(o));
+    expect(o.payment.status).toBe('verifying');
+    expect(o.status).toBe('pending_payment');
+  });
+});

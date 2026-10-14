@@ -134,7 +134,9 @@ export class PaymentsService {
     if (order.status !== 'pending_payment') return this.returnUrl(id, 'failed');
 
     if (status !== 'OK') {
-      await this.markFailed({ _id: order._id, status: 'pending_payment', 'payment.authority': authority });
+      // never downgrade an attempt already `verifying` (a payment may exist at the provider); the re-verify job settles it
+      if (order.payment?.status === 'verifying') return this.returnUrl(id, 'pending');
+      await this.markFailed({ _id: order._id, status: 'pending_payment', 'payment.authority': authority, 'payment.status': { $nin: ['paid', 'verifying'] } });
       return this.returnUrl(id, 'failed');
     }
     return this.returnUrl(id, await this.verifyAttempt(order, authority));
@@ -216,7 +218,7 @@ export class PaymentsService {
   }
 
   private async markFailed(attempt: QueryFilter<Order>) {
-    await this.orders.updateOne({ ...attempt, 'payment.status': { $ne: 'paid' } }, { $set: { 'payment.status': 'failed' }, $inc: { __v: 1 } });
+    await this.orders.updateOne({ 'payment.status': { $ne: 'paid' }, ...attempt }, { $set: { 'payment.status': 'failed' }, $inc: { __v: 1 } });
   }
 
   private async applyDeferred(order: OrderDocument) {
@@ -314,7 +316,10 @@ export class PaymentsService {
 
   /** Asks the provider again about every `verifying` attempt (skipping ones a callback is verifying right now). */
   private async reverify(): Promise<void> {
-    const waiting = await this.orders.find({ status: 'pending_payment', 'payment.status': 'verifying' }).limit(100);
+    // only this driver's attempts: another driver's authority can't be verified here (and must never be failed for that)
+    const waiting = await this.orders.find({ status: 'pending_payment', 'payment.status': 'verifying', 'payment.driver': this.driver.name }).limit(100);
+    const foreign = await this.orders.countDocuments({ status: 'pending_payment', 'payment.status': 'verifying', 'payment.driver': { $ne: this.driver.name } }).catch(() => 0);
+    if (foreign) this.logger.warn(`${foreign} verifying payment(s) belong to another driver than "${this.driver.name}" and are skipped (drain them before switching drivers)`);
     for (const order of waiting) {
       const authority = order.payment?.authority;
       if (!authority || (await this.redis.client.exists(verifyLockKey(authority)).catch(() => 0))) continue;

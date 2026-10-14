@@ -131,3 +131,24 @@ describe('ZibalPaymentDriver (D16)', () => {
     expect(d.name).toBe('zibal');
   });
 });
+
+describe('ZibalPaymentDriver: amount check and real timeout', () => {
+  it('verify: a provider amount that differs from the expected rial amount is not paid (201 without amount is fine)', async () => {
+    const wrong = fetchReturning({ result: 100, refNumber: 1, amount: 100 });
+    await expect(new ZibalPaymentDriver({ merchant: 'zibal', fetch: wrong.fetch }).verify({ authority: '1', amount: 315000 }))
+      .resolves.toMatchObject({ ok: false, retryable: false, message: expect.stringMatching(/mismatch/) });
+    const right = fetchReturning({ result: 100, refNumber: 1, amount: 3150000 });
+    await expect(new ZibalPaymentDriver({ merchant: 'zibal', fetch: right.fetch }).verify({ authority: '1', amount: 315000 })).resolves.toMatchObject({ ok: true });
+    const none = fetchReturning({ result: 201, refNumber: 1 });
+    await expect(new ZibalPaymentDriver({ merchant: 'zibal', fetch: none.fetch }).verify({ authority: '1', amount: 315000 })).resolves.toMatchObject({ ok: true });
+  });
+  it('timeout: an aborted fetch is retryable on verify and rejects on request', async () => {
+    const hang: FetchLike = (_url, init) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason ?? new Error('aborted')));
+      });
+    const d = new ZibalPaymentDriver({ merchant: 'zibal', fetch: hang, timeoutMs: 10 });
+    await expect(d.verify({ authority: '1', amount: 1 })).resolves.toMatchObject({ ok: false, retryable: true });
+    await expect(d.request({ orderId: 'o', code: '1', amount: 1, description: 'd', callbackUrl: 'https://x.test/cb' })).rejects.toThrow();
+  });
+});
