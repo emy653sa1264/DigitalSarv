@@ -85,7 +85,7 @@ export function historyView(history: JobHistoryEntry[], names: Names): JobHistor
 
 type DetailOrder = Pick<Order, 'status' | 'urgent' | 'payMethod' | 'paid' | 'quote' | 'pickup' | 'qc' | 'qcLabels' | 'delivery' | 'courierId' | 'children' | 'services'>;
 
-export function dispatchDetail(job: JobRow, order: DetailOrder, names: Names, requirements: string[], summary: string, now: Date): DispatchJobDetail {
+export function dispatchDetail(job: JobRow, order: DetailOrder, names: Names, requirements: string[], summary: string, now: Date, canSeeProviderPrices: boolean): DispatchJobDetail {
   return {
     ...dispatchRow(job, names, order.status, summary, now),
     homePickup: job.homePickup, sheets: job.sheets ?? 0, units: job.units ?? {}, requirements,
@@ -95,7 +95,7 @@ export function dispatchDetail(job: JobRow, order: DetailOrder, names: Names, re
       pickup: { address: order.pickup?.address ?? '', phone: order.pickup?.phone ?? '', ...(order.pickup?.date ? { date: order.pickup.date } : {}), ...(order.pickup?.slot ? { slot: order.pickup.slot } : {}) },
       qcDone: qcComplete(order), ...(order.courierId ? { courierId: String(order.courierId) } : {}),
     },
-    providerPricing: job.providerPricing ?? null,
+    providerPricing: canSeeProviderPrices ? (job.providerPricing ?? null) : null,
     history: historyView(job.history ?? [], names),
     assignments: assignmentHistory(job.history ?? []).map((a) => ({
       providerId: a.providerId, providerName: nameOf(names, a.providerId) ?? '—', ...(a.assignedBy ? { assignedByName: nameOf(names, a.assignedBy) } : {}),

@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { InjectModel } from '@nestjs/mongoose';
 import { randomUUID } from 'node:crypto';
 import { Model, Types } from 'mongoose';
-import type { Permission } from '../../common/permissions.js';
+import { canViewProviderPrices, type Permission } from '../../common/permissions.js';
 import { CatalogService } from '../catalog/catalog.service.js';
 import { Paper } from '../catalog/schemas/paper.schema.js';
 import { User } from '../users/user.schema.js';
@@ -613,7 +613,7 @@ export class PriceBookService {
   }
 
   private canViewProviderPrices(userId: string): Promise<boolean> {
-    return this.canView(userId, 'provider_price_view');
+    return (async () => canViewProviderPrices(Types.ObjectId.isValid(userId) ? await this.users.findById(userId).lean() : null))();
   }
 
   private async canView(userId: string, permission: Permission): Promise<boolean> {

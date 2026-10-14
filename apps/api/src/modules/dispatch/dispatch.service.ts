@@ -5,6 +5,7 @@ import type { DeliveryMethod, JobStatus } from '../../common/constants.js';
 import { addDays, tehranDayStart, tehranYmd } from '../../common/utils/dates.js';
 import { escapeRegex, pageParams } from '../../common/utils/pagination.js';
 import { normalizePhone, toAsciiDigits } from '../../common/utils/phone.js';
+import { canViewProviderPrices } from '../../common/permissions.js';
 import { CatalogService } from '../catalog/catalog.service.js';
 import { Paper } from '../catalog/schemas/paper.schema.js';
 import { Center } from '../centers/center.schema.js';
@@ -28,13 +29,15 @@ import { providerLineLabel, providerQuote } from './provider-pricing.js';
 export interface EligibilityRow {
   providerId: string; name: string; businessName: string; status: ProviderStatus; current: boolean;
   eligible: boolean; assignable: boolean; checks: ProviderCheck[];
-  price: { subtotal: number | null; missing: string[]; lines: { label: string; unitPrice: number; quantity: number; subtotal: number }[] };
+  /** null without provider_price_view (Q18); `priced` and `priceMissing` stay visible. */
+  priced: boolean; priceMissing: string[];
+  price: { subtotal: number | null; missing: string[]; lines: { label: string; unitPrice: number; quantity: number; subtotal: number }[] } | null;
   capacityLeft: CheckResult['capacityLeft']; hourlySheets?: number; openNow: boolean | null; activeJobs: number; hasLogin: boolean;
-  canDeliver: boolean; deliveryFee: number; allowCustomerPickup: boolean;
+  canDeliver: boolean; deliveryFee: number | null; allowCustomerPickup: boolean;
 }
 export interface Eligibility {
   jobId: string; requirements: string[]; eligible: EligibilityRow[]; others: EligibilityRow[];
-  deliveryProviders: { id: string; name: string; deliveryFee: number; zoneOk: boolean }[];
+  deliveryProviders: { id: string; name: string; deliveryFee: number | null; zoneOk: boolean; status: ProviderStatus; reason?: string }[];
 }
 export type CenterRow = Center & { _id: Types.ObjectId };
 type OrderRow = Order & { _id: Types.ObjectId };
@@ -83,7 +86,7 @@ export class DispatchService {
     if (q.from) c.push({ orderCreatedAt: { $gte: tehranDayStart(q.from) } });
     if (q.to) c.push({ orderCreatedAt: { $lt: addDays(tehranDayStart(q.to), 1) } });
     if (q.q?.trim()) {
-      const term = toAsciiDigits(q.q.trim());
+      const term = toAsciiDigits(q.q.trim()).replace(/ي/g, 'ی').replace(/ك/g, 'ک');
       const rx = new RegExp(escapeRegex(term), 'i');
       c.push({ $or: [{ orderCode: rx }, { customerName: rx }, { customerPhone: normalizePhone(term) ?? rx }] });
     }
@@ -135,20 +138,25 @@ export class DispatchService {
     }
     const [providers, users] = await Promise.all([
       providerIds.size ? this.centers.find({ _id: { $in: [...providerIds].map((id) => new Types.ObjectId(id)) } }, { name: 1 }).lean() : [],
-      userIds.size ? this.users.find({ _id: { $in: [...userIds].map((id) => new Types.ObjectId(id)) } }, { name: 1, phone: 1 }).lean() : [],
+      userIds.size ? this.users.find({ _id: { $in: [...userIds].map((id) => new Types.ObjectId(id)) } }, { name: 1 }).lean() : [],
     ]);
     const names: Names = new Map();
     for (const p of providers) names.set(String(p._id), p.name);
-    for (const u of users) names.set(String(u._id), u.name || u.phone);
+    for (const u of users) names.set(String(u._id), u.name?.trim() || 'مدیر');
     return names;
   }
 
-  async detail(id: string): Promise<DispatchJobDetail> {
+  /** Q18: provider prices/fees only for admins with provider_price_view (super-admins included). */
+  async canSeeProviderPrices(userId: string): Promise<boolean> {
+    return canViewProviderPrices(Types.ObjectId.isValid(userId) ? await this.users.findById(userId).lean() : null);
+  }
+
+  async detail(id: string, canSeeProviderPrices = false): Promise<DispatchJobDetail> {
     const job = (await this.jobs.byId(id)) as unknown as JobRow;
     const order = (await this.orders.findById(job.orderId).lean()) as OrderRow | null;
     if (!order) throw new NotFoundException('سفارش یافت نشد');
     const names = await this.namesFor([job]);
-    return dispatchDetail(job, order, names, jobRequirements(order).map((r) => r.line), orderSummary(order), new Date());
+    return dispatchDetail(job, order, names, jobRequirements(order).map((r) => r.line), orderSummary(order), new Date(), canSeeProviderPrices);
   }
 
   // ------------------------------------------------------------ eligibility (§51–54)
@@ -204,7 +212,7 @@ export class DispatchService {
     return { check, quote: providerQuote(order, entries[String(p._id)] ?? {}, labels.labelOf) };
   }
 
-  async eligibility(id: string, deliveryMethod?: DeliveryMethod): Promise<Eligibility> {
+  async eligibility(id: string, deliveryMethod?: DeliveryMethod, canSeeProviderPrices = false): Promise<Eligibility> {
     const job = (await this.jobs.byId(id)) as unknown as JobRow;
     const order = (await this.orders.findById(job.orderId).lean()) as OrderRow | null;
     if (!order) throw new NotFoundException('سفارش یافت نشد');
@@ -224,19 +232,21 @@ export class DispatchService {
       return {
         providerId: id, name: p.name, businessName: p.businessName ?? '', status: facts.status, current: !!job.providerId && String(job.providerId) === id,
         eligible: check.eligible, assignable: check.assignable, checks: check.checks,
-        price: { subtotal: q.subtotal, missing: q.missing.map((m) => m.label), lines: q.lines.map((l) => ({ label: l.label, unitPrice: l.unitPrice, quantity: l.quantity, subtotal: l.subtotal })) },
+        priced: q.subtotal !== null, priceMissing: q.missing.map((m) => m.label),
+        price: canSeeProviderPrices ? { subtotal: q.subtotal, missing: q.missing.map((m) => m.label), lines: q.lines.map((l) => ({ label: l.label, unitPrice: l.unitPrice, quantity: l.quantity, subtotal: l.subtotal })) } : null,
         capacityLeft: check.capacityLeft, ...(typeof p.capacity?.hourlySheets === 'number' ? { hourlySheets: p.capacity.hourlySheets } : {}),
         openNow: check.openNow, activeJobs: active.get(id) ?? 0, hasLogin: !!p.userId,
-        canDeliver: !!p.canDeliver, deliveryFee: p.deliveryFee ?? 0, allowCustomerPickup: !!p.allowCustomerPickup,
+        canDeliver: !!p.canDeliver, deliveryFee: canSeeProviderPrices ? (p.deliveryFee ?? 0) : null, allowCustomerPickup: !!p.allowCustomerPickup,
       };
     });
     return {
       jobId: String(job._id), requirements: reqs.map((r) => r.line),
       eligible: rows.filter((r) => r.eligible),
       others: rows.filter((r) => !r.eligible).sort((a, b) => Number(b.assignable) - Number(a.assignable)),
-      deliveryProviders: providers.filter((p) => p.canDeliver && (p.status ?? 'active') === 'active').map((p) => {
+      deliveryProviders: providers.filter((p) => p.canDeliver && !['inactive', 'suspended'].includes(p.status ?? 'active')).map((p) => {
         const zones = (p.serviceZoneIds ?? []).map(String);
-        return { id: String(p._id), name: p.name, deliveryFee: p.deliveryFee ?? 0, zoneOk: !zones.length || !zoneId || zones.includes(zoneId) };
+        const status = p.status ?? 'active';
+        return { id: String(p._id), name: p.name, deliveryFee: canSeeProviderPrices ? (p.deliveryFee ?? 0) : null, zoneOk: !zones.length || !zoneId || zones.includes(zoneId), status, ...(status === 'busy' ? { reason: 'مجری فعلاً مشغول است' } : {}) };
       }),
     };
   }

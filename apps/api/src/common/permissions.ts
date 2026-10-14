@@ -7,3 +7,8 @@ export const PERMISSIONS = [
   'provider_order_view', 'provider_order_accept', 'provider_order_status',
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
+
+/** Admin who may see provider-layer prices and fees (an admin without `permissions` has all of them). */
+export function canViewProviderPrices(user: { role?: string; permissions?: string[] | null } | null | undefined): boolean {
+  return !!user && user.role === 'admin' && (!user.permissions || user.permissions.includes('provider_price_view'));
+}

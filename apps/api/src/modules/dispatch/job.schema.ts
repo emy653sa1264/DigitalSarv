@@ -79,3 +79,5 @@ JobSchema.index({ deliveryProviderId: 1, status: 1 }, { sparse: true });
 JobSchema.index({ 'assignment.respondBy': 1 }, { sparse: true });
 JobSchema.index({ releasedProviderIds: 1 });
 JobSchema.index({ orderCreatedAt: -1 });
+JobSchema.index({ 'assignment.assignedAt': 1 }, { sparse: true });
+JobSchema.index({ status: 1, updatedAt: -1 });

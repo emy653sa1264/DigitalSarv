@@ -2,6 +2,10 @@ import { Types } from 'mongoose';
 import { fakeModel, type Doc } from '../../../test/fake-model.js';
 import { DEFAULT_DISPATCH } from '../catalog/catalog.defaults.js';
 import { DispatchService } from './dispatch.service.js';
+import { validate } from 'class-validator';
+import { plainToInstance } from 'class-transformer';
+import { canViewProviderPrices } from '../../common/permissions.js';
+import { DispatchQueryDto } from './dto/dispatch.dto.js';
 import { JobsService } from './jobs.service.js';
 
 const ADMIN = new Types.ObjectId();
@@ -55,7 +59,7 @@ async function withJob(s: ReturnType<typeof setup>) {
 describe('DispatchService.eligibility (§51–54, §88)', () => {
   it('only capable providers are eligible; each shows its own price or «قیمت مجری تنظیم نشده»; the list is by name, never by price', async () => {
     const s = setup();
-    const e = await s.svc.eligibility(await withJob(s));
+    const e = await s.svc.eligibility(await withJob(s), undefined, true);
     expect(e.requirements).toEqual(['چاپ رنگی']);
     expect(e.eligible.map((r) => r.name)).toEqual(['آزمون C']);
     expect(e.eligible[0].price).toEqual({
@@ -111,5 +115,63 @@ describe('DispatchService.list (§55)', () => {
     expect(d.order).toMatchObject({ status: 'registered', total: 1_935_000, qcDone: false, delivery: { note: 'زنگ دوم' } });
     expect(d.history[0]).toMatchObject({ action: 'created', label: 'تخصیص‌نیافته', byRole: 'system' });
     await expect(s.svc.detail(String(new Types.ObjectId()))).rejects.toThrow('سفارش یافت نشد');
+  });
+});
+
+describe('Q18 provider price redaction', () => {
+  it('canViewProviderPrices: dispatch_view only → no; +provider_price_view → yes; super-admin (no permissions) → yes; non-admin → no', () => {
+    expect(canViewProviderPrices({ role: 'admin', permissions: ['dispatch_view'] })).toBe(false);
+    expect(canViewProviderPrices({ role: 'admin', permissions: ['dispatch_view', 'provider_price_view'] })).toBe(true);
+    expect(canViewProviderPrices({ role: 'admin' })).toBe(true);
+    expect(canViewProviderPrices({ role: 'customer' })).toBe(false);
+  });
+  it('service reads the admin permissions from the user', async () => {
+    const s = setup();
+    const a = new Types.ObjectId(), b = new Types.ObjectId();
+    (s.svc as never as { users: { docs: Doc[] } }).users.docs.push({ _id: a, role: 'admin', permissions: ['dispatch_view'] }, { _id: b, role: 'admin', permissions: ['dispatch_view', 'provider_price_view'] });
+    expect(await s.svc.canSeeProviderPrices(String(a))).toBe(false);
+    expect(await s.svc.canSeeProviderPrices(String(b))).toBe(true);
+    expect(await s.svc.canSeeProviderPrices(String(ADMIN))).toBe(true);
+  });
+  it('eligibility without the flag has no amounts but keeps priced / missing labels', async () => {
+    const s = setup();
+    const e = await s.svc.eligibility(await withJob(s));
+    const c = e.eligible[0];
+    expect(c).toMatchObject({ price: null, priced: true, deliveryFee: null });
+    const a = e.others.find((r) => r.name === 'آزمون A')!;
+    expect(a).toMatchObject({ price: null, priced: false });
+    expect(a.priceMissing[0]).toContain('چاپ رنگی');
+    expect(e.deliveryProviders.every((d) => d.deliveryFee === null)).toBe(true);
+    expect(JSON.stringify(e)).not.toContain('1600000');
+  });
+  it('detail hides the provider pricing snapshot unless allowed', async () => {
+    const s = setup();
+    const id = await withJob(s);
+    s.jobsModel.docs[0].providerPricing = { subtotal: 1_600_000, lines: [] };
+    expect((await s.svc.detail(id)).providerPricing).toBeNull();
+    expect((await s.svc.detail(id, true)).providerPricing).toMatchObject({ subtotal: 1_600_000 });
+  });
+  it('a busy delivery provider is listed with a reason; inactive is not', async () => {
+    const s = setup();
+    s.centers.docs[2].status = 'busy';
+    s.centers.docs[3].status = 'inactive';
+    const e = await s.svc.eligibility(await withJob(s));
+    expect(e.deliveryProviders).toMatchObject([{ name: 'آزمون C', status: 'busy', reason: expect.any(String) }]);
+  });
+});
+
+describe('dispatch query validation (I2)', () => {
+  const check = async (o: object) => (await validate(plainToInstance(DispatchQueryDto, o))).flatMap((x) => Object.values(x.constraints ?? {}));
+  it('rejects impossible calendar dates and over-long q', async () => {
+    expect(await check({ from: '2026-02-30' })).toContain('تاریخ معتبر نیست');
+    expect(await check({ to: '2026-13-01' })).toContain('تاریخ معتبر نیست');
+    expect(await check({ from: '2026-02-28', to: '2026-03-01' })).toEqual([]);
+    expect((await check({ q: 'x'.repeat(101) })).length).toBe(1);
+  });
+  it('arabic ي/ك in q match the persian name', async () => {
+    const s = setup();
+    await withJob(s);
+    s.jobsModel.docs[0].customerName = 'کیان';
+    expect((await s.svc.list({ tab: 'unassigned', q: 'كيان' } as never)).total).toBe(1);
   });
 });
