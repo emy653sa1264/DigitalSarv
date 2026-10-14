@@ -126,14 +126,25 @@ describe('review follow-ups', () => {
     expect(catalog.invalidate).toHaveBeenCalledTimes(2);
   });
   it('a same-millisecond stale draft still wins when published', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-15T10:00:00.000Z'));
+    try {
+      await sameMillisecond();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  async function sameMillisecond() {
     const { svc, by, versions } = setup();
     const draft = await svc.create(cust(4000, { publish: false }), by);
     const pub = await svc.create(cust(5000), by);
     const t = new Date(versions.docs.find((d) => String(d._id) === pub.id)!.effectiveFrom);
     const row = await svc.publish(draft.id, 'انتشار', by);
     expect(new Date(row.effectiveFrom).getTime()).toBeGreaterThanOrEqual(t.getTime() + 1);
+    expect(new Date(row.effectiveFrom).getTime()).toBe(t.getTime() + 1);
+    vi.setSystemTime(new Date(t.getTime() + 1));
     expect((await current(svc, 'customer'))?.id).toBe(draft.id);
-  });
+  }
 });
 
 describe('insertVersion duplicate-key handling', () => {

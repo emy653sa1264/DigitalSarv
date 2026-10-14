@@ -4,7 +4,7 @@ import type { AuthUser } from '../../common/auth/auth-user.js';
 import { JwtAuthGuard, RolesGuard } from '../../common/auth/guards.js';
 import { PermissionsGuard } from '../../common/auth/permissions.guard.js';
 import { PageQueryDto, pageParams } from '../../common/utils/pagination.js';
-import { BulkApplyDto, BulkDto, CreateVersionDto, HistoryQueryDto, MatrixQueryDto, PreviewVersionDto, RangeDto, ReasonDto, UpdateRangeDto } from './dto/price-book.dto.js';
+import { BulkApplyDto, BulkDto, CompareQueryDto, ConfirmReasonDto, CreateVersionDto, HistoryQueryDto, MatrixQueryDto, PreviewVersionDto, RangeDto, ReasonDto, UpdateRangeDto } from './dto/price-book.dto.js';
 import { layerPermission } from './price-book.constants.js';
 import { PriceBookService } from './price-book.service.js';
 
@@ -27,6 +27,9 @@ export class AdminPriceBookController {
     return this.book.history(q.layer, q.comboKey, new Date(), q.providerId ?? null);
   }
 
+  @Get('price-book/compare') @RequirePermissions('provider_price_view', 'customer_price_view')
+  compare(@Query() q: CompareQueryDto) { return this.book.compare(q.service, q.providerId); }
+
   @Get('price-book/audit')
   async audit(@Query() q: PageQueryDto, @CurrentUser() user: AuthUser) {
     const { page, limit } = pageParams(q);
@@ -43,13 +46,13 @@ export class AdminPriceBookController {
   create(@Body() dto: CreateVersionDto, @CurrentUser() user: AuthUser) { return this.book.create(dto, user.id); }
 
   @Post('price-book/versions/:id/publish') @HttpCode(200)
-  publish(@Param('id') id: string, @Body() dto: ReasonDto, @CurrentUser() user: AuthUser) { return this.book.publish(id, dto.reason, user.id); }
+  publish(@Param('id') id: string, @Body() dto: ConfirmReasonDto, @CurrentUser() user: AuthUser) { return this.book.publish(id, dto.reason, user.id, !!dto.confirmNegativeMargin); }
 
   @Post('price-book/versions/:id/disable') @HttpCode(200)
   disable(@Param('id') id: string, @Body() dto: ReasonDto, @CurrentUser() user: AuthUser) { return this.book.disable(id, dto.reason, user.id); }
 
   @Post('price-book/versions/:id/rollback') @HttpCode(200)
-  rollback(@Param('id') id: string, @Body() dto: ReasonDto, @CurrentUser() user: AuthUser) { return this.book.rollback(id, dto.reason, user.id); }
+  rollback(@Param('id') id: string, @Body() dto: ConfirmReasonDto, @CurrentUser() user: AuthUser) { return this.book.rollback(id, dto.reason, user.id, !!dto.confirmNegativeMargin); }
 
   @Post('price-book/bulk/preview') @HttpCode(200) @RequirePermissions('customer_price_bulk_update')
   bulkPreview(@Body() dto: BulkDto) { return this.book.bulkPreview(dto); }

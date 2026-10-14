@@ -25,10 +25,18 @@ export class CreateVersionDto extends VersionValueDto {
   @IsOptional() @IsISO8601() effectiveFrom?: string;
   @IsOptional() @IsISO8601() effectiveUntil?: string;
   @IsBoolean() publish: boolean;
+  @IsOptional() @IsBoolean() confirmNegativeMargin?: boolean;
   @IsString() @MinLength(1, { message: 'دلیل تغییر قیمت را بنویسید' }) @MaxLength(300) reason: string;
 }
 export class ReasonDto {
   @IsString() @MinLength(1, { message: 'دلیل را بنویسید' }) @MaxLength(300) reason: string;
+}
+export class ConfirmReasonDto extends ReasonDto {
+  @IsOptional() @IsBoolean() confirmNegativeMargin?: boolean;
+}
+export class CompareQueryDto {
+  @IsIn(['bw', 'color', 'spiral', 'addon']) service: 'bw' | 'color' | 'spiral' | 'addon';
+  @IsOptional() @IsMongoId() providerId?: string;
 }
 export class BulkFilterDto {
   @IsOptional() @IsIn(['bw', 'color', 'spiral', 'addon']) service?: 'bw' | 'color' | 'spiral' | 'addon';

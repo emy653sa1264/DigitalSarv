@@ -9,11 +9,12 @@ import { User } from '../users/user.schema.js';
 import { COLOR_TYPES, comboKey, parseCombo, PRINT_ADDONS, PRINT_SIZES, SIDES, singleSideKey, type ComboOptions, type ComboService } from './combo.js';
 import { bulkValue, type BulkOp } from './bulk.js';
 import { Center } from '../centers/center.schema.js';
+import type { ProviderStatus } from '../centers/provider-model.js';
 import { formulaVariables, parseFormula, validateFormula } from './formula.js';
 import { comboLabel, type LabelNames } from './labels.js';
 import { CUSTOMER_FORMULA_VARS, layerPermission, PRICE_LAYERS, PRICE_MODES, ROUNDINGS, type DisplayStatus, type PriceLayer, type PriceMode } from './price-book.constants.js';
 import { rangeProblem } from './ranges.js';
-import { displayStatus, pickEffective, unitPrice, type VersionLike } from './resolve.js';
+import { displayStatus, margin, pickEffective, unitPrice, type VersionLike } from './resolve.js';
 import { BindingRange } from './schemas/binding-range.schema.js';
 import { PriceAudit, type PriceAuditAction } from './schemas/price-audit.schema.js';
 import { PriceVersion } from './schemas/price-version.schema.js';
@@ -24,7 +25,7 @@ export interface VersionValue {
 }
 export interface CreateVersionInput extends VersionValue {
   layer: PriceLayer; providerId?: string; comboKey: string;
-  effectiveFrom?: string; effectiveUntil?: string; publish: boolean; reason: string;
+  effectiveFrom?: string; effectiveUntil?: string; publish: boolean; reason: string; confirmNegativeMargin?: boolean;
 }
 export type PreviewInput = VersionValue & { comboKey: string; layer?: PriceLayer };
 export interface VersionView {
@@ -36,6 +37,13 @@ export interface VersionView {
 export interface MatrixRow {
   comboKey: string; service: ComboService; options: ComboOptions; label: string;
   current: VersionView | null; next: VersionView | null; pending: VersionView | null; lastRejected: VersionView | null; hasVersions: boolean;
+}
+
+export interface MarginConflict { comboKey: string; providerId: string; providerName: string; providerPrice: number; customerPrice: number }
+export interface CompareRow {
+  comboKey: string; label: string; service: ComboService; providerId: string; providerName: string; providerStatus: ProviderStatus;
+  providerPrice: number | null; pendingPrice: number | null; customerPrice: number | null; customerMode: PriceMode | null;
+  difference: number | null; marginPct: number | null; negative: boolean;
 }
 
 export interface BulkInput {
@@ -52,6 +60,7 @@ type Row = PriceVersion & { _id: Types.ObjectId };
 const MAX_PRICE = 1_000_000_000;
 const PAST_GRACE_MS = 60_000;
 const PAST_MSG = 'زمان اعمال نمی‌تواند در گذشته باشد';
+const NEGATIVE_MSG = 'قیمت مشتری کمتر از قیمت مجری است';
 const DENIED = 'به این بخش دسترسی ندارید';
 type ProviderPrices = Record<string, Record<string, number>>;
 
@@ -170,6 +179,7 @@ export class PriceBookService {
     if (input.publish && input.effectiveFrom && (await this.versions.exists({ ...scope, comboKey: input.comboKey, state: 'published', effectiveFrom }))) {
       throw new ConflictException('قیمت دیگری با همین زمان شروع (هم‌زمان) منتشر شده است');
     }
+    const negative = input.publish ? await this.checkMargin(input.comboKey, effectiveFrom, layer, scope.providerId, input, !!input.confirmNegativeMargin) : [];
     const doc = await this.insertVersion({
       ...scope, comboKey: input.comboKey, mode: input.mode,
       ...(input.mode === 'manual' ? { price: input.price } : {}),
@@ -181,16 +191,16 @@ export class PriceBookService {
       state: input.publish ? 'published' : 'draft', reason, createdBy: new Types.ObjectId(by),
     });
     const action: PriceAuditAction = !input.publish ? 'create' : effectiveFrom.getTime() > Date.now() ? 'schedule' : 'publish';
-    await this.audit(action, [doc], reason, by, undefined, this.plain(doc));
+    await this.audit(action, [doc], reason, by, undefined, this.withNegative(this.plain(doc), negative));
     // markup customer prices depend on provider prices, so every published write invalidates the catalog
     if (input.publish) await this.catalog.invalidate();
     return this.viewOne(doc);
   }
 
-  async publish(id: string, reason: string, by: string): Promise<VersionView> {
+  async publish(id: string, reason: string, by: string, confirmNegativeMargin = false): Promise<VersionView> {
     const before = await this.findVersion(id);
     await this.assertCan(by, layerPermission(before.layer, 'publish'));
-    return this.transition(before, 'draft', 'published', 'publish', reason, by);
+    return this.transition(before, 'draft', 'published', 'publish', reason, by, confirmNegativeMargin);
   }
 
   async disable(id: string, reason: string, by: string): Promise<VersionView> {
@@ -199,11 +209,12 @@ export class PriceBookService {
     return this.transition(before, 'published', 'disabled', 'disable', reason, by);
   }
 
-  async rollback(id: string, reason: string, by: string): Promise<VersionView> {
+  async rollback(id: string, reason: string, by: string, confirmNegativeMargin = false): Promise<VersionView> {
     const src = await this.findVersion(id);
     await this.assertCan(by, layerPermission(src.layer, 'rollback'));
     const why = this.reason(reason);
     if (src.state !== 'published' && src.state !== 'disabled') throw new BadRequestException('فقط نسخه‌های منتشرشده قابل بازگردانی هستند');
+    const negative = await this.checkMargin(src.comboKey, new Date(), src.layer, src.providerId, this.valueOf(src), confirmNegativeMargin);
     const doc = await this.insertVersion({
       layer: src.layer, providerId: src.providerId, comboKey: src.comboKey, mode: src.mode,
       ...(src.price !== undefined ? { price: src.price } : {}), ...(src.formula ? { formula: src.formula } : {}),
@@ -213,7 +224,7 @@ export class PriceBookService {
       createdBy: new Types.ObjectId(by), rollbackOf: src._id,
     });
     await this.catalog.invalidate();
-    await this.audit('rollback', [doc], why, by, this.plain(src), this.plain(doc));
+    await this.audit('rollback', [doc], why, by, this.plain(src), this.withNegative(this.plain(doc), negative));
     return this.viewOne(doc);
   }
 
@@ -360,6 +371,95 @@ export class PriceBookService {
     return { layer, providerId: new Types.ObjectId(providerId) };
   }
 
+  /**
+   * What-if margin checks at `at`, scoped to the checked combo (and its single-sided sibling, for `base_price`):
+   * the unit of a candidate value, and the providers whose effective price would exceed the customer's effective
+   * unit (quantity 1) if the candidate were in force. Never loads other combos' versions (P13).
+   */
+  private async marginChecker(at: Date, comboKey: string) {
+    const sibling = singleSideKey(comboKey);
+    const keys = sibling ? [comboKey, sibling] : [comboKey];
+    const [rows, papers, centers] = await Promise.all([
+      this.versions.find({ comboKey: { $in: keys }, state: { $in: ['published', 'disabled'] } }).lean() as Promise<Row[]>,
+      this.papers.find().lean(),
+      this.centers.find({}, { name: 1 }).lean(),
+    ]);
+    const providerBase = effectiveProviderPrices(rows, at);
+    const customerRows = rows.filter((r) => r.layer === 'customer');
+    const customerLikes = customerRows.map(toVersionLike);
+    const names = new Map(centers.map((c) => [String(c._id), c.name]));
+    const unitOf = (v: VersionValue, key: string, layer: PriceLayer): number | null =>
+      layer === 'provider'
+        ? unitPrice(this.candidate(v, at), {})
+        : unitPrice(this.candidate(v, at), this.varsFor(customerRows, papers, at, providerBase)(key, v.baseProviderId));
+    const conflicts = (key: string, layer: PriceLayer, providerId: string | null, unit: number | null): MarginConflict[] => {
+      if (unit === null) return [];
+      const prices: ProviderPrices = layer === 'provider' && providerId ? { ...providerBase, [providerId]: { ...providerBase[providerId], [key]: unit } } : providerBase;
+      let customer: number | null = unit;
+      if (layer === 'provider') {
+        // a customer markup over this provider follows the candidate price
+        const eff = pickEffective(customerLikes.filter((v) => v.comboKey === key), at);
+        customer = eff ? unitPrice(eff, this.varsFor(customerRows, papers, at, prices)(key, eff.baseProviderId)) : null;
+      }
+      if (customer === null) return [];
+      const c = customer;
+      return Object.entries(prices)
+        .filter(([, m]) => typeof m[key] === 'number' && m[key] > c)
+        .map(([pid, m]) => ({ comboKey: key, providerId: pid, providerName: names.get(pid) ?? '', providerPrice: m[key], customerPrice: c }));
+    };
+    return { unitOf, conflicts };
+  }
+
+  /** 409 NEGATIVE_MARGIN unless confirmed; returns the (confirmed) conflicts for the audit. */
+  private async checkMargin(comboKey: string, at: Date, layer: PriceLayer, providerId: Types.ObjectId | null, value: VersionValue, confirmed: boolean): Promise<MarginConflict[]> {
+    const m = await this.marginChecker(at, comboKey);
+    const found = m.conflicts(comboKey, layer, providerId ? String(providerId) : null, m.unitOf(value, comboKey, layer));
+    if (found.length && !confirmed) throw new ConflictException({ statusCode: 409, code: 'NEGATIVE_MARGIN', message: NEGATIVE_MSG, conflicts: found });
+    return found;
+  }
+
+  private withNegative(after: Record<string, unknown>, conflicts: MarginConflict[]) {
+    return conflicts.length ? { ...after, negativeMargin: conflicts } : after;
+  }
+
+  /** §23 view: every provider x combo of a service with customer price, difference and margin % (admin only; unpaginated until M5). */
+  async compare(service: ComboService, providerId?: string, at = new Date()): Promise<CompareRow[]> {
+    const [papers, ranges, rows, centers] = await Promise.all([
+      this.papers.find().sort({ sort: 1, _id: 1 }).lean(),
+      this.ranges.find().sort({ minPages: 1 }).lean(),
+      this.versions.find().lean() as Promise<Row[]>,
+      this.centers.find(providerId ? { _id: this.oid(providerId) } : {}, { name: 1, status: 1 }).sort({ _id: 1 }).lean(),
+    ]);
+    const names = this.names(papers, ranges);
+    const customerRows = rows.filter((r) => r.layer === 'customer');
+    const providerPrices = effectiveProviderPrices(rows.filter((r) => r.state === 'published' || r.state === 'disabled'), at);
+    const vars = this.varsFor(customerRows, papers, at, providerPrices);
+    const pending = new Map<string, Row>();
+    for (const r of rows) {
+      if (r.layer !== 'provider' || r.state !== 'pending_approval') continue;
+      const k = `${String(r.providerId)}|${r.comboKey}`;
+      if (!pending.has(k) || pending.get(k)!.version < r.version) pending.set(k, r);
+    }
+    const out: CompareRow[] = [];
+    for (const key of this.knownKeys(papers, ranges, rows)) {
+      const options = parseCombo(key);
+      if (!options || options.service !== service) continue;
+      const eff = pickEffective(customerRows.filter((r) => r.comboKey === key).map(toVersionLike), at);
+      const customerPrice = eff ? unitPrice(eff, vars(key, eff.baseProviderId)) : null;
+      const label = comboLabel(options, names);
+      for (const c of centers) {
+        const pid = String(c._id);
+        const providerPrice = providerPrices[pid]?.[key] ?? null;
+        out.push({
+          comboKey: key, label, service: options.service, providerId: pid, providerName: c.name, providerStatus: (c.status ?? 'active') as ProviderStatus,
+          providerPrice, pendingPrice: pending.get(`${pid}|${key}`)?.price ?? null,
+          customerPrice, customerMode: eff?.mode ?? null, ...margin(customerPrice, providerPrice),
+        });
+      }
+    }
+    return out;
+  }
+
   private async assertProvider(id: Types.ObjectId) {
     if (!(await this.centers.exists({ _id: id }))) throw new NotFoundException('مجری یافت نشد');
   }
@@ -395,7 +495,7 @@ export class PriceBookService {
     }
   }
 
-  private async transition(before: Row, from: PriceVersion['state'], to: PriceVersion['state'], action: PriceAuditAction, reason: string, by: string) {
+  private async transition(before: Row, from: PriceVersion['state'], to: PriceVersion['state'], action: PriceAuditAction, reason: string, by: string, confirmNegativeMargin = false) {
     const why = this.reason(reason);
     const now = new Date();
     const future = new Date(before.effectiveFrom).getTime() > now.getTime();
@@ -414,10 +514,11 @@ export class PriceBookService {
         .lean();
       if (latest && new Date(latest.effectiveFrom).getTime() >= now.getTime()) {
         startsAt = new Date(new Date(latest.effectiveFrom).getTime() + 1);
-        // never leave it scheduled for the next millisecond: wait (at most ~1 ms) until it has started
-        while (Date.now() < startsAt.getTime()) await new Promise((r) => setTimeout(r, 1));
       }
     }
+    const negative = to === 'published'
+      ? await this.checkMargin(before.comboKey, future ? new Date(before.effectiveFrom) : startsAt, before.layer, before.providerId, this.valueOf(before), confirmNegativeMargin)
+      : [];
     // Disabling a version that has not started yet cancels it (zero-length window); an active one stops selling now.
     const cancel = to === 'disabled' && future;
     const doc = await this.versions.findOneAndUpdate(
@@ -427,8 +528,9 @@ export class PriceBookService {
     );
     if (!doc) throw new ConflictException('وضعیت این نسخه تغییر کرده است؛ صفحه را تازه کنید');
     await this.catalog.invalidate();
-    await this.audit(to === 'published' && future ? 'schedule' : action, [doc], why, by, this.plain(before), this.plain(doc));
-    return this.viewOne(doc);
+    await this.audit(to === 'published' && future ? 'schedule' : action, [doc], why, by, this.plain(before), this.withNegative(this.plain(doc), negative));
+    // rendered at the version's own start so a +1 ms start is already in force
+    return this.viewOne(doc, startsAt);
   }
 
   private async findVersion(id: string) {
@@ -554,7 +656,7 @@ export class PriceBookService {
     };
   }
 
-  private async viewOne(doc: { _id: unknown; comboKey: string; layer: PriceLayer; providerId?: unknown }): Promise<VersionView> {
-    return (await this.history(doc.layer, doc.comboKey, new Date(), doc.providerId ? String(doc.providerId) : null)).find((v) => v.id === String(doc._id))!;
+  private async viewOne(doc: { _id: unknown; comboKey: string; layer: PriceLayer; providerId?: unknown }, at = new Date()): Promise<VersionView> {
+    return (await this.history(doc.layer, doc.comboKey, at, doc.providerId ? String(doc.providerId) : null)).find((v) => v.id === String(doc._id))!;
   }
 }
