@@ -10,12 +10,14 @@ import type {
   CartSpec,
   CartType,
   ChildDraft,
+  ColorPrintSpec,
   CouponReason,
   DocsSpec,
   FlyerSpec,
   OrderDraft,
   PlanLike,
   PricingContext,
+  PricingLine,
   PrintSpec,
   QuoteLine,
   QuoteResult,
@@ -23,8 +25,10 @@ import type {
   RepairSpec,
   RuleLike,
   ServiceDraft,
+  ServicePricing,
 } from './pricing.types.js';
-import { BIND_COLORS, type Prices } from '../catalog/catalog.defaults.js';
+import { BIND_COLORS, defaultPrintAddons, type Prices } from '../catalog/catalog.defaults.js';
+import { docsSpiral, normalizeBwPrint, normalizeColorPrint, priceBwPrint, priceColorPrint, printV4Detail } from './print-v4.js';
 
 const int = (v: unknown, fallback: number): number => {
   const n = typeof v === 'number' ? v : Number(v);
@@ -49,7 +53,7 @@ const fileIds = (v: unknown): string[] | undefined => {
  * Catalog lists the services resolve against. A missing list = none (no paper cost, no spiral colour,
  * no extras) — except bind colours, which default to the three built-in ones.
  */
-export type ServiceCatalog = Partial<Pick<PricingContext, 'papers' | 'colors' | 'extras' | 'bindColors'>>;
+export type ServiceCatalog = Partial<Pick<PricingContext, 'papers' | 'colors' | 'extras' | 'bindColors' | 'priceBook' | 'printAddons'>>;
 /** v3 name of `ServiceCatalog`. */
 export type PrintCatalog = ServiceCatalog;
 
@@ -117,6 +121,9 @@ export function normalizeDocs(spec: Partial<DocsSpec> | undefined, cat: ServiceC
   // v3.3: an admin bind colour; unknown/off → the first `on` one (none on → the key as sent, no extra)
   const bindColor = resolveOn(s.bindColor, bindColorsOf(cat))?.key ?? (str(s.bindColor, '', 40) || 'maroon');
   const file = fileId(s.fileId);
+  const addons = { ...defaultPrintAddons(), ...(cat.printAddons ?? {}) };
+  const binding = addons.docsSpiral && s.binding === 'spiral' ? ('spiral' as const) : ('hardcover' as const);
+  const spiralColor = binding === 'spiral' ? resolveOn(s.spiralColor, cat.colors ?? [])?.key : undefined;
   return {
     ...(file ? { fileId: file } : {}),
     fileName: text(s.fileName, 200),
@@ -130,6 +137,8 @@ export function normalizeDocs(spec: Partial<DocsSpec> | undefined, cat: ServiceC
     sides: oneOf(s.sides, ['single', 'double'] as const, 'single'),
     copies: Math.max(1, int(s.copies, 1) || 1),
     bindColor,
+    binding,
+    ...(spiralColor ? { spiralColor } : {}),
     stamp: oneOf(s.stamp, ['gold', 'silver'] as const, 'gold'),
     colorRanges,
     colorPages: text(s.colorPages, 200),
@@ -147,7 +156,13 @@ export function docsPrice(spec: Partial<DocsSpec> | undefined, p: Prices, cat: S
   const inkRate = d.ink === 'color' ? p.docColor : d.ink === 'mixed' ? p.docMixed : p.docBw;
   const sidesMul = d.sides === 'double' ? 1 - p.docDoubleDiscount / 100 : 1;
   const colorExtra = resolveOn(d.bindColor, bindColorsOf(cat))?.extra ?? 0;
-  const bind = p.docBind + (d.stamp === 'silver' ? p.stampSilver : p.stampGold) + colorExtra;
+  let bind = p.docBind + (d.stamp === 'silver' ? p.stampSilver : p.stampGold) + colorExtra;
+  if (d.binding === 'spiral') {
+    // v4: spiral replaces the hardcover binding; an unpriceable spiral makes the service unavailable (0)
+    const sp = docsSpiral(d, cat);
+    if ('unavailable' in sp) return 0;
+    bind = sp.bind;
+  }
   return Math.round(d.pagesN * inkRate * sidesMul * d.copies + bind * d.copies);
 }
 
@@ -396,7 +411,7 @@ export function priceService(
   svc: ServiceDraft,
   p: Prices,
   cat: ServiceCatalog = {},
-): { service: ServiceDraft; price: number; label: string; detail: string } {
+): { service: ServiceDraft; price: number; label: string; detail: string; unavailable?: string; pricing?: { lines: PricingLine[] } } {
   const at = typeof svc.childIndex === 'number' ? { childIndex: svc.childIndex } : {};
   switch (svc.kind) {
     case 'print': {
@@ -421,6 +436,20 @@ export function priceService(
       ].filter(Boolean).join(' · ');
       return { service: { kind: 'print', ...at, spec }, price: printPrice(d, p, cat), label: 'چاپ اسناد', detail };
     }
+    case 'black_white_printing':
+    case 'color_printing': {
+      const isColor = svc.kind === 'color_printing';
+      const d = (isColor ? normalizeColorPrint(svc.spec, cat) : normalizeBwPrint(svc.spec, cat)) as ColorPrintSpec & { pagesN: number };
+      const r = isColor ? priceColorPrint(svc.spec, cat) : priceBwPrint(svc.spec, cat);
+      const { pagesN: _n, ...spec } = d;
+      return {
+        service: { kind: svc.kind, ...at, spec } as ServiceDraft,
+        price: r.price,
+        label: isColor ? 'چاپ رنگی' : 'چاپ سیاه‌وسفید',
+        detail: printV4Detail(svc.kind, d, r, cat),
+        ...(r.unavailable ? { unavailable: r.unavailable } : { pricing: { lines: r.lines } }),
+      };
+    }
     case 'docs': {
       const d = normalizeDocs(svc.spec, cat);
       const { pagesN, ...spec } = d;
@@ -434,16 +463,29 @@ export function priceService(
         rangePart = ' (صفحه ' + fa(d.from ?? 1) + '–' + fa(d.to ?? d.pages) + ')';
       }
       const bindName = resolveOn(d.bindColor, bindColorsOf(cat))?.name;
+      const spiral = d.binding === 'spiral' ? docsSpiral(d, cat) : null;
+      const spiralName = d.spiralColor ? (cat.colors ?? []).find((c) => c.key === d.spiralColor)?.name : undefined;
       // v3.2: every priced choice is named (ink, binding colour, stamp)
       const detail =
         fa(pagesN) + ' صفحه' + rangePart +
         ' · A4 · ' + (d.ink === 'color' ? 'همه رنگی' : d.ink === 'mixed' ? 'ترکیبی' : 'سیاه‌وسفید') +
         ' · ' + (d.sides === 'double' ? 'دورو' : 'یک‌رو') +
-        (bindName ? ' · جلد ' + bindName : '') +
-        ' · ' + (d.stamp === 'silver' ? 'نقره‌کوب' : 'زرکوب') +
+        (spiral
+          ? ' · فنری' + (spiralName ? ' ' + spiralName : '')
+          : (bindName ? ' · جلد ' + bindName : '') + ' · ' + (d.stamp === 'silver' ? 'نقره‌کوب' : 'زرکوب')) +
         (d.copies > 1 ? ' · ' + fa(d.copies) + ' سری' : '');
       // v3: «پایان‌نامه و صحافی» (v1–v2 orders keep their stored «چاپ اسناد» label)
-      return { service: { kind: 'docs', ...at, spec }, price: docsPrice(d, p, cat), label: 'پایان‌نامه و صحافی', detail };
+      const docsLabel = 'پایان‌نامه و صحافی';
+      if (spiral && 'unavailable' in spiral) {
+        return { service: { kind: 'docs', ...at, spec }, price: 0, label: docsLabel, detail, unavailable: spiral.unavailable };
+      }
+      return {
+        service: { kind: 'docs', ...at, spec },
+        price: docsPrice(d, p, cat),
+        label: docsLabel,
+        detail,
+        ...(spiral ? { pricing: { lines: spiral.lines.map((l) => ({ ...l, quantity: l.quantity * d.copies, subtotal: l.subtotal * d.copies })) } } : {}),
+      };
     }
     case 'flyer': {
       const f = normalizeFlyer(svc.spec);
@@ -571,7 +613,7 @@ export function computeQuote(draft: OrderDraft, ctx: PricingContext, planId?: st
 
   const childRows = children.map((c, index) => ({ index, total: childTotal(c, ctx), books: bookCount(c, ctx) }));
   const pricedRows = services.map((s) => priceService(s, p, ctx));
-  const serviceRows = pricedRows.map((priced, index) => ({ index, price: priced.price, label: priced.label, detail: priced.detail }));
+  const serviceRows = pricedRows.map((priced, index) => ({ index, price: priced.price, label: priced.label, detail: priced.detail, ...(priced.unavailable ? { unavailable: priced.unavailable } : {}) }));
 
   const totalBooks = childRows.reduce((s, c) => s + c.books, 0);
   const bindingTotal = childRows.reduce((s, c) => s + c.total, 0);
@@ -703,8 +745,11 @@ export function pricedServices(draft: OrderDraft, ctx: PricingContext) {
       price: priced.price,
       label: priced.label,
       detail: priced.detail,
+      ...(priced.pricing
+        ? { pricing: { calculatedAt: ctx.priceBook?.at ?? new Date().toISOString(), currency: 'toman' as const, lines: priced.pricing.lines, customerSubtotal: priced.price } }
+        : {}),
       ...(childName ? { childName } : {}),
-    } as ServiceDraft & { price: number; label: string; detail: string; childName?: string };
+    } as ServiceDraft & { price: number; label: string; detail: string; childName?: string; pricing?: ServicePricing };
   });
 }
 

@@ -98,9 +98,9 @@ export const QC_LABELS = [
 ];
 
 /** Campaign «سرویس‌های مشمول»: `school` = school-book binding, the rest are service kinds. */
-export const CAMPAIGN_SERVICES = ['school', 'print', 'docs', 'flyer', 'cart', 'repair'] as const;
+export const CAMPAIGN_SERVICES = ['school', 'print', 'black_white_printing', 'color_printing', 'docs', 'flyer', 'cart', 'repair'] as const;
 export type CampaignService = (typeof CAMPAIGN_SERVICES)[number];
-export const DEFAULT_CAMPAIGN_SERVICES: CampaignService[] = ['school', 'docs', 'print'];
+export const DEFAULT_CAMPAIGN_SERVICES: CampaignService[] = ['school', 'docs', 'print', 'black_white_printing', 'color_printing'];
 
 /** v3.3: where an extra is offered and priced (`Extra.services`; missing = both). */
 export const EXTRA_SERVICES = ['school', 'print'] as const;

@@ -1,6 +1,8 @@
 import type { CampaignService, ExtraService, PlanId, Tone, PayMethod } from '../../common/constants.js';
 import type { Checklists, OpsSettings, Prices } from '../catalog/catalog.defaults.js';
 import type { RuleCondition, RuleEffect } from '../rules/rule.schema.js';
+import type { PrintAddons } from '../catalog/catalog.defaults.js';
+import type { PriceBookSnapshot } from '../price-book/snapshot.js';
 
 export interface ChildDraft {
   name: string;
@@ -43,6 +45,9 @@ export interface DocsSpec {
   coverTitle?: string;
   coverBack?: string;
   fullName?: string;
+  /** v4: «فنری» replaces the hardcover binding (default hardcover). */
+  binding?: 'hardcover' | 'spiral';
+  spiralColor?: string;
 }
 
 export interface FlyerSpec {
@@ -113,9 +118,28 @@ export interface PrintSpec {
   desc?: string;
 }
 
-export type ServiceKind = 'print' | 'docs' | 'flyer' | 'cart' | 'repair';
+export type PrintSize = 'A3' | 'A4' | 'A5' | 'A6';
+export type ColorType = 'text' | 'full';
+/** v4 «چاپ سیاه‌وسفید» / «چاپ رنگی» (contract v4.0). */
+export interface PrintV4Base {
+  fileId?: string; fileName?: string; pages: number; scope: 'all' | 'range'; from?: number; to?: number;
+  size: PrintSize; sides: 'single' | 'double'; copies: number;
+  binding: 'none' | 'spiral' | 'glue' | 'hardcover'; spiralColor?: string;
+  staple: boolean; laminate: 'none' | 'cover' | 'all'; extras?: string[]; desc?: string;
+}
+export type BwPrintSpec = PrintV4Base;
+export interface ColorPrintSpec extends PrintV4Base {
+  colorType: ColorType; paper: string; mixed?: boolean; colorRanges?: { from: number; to: number }[]; colorPages?: string;
+}
+/** One priced line of the order snapshot (contract v4.0 «Order.services[i].pricing»). */
+export interface PricingLine { comboKey: string; versionId: string; version: number; unitPrice: number; quantity: number; subtotal: number }
+export interface ServicePricing { calculatedAt: string; currency: 'toman'; lines: PricingLine[]; customerSubtotal: number }
+
+export type ServiceKind = 'print' | 'black_white_printing' | 'color_printing' | 'docs' | 'flyer' | 'cart' | 'repair';
 export type ServiceDraft =
   | { kind: 'print'; childIndex?: number; spec: PrintSpec }
+  | { kind: 'black_white_printing'; childIndex?: number; spec: BwPrintSpec }
+  | { kind: 'color_printing'; childIndex?: number; spec: ColorPrintSpec }
   | { kind: 'docs'; childIndex?: number; spec: DocsSpec }
   | { kind: 'flyer'; childIndex?: number; spec: FlyerSpec }
   | { kind: 'cart'; childIndex?: number; spec: CartSpec }
@@ -142,7 +166,7 @@ export type CampaignBlock = 'not_started' | 'expired' | 'full';
 
 export interface Quote {
   children: { index: number; total: number; books: number }[];
-  services: { index: number; price: number; label: string; detail: string }[];
+  services: { index: number; price: number; label: string; detail: string; unavailable?: string }[];
   totalBooks: number;
   bindingTotal: number;
   servicesTotal: number;
@@ -194,7 +218,12 @@ export interface PricingContext {
   extras: { key: string; label: string; price: number; on: boolean; services?: readonly ExtraService[] }[];
   grades: { name: string; books: number }[];
   /** All papers (v3 «نوع کاغذ»), sorted by `sort`; only `on` ones are selectable. */
-  papers: { key: string; name: string; price: number; on: boolean; sort: number }[];
+  papers: {
+    key: string; name: string; price: number; on: boolean; sort: number;
+    /** v4 */
+    type?: string; weight?: number; paperCost?: number; colorPrint?: boolean;
+    supportedSizes?: string[]; supportsSingle?: boolean; supportsDouble?: boolean;
+  }[];
   /** All bind colours (v3.3), sorted by `sort`; only `on` ones are selectable. */
   bindColors: { key: string; name: string; extra: number; on: boolean; sort: number }[];
   plans: PlanLike[];
@@ -214,6 +243,9 @@ export interface PricingContext {
   /** Order placement reads these from the same load (not used by the pure pricing functions). */
   ops?: OpsSettings;
   checklists?: Checklists;
+  /** v4: effective customer price-book snapshot and the print add-on switches. */
+  priceBook?: PriceBookSnapshot;
+  printAddons?: PrintAddons;
 }
 
 /** Quote plus internal bookkeeping that is not part of the public shape. */
