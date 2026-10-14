@@ -35,8 +35,11 @@ function setup(uploadDocs: Doc[] = [], orderDocs: Doc[] = []) {
   const orders = fakeModel(orderDocs);
   const couriers = fakeModel([{ _id: courierId, userId: courierUserId }]);
   const storage = new LocalStorageDriver(root);
-  const svc = new UploadsService(uploads as never, orders as never, couriers as never, storage, 30);
-  return { svc, uploads, orders, storage };
+  const jobs = fakeModel();
+  const centers = fakeModel();
+  const users = fakeModel();
+  const svc = new UploadsService(uploads as never, orders as never, couriers as never, storage, 30, jobs as never, centers as never, users as never);
+  return { svc, uploads, orders, storage, jobs, centers, users };
 }
 
 async function tmpFile(storage: LocalStorageDriver, content: Uint8Array) {
@@ -280,5 +283,68 @@ describe('LocalStorageDriver', () => {
     const storage = new LocalStorageDriver(root);
     expect(() => storage.resolveKey('../outside.txt')).toThrow(/escapes/);
     expect(storage.resolveKey('2026/09/a.pdf')).toBe(join(root, '2026', '09', 'a.pdf'));
+  });
+});
+
+describe('v4.2 provider file access (§65)', () => {
+  const P = new Types.ObjectId();
+  const Q = new Types.ObjectId();
+  const userP = new Types.ObjectId();
+  const userQ = new Types.ObjectId();
+  const orderId = new Types.ObjectId();
+  const otherOrder = new Types.ObjectId();
+  const as = (id: Types.ObjectId) => ({ id: String(id), role: 'provider' }) as never;
+
+  function world() {
+    const s = setup();
+    s.users.docs.push({ _id: userP, role: 'provider', providerId: P }, { _id: userQ, role: 'provider', providerId: Q });
+    s.centers.docs.push({ _id: P, name: 'P', userId: userP }, { _id: Q, name: 'Q', userId: userQ });
+    s.jobs.docs.push({ _id: new Types.ObjectId(), orderId, seq: 1, status: 'in_production', providerId: P });
+    const file = { _id: new Types.ObjectId(), ownerId: new Types.ObjectId(), purpose: 'docs', orderIds: [orderId] };
+    const photo = { ...file, _id: new Types.ObjectId(), purpose: 'pickup' };
+    const foreign = { ...file, _id: new Types.ObjectId(), orderIds: [otherOrder] };
+    // the order's own line references: the file must be one of them, not merely claim the order
+    s.orders.docs.push({ _id: orderId, services: [{ kind: 'docs', spec: { fileId: String(file._id) } }] });
+    return { s, file, photo, foreign };
+  }
+
+  it('the provider holding the job reads the order line files, never the courier pickup photos', async () => {
+    const { s, file, photo } = world();
+    await expect(s.svc.canRead(file as never, as(userP))).resolves.toBe(true);
+    await expect(s.svc.canRead(photo as never, as(userP))).resolves.toBe(false);
+  });
+  it('IDOR: another provider, another order, or a stale login is refused', async () => {
+    const { s, file, foreign } = world();
+    await expect(s.svc.canRead(file as never, as(userQ))).resolves.toBe(false);
+    await expect(s.svc.canRead(foreign as never, as(userP))).resolves.toBe(false);
+    s.centers.docs[0].userId = new Types.ObjectId(); // the login was relinked
+    await expect(s.svc.canRead(file as never, as(userP))).resolves.toBe(false);
+  });
+  it('released provider loses file access; finished jobs give no access', async () => {
+    const { s, file } = world();
+    Object.assign(s.jobs.docs[0], { providerId: Q, releasedProviderIds: [P] });
+    await expect(s.svc.canRead(file as never, as(userP))).resolves.toBe(false);
+    Object.assign(s.jobs.docs[0], { providerId: P, status: 'delivered' });
+    await expect(s.svc.canRead(file as never, as(userP))).resolves.toBe(false);
+  });
+  it('a file the order does not reference, a delivery-only provider and a suspended provider get nothing', async () => {
+    const { s, file } = world();
+    const claimed = { ...file, _id: new Types.ObjectId() }; // claims the order but is not among its line files
+    await expect(s.svc.canRead(claimed as never, as(userP))).resolves.toBe(false);
+    Object.assign(s.jobs.docs[0], { providerId: Q, deliveryProviderId: P });
+    await expect(s.svc.canRead(file as never, as(userP))).resolves.toBe(false);
+    Object.assign(s.jobs.docs[0], { providerId: P, deliveryProviderId: undefined });
+    await expect(s.svc.canRead(file as never, as(userP))).resolves.toBe(true);
+    for (const status of ['suspended', 'inactive']) {
+      s.centers.docs[0].status = status;
+      await expect(s.svc.canRead(file as never, as(userP))).resolves.toBe(false);
+    }
+    s.centers.docs[0].status = 'busy'; // soft: still allowed
+    await expect(s.svc.canRead(file as never, as(userP))).resolves.toBe(true);
+  });
+  it('openForUser answers a refused provider with the same 403 as any non-owner', async () => {
+    const { s, file } = world();
+    s.uploads.docs.push({ ...file, name: 'a.pdf', path: 'k/a.pdf' });
+    await expect(s.svc.openForUser(String(file._id), as(userQ))).rejects.toBeInstanceOf(ForbiddenException);
   });
 });

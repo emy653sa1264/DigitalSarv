@@ -16,8 +16,12 @@ import type { AuthUser } from '../../common/auth/auth-user.js';
 import type { OrderStatus, UploadPurpose } from '../../common/constants.js';
 import { addDays } from '../../common/utils/dates.js';
 import { assertObjectId } from '../../common/utils/object-id.js';
+import { Center } from '../centers/center.schema.js';
 import { Courier } from '../courier/courier.schema.js';
+import { FILE_STATUSES } from '../dispatch/job-model.js';
+import { Job } from '../dispatch/job.schema.js';
 import { Order } from '../orders/order.schema.js';
+import { User } from '../users/user.schema.js';
 import type { OrderDraft } from '../pricing/pricing.types.js';
 import { countPdfPages } from './pdf-pages.js';
 import {
@@ -55,6 +59,9 @@ export class UploadsService {
     @InjectModel(Courier.name) private readonly couriers: Model<Courier>,
     @Inject(STORAGE_DRIVER) private readonly storage: StorageDriver,
     @Inject('UPLOAD_RETENTION_DAYS') private readonly retentionDays: number,
+    @InjectModel(Job.name) private readonly jobs: Model<Job>,
+    @InjectModel(Center.name) private readonly centers: Model<Center>,
+    @InjectModel(User.name) private readonly users: Model<User>,
   ) {}
 
   // ------------------------------------------------------------ upload
@@ -110,10 +117,11 @@ export class UploadsService {
     return { upload, stream: this.storage.open(upload.path) };
   }
 
-  async canRead(upload: Pick<UploadDocument, 'ownerId' | 'orderId' | 'orderIds'>, user: AuthUser): Promise<boolean> {
+  async canRead(upload: Pick<UploadDocument, 'ownerId' | 'orderId' | 'orderIds' | 'purpose'> & { _id?: unknown }, user: AuthUser): Promise<boolean> {
     if (user.role === 'admin' || String(upload.ownerId) === user.id) return true;
     const orderIds = uploadOrderIds(upload);
     if (!orderIds.length) return false;
+    if (user.role === 'provider') return this.providerCanRead(upload, orderIds, user);
     const orders = await this.orders.find({ _id: { $in: orderIds } }, { customerId: 1, courierId: 1 });
     if (user.role === 'customer') return orders.some((o) => String(o.customerId) === user.id);
     if (user.role === 'courier' && orders.some((o) => o.courierId)) {
@@ -121,6 +129,24 @@ export class UploadsService {
       return !!courier && orders.some((o) => o.courierId && String(o.courierId) === String(courier._id));
     }
     return false;
+  }
+
+  /**
+   * §65: the linked login of the provider that holds (as producer) a live job of an order whose own line
+   * files include this upload. Never courier pickup photos; suspended/inactive providers are refused.
+   */
+  private async providerCanRead(upload: { _id?: unknown; purpose?: string }, orderIds: Types.ObjectId[], user: AuthUser): Promise<boolean> {
+    if (upload.purpose === 'pickup' || !upload._id) return false;
+    const u = await this.users.findById(user.id, { role: 1, providerId: 1 }).lean();
+    if (!u || u.role !== 'provider' || !u.providerId) return false;
+    const center = await this.centers.findById(u.providerId, { userId: 1, status: 1 }).lean();
+    if (!center || String(center.userId) !== user.id) return false;
+    if (center.status === 'suspended' || center.status === 'inactive') return false;
+    const jobs = await this.jobs.find({ orderId: { $in: orderIds }, providerId: u.providerId, status: { $in: FILE_STATUSES } }, { orderId: 1 }).lean();
+    if (!jobs.length) return false;
+    const orders = await this.orders.find({ _id: { $in: jobs.map((j) => j.orderId) } }, { services: 1 }).lean();
+    const id = String(upload._id);
+    return orders.some((o) => draftFileRefs(o.services).some((r) => r.id === id));
   }
 
   // ------------------------------------------------------------ references from orders
