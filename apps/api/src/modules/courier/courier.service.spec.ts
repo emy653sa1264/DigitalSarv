@@ -8,12 +8,16 @@ import { UpdateCourierDto } from './dto/courier.dto.js';
 
 const zone = { _id: new Types.ObjectId(), name: 'منطقه ۱ — مرکز و غرب' };
 
-function setup(couriers: Doc[], orders: Doc[] = [], users: Doc[] = []) {
+function setup(couriers: Doc[], orders: Doc[] = [], users: Doc[] = [], jobDocs: Doc[] = [], centerDocs: Doc[] = []) {
   const c = fakeModel(couriers);
   const o = fakeModel(orders);
   const u = fakeModel(users);
-  const svc = new CourierService(c as never, o as never, u as never, fakeModel([zone]) as never, {} as never, {} as never, {} as never, {} as never);
-  return { svc, c, o, u };
+  const jobs = fakeModel(jobDocs);
+  const centers = fakeModel(centerDocs);
+  const jobsSvc = { courierCollected: vi.fn(async () => undefined), onOrderDelivered: vi.fn(async () => undefined) };
+  const svc = new CourierService(c as never, o as never, u as never, fakeModel([zone]) as never, {} as never, { dispatch: vi.fn(async () => undefined) } as never, {} as never,
+    { getSettings: async () => ({ courier: { perTaskFee: 75000, settlementWeekday: 4 } }) } as never, jobs as never, centers as never, jobsSvc as never);
+  return { svc, c, o, u, jobs, centers, jobsSvc };
 }
 
 describe('CourierService.verify recount', () => {
@@ -33,7 +37,7 @@ describe('CourierService.verify recount', () => {
     };
     const svc = new CourierService(
       fakeModel([{ _id: courierId, userId }]) as never, fakeModel([order]) as never, fakeModel([]) as never, fakeModel([]) as never,
-      pricing as never, { dispatch: vi.fn(async () => undefined) } as never, { attach: vi.fn(async () => undefined) } as never, {} as never,
+      pricing as never, { dispatch: vi.fn(async () => undefined) } as never, { attach: vi.fn(async () => undefined) } as never, {} as never, fakeModel([]) as never, fakeModel([]) as never, {} as never,
     );
     const res = await svc.verify({ id: String(userId), role: 'courier' } as never, String(order._id), { collectedCount: 3, checks: [true] });
     const drafted = pricing.quote.mock.calls[0][0] as { services: { kind: string }[] };
@@ -117,5 +121,41 @@ describe('CourierService admin (v3.2)', () => {
     c.findById.mockReturnValue(doc as never);
     await expect(svc.update(String(id), { phone: '09120000000' })).rejects.toThrow('مدیر سیستم');
     expect(u.docs[0]).toMatchObject({ role: 'courier' });
+  });
+});
+
+describe('v4.2 courier tasks', () => {
+  const userId = new Types.ObjectId();
+  const courierId = new Types.ObjectId();
+  const P = new Types.ObjectId();
+  const user = { id: String(userId), role: 'courier' } as never;
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tehran' }).format(new Date());
+  const order = (o: Doc) => ({ _id: new Types.ObjectId(), code: '1', courierId, customerName: 'مریم', customerPhone: '0912', pickup: { address: 'آدرس مشتری', phone: '0912', date: today, slot: '۸ تا ۱۰' }, children: [], services: [], quote: { totalBooks: 0 }, timeline: [], ...o });
+  const provider = { _id: P, name: 'چاپ نگین', businessName: 'چاپ و تکثیر نگین', address: 'تهران، میدان کاج', phone: '02122334455' };
+
+  it('an order without home pickup never gets a pickup task; a ready courier job is a delivery task «from» the provider', async () => {
+    const printOnly = order({ status: 'registered', delivery: { method: 'courier', homePickup: false, note: '' } });
+    const ready = order({ status: 'packing', delivery: { method: 'courier', homePickup: false, note: '' } });
+    const { svc } = setup([{ _id: courierId, userId }], [printOnly, ready], [], [
+      { _id: new Types.ObjectId(), orderId: ready._id, seq: 1, status: 'ready', deliveryMethod: 'courier', providerId: P },
+      { _id: new Types.ObjectId(), orderId: printOnly._id, seq: 1, status: 'accepted', deliveryMethod: 'courier', providerId: P },
+    ], [provider]);
+    const tasks = await svc.tasks(user);
+    expect(tasks.map((t) => [t.orderId, t.kind])).toEqual([[String(ready._id), 'delivery']]);
+    expect(tasks[0]).toMatchObject({ done: false, from: { name: 'چاپ و تکثیر نگین', address: 'تهران، میدان کاج', phone: '02122334455' } });
+  });
+  it('a home pickup whose job has a provider says where to bring the items', async () => {
+    const school = order({ status: 'courier_assigned', children: [{ name: 'سارا', books: 9 }] });
+    const { svc } = setup([{ _id: courierId, userId }], [school], [], [{ _id: new Types.ObjectId(), orderId: school._id, seq: 1, status: 'accepted', deliveryMethod: 'courier', providerId: P }], [provider]);
+    const [task] = await svc.tasks(user);
+    expect(task).toMatchObject({ kind: 'pickup', dropoff: { name: 'چاپ و تکثیر نگین', address: 'تهران، میدان کاج' } });
+  });
+  it('collected: only for a packing order of this courier; delivered sets the job delivered', async () => {
+    const ready = order({ status: 'packing', delivery: { method: 'courier', homePickup: false, note: '' } });
+    const { svc, o, jobsSvc } = setup([{ _id: courierId, userId }], [ready]);
+    await svc.collected(user, String(ready._id));
+    expect(jobsSvc.courierCollected).toHaveBeenCalledWith(ready._id);
+    o.docs[0].status = 'registered';
+    await expect(svc.collected(user, String(ready._id))).rejects.toThrow('این سفارش هنوز آماده تحویل نیست');
   });
 });

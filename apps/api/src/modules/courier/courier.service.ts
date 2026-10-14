@@ -8,7 +8,7 @@ import {
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import type { AuthUser } from '../../common/auth/auth-user.js';
-import type { OrderStatus } from '../../common/constants.js';
+import type { DeliveryMethod, JobStatus, OrderStatus } from '../../common/constants.js';
 import { addDays, tehranDayStart, tehranYmd } from '../../common/utils/dates.js';
 import { defined } from '../../common/utils/defined.js';
 import { fa } from '../../common/utils/fa.js';
@@ -16,6 +16,10 @@ import { assertObjectId } from '../../common/utils/object-id.js';
 import { normalizePhone } from '../../common/utils/phone.js';
 import { saveOrConflict } from '../../common/utils/save-or-conflict.js';
 import { CatalogService } from '../catalog/catalog.service.js';
+import { Center } from '../centers/center.schema.js';
+import { Job } from '../dispatch/job.schema.js';
+import { JobsService } from '../dispatch/jobs.service.js';
+import { deliveryOf } from '../orders/delivery-rules.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import {
   courierDetail,
@@ -36,6 +40,11 @@ import { Courier, CourierDocument } from './courier.schema.js';
 import type { CreateCourierDto, UpdateCourierDto, VerifyPickupDto } from './dto/courier.dto.js';
 
 const PICKUP_PENDING: OrderStatus[] = ['registered', 'confirmed', 'courier_assigned'];
+/** Statuses that put an order on a courier's list; `packing` = a ready parcel waiting at the provider (D15). Shared by the courier app and the admin count. */
+const COURIER_LIST_STATUSES: OrderStatus[] = [...PICKUP_PENDING, 'packing', 'out_for_delivery'];
+
+export interface Place { name: string; address: string; phone: string }
+type JobInfo = { status: JobStatus; deliveryMethod: DeliveryMethod; place?: Place };
 
 export interface CourierTask {
   id: string;
@@ -52,6 +61,8 @@ export interface CourierTask {
   lat?: number;
   lng?: number;
   done: boolean;
+  from?: Place;
+  dropoff?: Place;
 }
 
 function eventToday(order: Order, status: OrderStatus, since: Date): boolean {
@@ -69,6 +80,9 @@ export class CourierService {
     private readonly notifications: NotificationsService,
     private readonly uploads: UploadsService,
     private readonly catalog: CatalogService,
+    @InjectModel(Job.name) private readonly jobs: Model<Job>,
+    @InjectModel(Center.name) private readonly centers: Model<Center>,
+    private readonly fulfilment: JobsService,
   ) {}
 
   async forUser(user: AuthUser): Promise<CourierDocument> {
@@ -98,7 +112,7 @@ export class CourierService {
       .find({
         courierId,
         $or: [
-          { status: { $in: [...PICKUP_PENDING, 'out_for_delivery'] } },
+          { status: { $in: COURIER_LIST_STATUSES } },
           { 'timeline.at': { $gte: since } },
         ],
       })
@@ -106,7 +120,17 @@ export class CourierService {
     return { orders, since };
   }
 
-  private toTasks(orders: OrderDocument[], since: Date): CourierTask[] {
+  /** Each order's job (status, delivery method) and its provider's address (§62: the courier needs where to collect/drop). */
+  private async jobInfo(orders: OrderDocument[]): Promise<Map<string, JobInfo>> {
+    if (!orders.length) return new Map();
+    const jobs = await this.jobs.find({ orderId: { $in: orders.map((o) => o._id) }, seq: 1 }, { orderId: 1, status: 1, deliveryMethod: 1, providerId: 1 }).lean();
+    const ids = [...new Set(jobs.filter((j) => j.providerId).map((j) => String(j.providerId)))];
+    const providers = ids.length ? await this.centers.find({ _id: { $in: ids.map((i) => new Types.ObjectId(i)) } }, { name: 1, businessName: 1, address: 1, phone: 1 }).lean() : [];
+    const places = new Map(providers.map((p) => [String(p._id), { name: p.businessName || p.name, address: p.address ?? '', phone: p.phone ?? '' }]));
+    return new Map(jobs.map((j) => [String(j.orderId), { status: j.status, deliveryMethod: j.deliveryMethod, ...(j.providerId && places.get(String(j.providerId)) ? { place: places.get(String(j.providerId)) } : {}) }]));
+  }
+
+  private toTasks(orders: OrderDocument[], since: Date, info: Map<string, JobInfo>): CourierTask[] {
     const today = tehranYmd();
     const tasks: CourierTask[] = [];
     for (const o of orders) {
@@ -123,14 +147,18 @@ export class CourierService {
         ...(o.pickup?.lat != null ? { lat: o.pickup.lat } : {}),
         ...(o.pickup?.lng != null ? { lng: o.pickup.lng } : {}),
       };
-      const pickupPending = PICKUP_PENDING.includes(o.status) && (o.pickup?.date ?? today) <= today;
+      const job = info.get(o.id as string);
+      const homePickup = deliveryOf(o).homePickup;
+      const pickupPending = homePickup && PICKUP_PENDING.includes(o.status) && (o.pickup?.date ?? today) <= today;
       const pickedToday = eventToday(o, 'picked_up', since) || eventToday(o, 'awaiting_approval', since);
-      if (pickupPending || pickedToday) {
-        tasks.push({ ...base, id: `${o.id}-pickup`, kind: 'pickup', done: !pickupPending });
+      if (pickupPending || (homePickup && pickedToday)) {
+        tasks.push({ ...base, id: `${o.id}-pickup`, kind: 'pickup', done: !pickupPending, ...(job?.place ? { dropoff: job.place } : {}) });
       }
-      const deliveryPending = o.status === 'out_for_delivery';
+      // D15: a courier job that is ready waits at the provider — collect it there, then deliver
+      const atProvider = o.status === 'packing' && job?.status === 'ready' && job.deliveryMethod === 'courier';
+      const deliveryPending = o.status === 'out_for_delivery' || atProvider;
       if (deliveryPending || eventToday(o, 'delivered', since)) {
-        tasks.push({ ...base, id: `${o.id}-delivery`, kind: 'delivery', done: !deliveryPending });
+        tasks.push({ ...base, id: `${o.id}-delivery`, kind: 'delivery', done: !deliveryPending, ...(atProvider && job?.place ? { from: job.place } : {}) });
       }
     }
     // pending first, then completed
@@ -140,7 +168,7 @@ export class CourierService {
   async tasks(user: AuthUser): Promise<CourierTask[]> {
     const courier = await this.forUser(user);
     const { orders, since } = await this.todaysOrders(courier._id);
-    return this.toTasks(orders, since);
+    return this.toTasks(orders, since, await this.jobInfo(orders));
   }
 
   async me(user: AuthUser) {
@@ -157,7 +185,7 @@ export class CourierService {
     const [json] = await this.withZoneNames([courier]);
 
     return {
-      courier: { ...json, todayCount: this.toTasks(orders, since).length },
+      courier: { ...json, todayCount: this.toTasks(orders, since, await this.jobInfo(orders)).length },
       stats: {
         pickupsToday,
         deliveriesToday,
@@ -240,7 +268,17 @@ export class CourierService {
     }
     await saveOrConflict(order);
     await this.notifications.dispatch('delivered', order);
+    // the job follows (best-effort, never throws); the id comes from the token
+    await this.fulfilment.onOrderDelivered(order._id, 'courier', user.id);
     return order;
+  }
+
+  /** The courier took the parcel at the provider (contract v4.2): job ready → out_for_delivery, order packing → out_for_delivery. */
+  async collected(user: AuthUser, orderId: string) {
+    const { order } = await this.assignedOrder(user, orderId);
+    if (order.status !== 'packing') throw new BadRequestException('این سفارش هنوز آماده تحویل نیست');
+    await this.fulfilment.courierCollected(order._id);
+    return this.orders.findById(order._id);
   }
 
   async endShift(user: AuthUser) {
@@ -258,9 +296,9 @@ export class CourierService {
       couriers.map(async (c) => {
         const orders = await this.orders.find({
           courierId: c._id,
-          $or: [{ status: { $in: [...PICKUP_PENDING, 'out_for_delivery'] } }, { 'timeline.at': { $gte: since } }],
+          $or: [{ status: { $in: COURIER_LIST_STATUSES } }, { 'timeline.at': { $gte: since } }],
         });
-        return this.toTasks(orders, since).length;
+        return this.toTasks(orders, since, await this.jobInfo(orders)).length;
       }),
     );
     return (await this.withZoneNames(couriers)).map((c, i) => ({ ...c, todayCount: counts[i] }));

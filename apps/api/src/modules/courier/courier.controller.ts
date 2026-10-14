@@ -25,6 +25,11 @@ export class CourierController {
     return this.courier.delivered(user, id);
   }
 
+  @Post('orders/:id/collected') @HttpCode(200)
+  collected(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.courier.collected(user, id);
+  }
+
   @Post('shift/end') @HttpCode(200)
   endShift(@CurrentUser() user: AuthUser) { return this.courier.endShift(user); }
 }
