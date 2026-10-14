@@ -46,6 +46,7 @@ export interface AppConfig {
     /** Unpaid gateway orders are cancelled this many minutes after the last payment attempt. */
     timeoutMinutes: number;
     zarinpal: { merchantId: string; sandbox: boolean };
+    zibal: { merchant: string };
   };
   storage: {
     driver: StorageDriverName;
@@ -174,6 +175,11 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
   const merchantId = (env.ZARINPAL_MERCHANT_ID ?? '').trim();
   if (paymentDriver === 'zarinpal' && !merchantId) errors.push('ZARINPAL_MERCHANT_ID must be set when PAYMENT_DRIVER=zarinpal');
+  const zibalMerchant = (env.ZIBAL_MERCHANT ?? '').trim();
+  if (paymentDriver === 'zibal' && !zibalMerchant) errors.push('ZIBAL_MERCHANT must be set when PAYMENT_DRIVER=zibal');
+  if (isProduction && paymentDriver === 'zibal' && zibalMerchant === 'zibal' && env.PAYMENT_ALLOW_MOCK !== '1') {
+    errors.push('ZIBAL_MERCHANT=zibal is the Zibal sandbox merchant and is not allowed in production (set PAYMENT_ALLOW_MOCK=1 only on a staging box)');
+  }
 
   const smsDriver = oneOf(env, 'SMS_DRIVER', SMS_DRIVERS, 'log', errors);
   const smsApiKey = (env.SMS_API_KEY ?? '').trim();
@@ -230,6 +236,7 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       driver: paymentDriver,
       timeoutMinutes: num(env, 'PAYMENT_TIMEOUT_MIN', 30, errors, 1),
       zarinpal: { merchantId, sandbox: env.ZARINPAL_SANDBOX === '1' },
+      zibal: { merchant: zibalMerchant },
     },
     storage: {
       driver: oneOf(env, 'STORAGE_DRIVER', STORAGE_DRIVERS, 'local', errors),

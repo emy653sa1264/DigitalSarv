@@ -57,7 +57,7 @@ Fill in every `CHANGE_ME`:
 - The Mongo password appears **twice**: `MONGO_INITDB_ROOT_PASSWORD` and inside `MONGO_URI`. The Redis password also appears twice: `REDIS_PASSWORD` and inside `REDIS_URL`. Use hex secrets so they need no URL-encoding.
 - `WEB_PUBLIC_URL`, `API_PUBLIC_URL` and `CORS_ORIGIN` are the public `https://` origin. Behind the bundled nginx, the web and the API share one origin.
 - `ADMIN_PHONES` lists the owner's phones, comma-separated. They are upserted as admins on every boot.
-- `ZARINPAL_MERCHANT_ID`, plus `SMS_API_KEY` / `SMS_SENDER` / `SMS_OTP_TEMPLATE` (see sections 7 and 8).
+- `ZARINPAL_MERCHANT_ID` (or `ZIBAL_MERCHANT` with `PAYMENT_DRIVER=zibal`), plus `SMS_API_KEY` / `SMS_SENDER` / `SMS_OTP_TEMPLATE` (see sections 7 and 8).
 - `HTTP_PORT` is `80` when nginx is the edge, or `127.0.0.1:8080` when Caddy or a host proxy terminates TLS.
 
 `MONGO_INITDB_ROOT_*` only take effect when the `mongo-data` volume is **first created**. Changing them later does nothing (use `db.changeUserPassword` in mongosh, then update `MONGO_URI`).
@@ -147,6 +147,17 @@ When a release changes data shape, restore the Mongo backup taken before the upd
 3. Test first with `ZARINPAL_SANDBOX=1` (sandbox merchant ID), then switch to `0` and `dc up -d api`.
 4. Keep `PAYMENT_DRIVER=zarinpal`. `mock` is refused in production, and `PAYMENT_ALLOW_MOCK` must never be set.
 
+## 7b. Zibal (alternative gateway)
+
+1. In the Zibal panel (zibal.ir), create a gateway for the production domain and copy its **merchant** code into `ZIBAL_MERCHANT`; set `PAYMENT_DRIVER=zibal`. (The «Fill in every CHANGE_ME» list is in section 2.)
+2. Callback URL (sent with every payment request):
+   ```
+   ${API_PUBLIC_URL}/api/payments/zibal/callback      e.g. https://sarv.example.ir/api/payments/zibal/callback
+   ```
+   Zibal redirects with `trackId`, `success`, `status` and `orderId`; the API verifies with `/v1/verify` and redirects to `${WEB_PUBLIC_URL}/app/pay/return?order=…&status=ok|failed|pending`.
+3. Test on a staging box with `ZIBAL_MERCHANT=zibal` (sandbox; needs `PAYMENT_ALLOW_MOCK=1` when `NODE_ENV=production`), then put the real merchant and `dc up -d api`.
+4. Zarinpal stays available: switching back is `PAYMENT_DRIVER=zarinpal`. Orders keep the driver they were paid with (`payment.driver`).
+
 ## 8. Kavenegar (SMS)
 
 1. At panel.kavenegar.com, copy the **API key** into `SMS_API_KEY`. Under API settings, add the server's public IP to the allowed IPs if IP restriction is on.
@@ -203,7 +214,7 @@ Health endpoints: `/healthz` (nginx), `/api/health` (API liveness, used by the c
 ## 11. Security checklist
 
 - [ ] `.env.production` is `chmod 600`, never committed (it is in `.gitignore`), and every secret is freshly generated (`openssl rand -hex …`).
-- [ ] `NODE_ENV=production`. `OTP_DEV_CODE` and `PAYMENT_ALLOW_MOCK` are **unset**. `PAYMENT_DRIVER=zarinpal`, `SMS_DRIVER=kavenegar`, `ZARINPAL_SANDBOX=0`.
+- [ ] `NODE_ENV=production`. `OTP_DEV_CODE` and `PAYMENT_ALLOW_MOCK` are **unset**. `PAYMENT_DRIVER=zarinpal` (or `zibal` with a real `ZIBAL_MERCHANT`), `SMS_DRIVER=kavenegar`, `ZARINPAL_SANDBOX=0`.
 - [ ] Only `web` (or `caddy`) publishes ports. `dc ps` shows no `27017` or `6379` mapping. `ss -tlnp` shows only 22/80/443.
 - [ ] With Caddy or a host proxy, `HTTP_PORT=127.0.0.1:8080`, not `8080` (Docker bypasses ufw).
 - [ ] HTTPS works, HTTP redirects to HTTPS, and HSTS is present. `CORS_ORIGIN` lists only the real origin(s).

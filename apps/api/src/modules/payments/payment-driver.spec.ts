@@ -1,4 +1,5 @@
-import { MockPaymentDriver, tomanToRial, ZarinpalPaymentDriver, type FetchLike } from './payment-driver.js';
+import { MockPaymentDriver, readCallback, tomanToRial, ZarinpalPaymentDriver, ZibalPaymentDriver, type FetchLike } from './payment-driver.js';
+import { createPaymentDriver } from './payments.module.js';
 
 const MERCHANT = '1344b5d4-0048-11e8-94db-005056a205be';
 
@@ -79,5 +80,54 @@ describe('MockPaymentDriver', () => {
     expect(url).toBe(`http://localhost:3000/api/payments/mock/pay?authority=${authority}`);
     await expect(mock.verify({ authority })).resolves.toMatchObject({ ok: true, refId: expect.stringMatching(/^\d+$/) });
     await expect(mock.verify({ authority: 'A1' })).resolves.toMatchObject({ ok: false, retryable: false });
+  });
+});
+
+describe('ZibalPaymentDriver (D16)', () => {
+  const input = { orderId: 'o1', code: '10255', amount: 315000, description: 'پرداخت سفارش 10255', mobile: '09123456789', callbackUrl: 'https://api.sarv.test/api/payments/zibal/callback' };
+
+  it('request: merchant, rial amount, callbackUrl and the order code → the start URL', async () => {
+    const { fetch, calls } = fetchReturning({ trackId: 15966442233, result: 100, message: 'success' });
+    const res = await new ZibalPaymentDriver({ merchant: 'zibal', fetch }).request(input);
+    expect(calls[0].url).toBe('https://gateway.zibal.ir/v1/request');
+    expect(calls[0].body).toEqual({ merchant: 'zibal', amount: 3_150_000, callbackUrl: input.callbackUrl, orderId: '10255', description: input.description, mobile: '09123456789' });
+    expect(res).toEqual({ authority: '15966442233', url: 'https://gateway.zibal.ir/start/15966442233' });
+  });
+  it('request: any result other than 100 throws', async () => {
+    const { fetch } = fetchReturning({ result: 102, message: 'merchant یافت نشد.' });
+    await expect(new ZibalPaymentDriver({ merchant: 'x', fetch }).request(input)).rejects.toThrow(/102/);
+  });
+  it('verify: 100 and 201 (already verified) are paid', async () => {
+    const v100 = fetchReturning({ paidAt: '2026-10-15T10:00:00.000', cardNumber: '62741****44', status: 1, amount: 3150000, refNumber: 9876, orderId: '10255', result: 100, message: 'success' });
+    await expect(new ZibalPaymentDriver({ merchant: 'zibal', fetch: v100.fetch }).verify({ authority: '15966442233', amount: 315000 }))
+      .resolves.toEqual({ ok: true, refId: '9876', cardPan: '62741****44' });
+    expect(v100.calls[0]).toEqual({ url: 'https://gateway.zibal.ir/v1/verify', body: { merchant: 'zibal', trackId: 15966442233 } });
+    const v201 = fetchReturning({ result: 201, message: 'قبلا تایید شده', refNumber: 9876 });
+    await expect(new ZibalPaymentDriver({ merchant: 'zibal', fetch: v201.fetch }).verify({ authority: '15966442233', amount: 1 })).resolves.toMatchObject({ ok: true, refId: '9876' });
+  });
+  it('verify: other results are final; network, timeout, 5xx and non-JSON are retryable; a bad trackId never hits the network', async () => {
+    const r202 = fetchReturning({ result: 202, message: 'سفارش پرداخت نشده یا ناموفق بوده است' });
+    await expect(new ZibalPaymentDriver({ merchant: 'zibal', fetch: r202.fetch }).verify({ authority: '1', amount: 1 }))
+      .resolves.toEqual({ ok: false, message: expect.stringMatching(/202/), retryable: false });
+    const down: FetchLike = async () => { throw new TypeError('fetch failed'); };
+    await expect(new ZibalPaymentDriver({ merchant: 'zibal', fetch: down }).verify({ authority: '1', amount: 1 })).resolves.toMatchObject({ ok: false, retryable: true });
+    const bad = fetchReturning({ message: 'Bad Gateway' }, 502);
+    await expect(new ZibalPaymentDriver({ merchant: 'zibal', fetch: bad.fetch }).verify({ authority: '1', amount: 1 })).resolves.toMatchObject({ ok: false, retryable: true });
+    const html: FetchLike = async () => new Response('<html>', { status: 200 });
+    await expect(new ZibalPaymentDriver({ merchant: 'zibal', fetch: html }).verify({ authority: '1', amount: 1 })).resolves.toMatchObject({ ok: false, retryable: true });
+    const spy = vi.fn(fetchReturning({ result: 100 }).fetch);
+    await expect(new ZibalPaymentDriver({ merchant: 'zibal', fetch: spy }).verify({ authority: 'MOCK123', amount: 1 })).resolves.toMatchObject({ ok: false, retryable: false });
+    expect(spy).not.toHaveBeenCalled();
+  });
+  it('readCallback maps the Zibal and the Zarinpal/mock query', () => {
+    expect(readCallback('zibal', { trackId: '159', success: '1', status: '2', orderId: '10255' })).toEqual({ authority: '159', status: 'OK' });
+    expect(readCallback('zibal', { trackId: '159', success: '0', status: '3' })).toEqual({ authority: '159', status: 'NOK' });
+    expect(readCallback('zibal', { trackId: ['1', '2'], success: '1' })).toEqual({ authority: undefined, status: 'OK' });
+    expect(readCallback('zarinpal', { Authority: 'A1', Status: 'OK' })).toEqual({ authority: 'A1', status: 'OK' });
+    expect(readCallback('mock', {})).toEqual({ authority: undefined, status: undefined });
+  });
+  it('createPaymentDriver builds the Zibal driver', () => {
+    const d = createPaymentDriver({ apiPublicUrl: 'https://api.test', payment: { driver: 'zibal', timeoutMinutes: 30, zarinpal: { merchantId: '', sandbox: false }, zibal: { merchant: 'zibal' } } });
+    expect(d.name).toBe('zibal');
   });
 });

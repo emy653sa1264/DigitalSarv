@@ -4,13 +4,14 @@ import type { AppConfig } from '../../config/configuration.js';
 import { CampaignsModule } from '../campaigns/campaigns.module.js';
 import { NotificationsModule } from '../notifications/notifications.module.js';
 import { RulesModule } from '../rules/rules.module.js';
-import { MockPaymentDriver, ZarinpalPaymentDriver, type PaymentDriver } from './payment-driver.js';
+import { MockPaymentDriver, readCallback, ZarinpalPaymentDriver, ZibalPaymentDriver, type PaymentDriver } from './payment-driver.js';
 import { PAYMENT_DRIVER, PaymentsService } from './payments.service.js';
 
 export function createPaymentDriver(app: Pick<AppConfig, 'payment' | 'apiPublicUrl'>): PaymentDriver {
   if (app.payment.driver === 'zarinpal') {
     return new ZarinpalPaymentDriver({ merchantId: app.payment.zarinpal.merchantId, sandbox: app.payment.zarinpal.sandbox });
   }
+  if (app.payment.driver === 'zibal') return new ZibalPaymentDriver({ merchant: app.payment.zibal.merchant });
   return new MockPaymentDriver(app.apiPublicUrl);
 }
 
@@ -27,10 +28,11 @@ export class PaymentsController {
     return this.payments.mockPage(authority);
   }
 
-  /** `?Authority=&Status=OK|NOK` → verify → 302 to `${WEB_PUBLIC_URL}/app/pay/return?order=…&status=ok|failed`. */
+  /** Zarinpal/mock `?Authority=&Status=OK|NOK`, Zibal `?trackId=&success=1|0` → verify → 302 to `${WEB_PUBLIC_URL}/app/pay/return?…`. */
   @Get(':driver/callback')
   @Redirect()
-  async callback(@Param('driver') driver: string, @Query('Authority') authority?: string, @Query('Status') status?: string) {
+  async callback(@Param('driver') driver: string, @Query() query: Record<string, unknown>) {
+    const { authority, status } = readCallback(driver, query);
     return { url: await this.payments.handleCallback(driver, authority, status), statusCode: 302 };
   }
 }
@@ -46,7 +48,7 @@ export class PaymentsController {
       useFactory: (config: ConfigService) => {
         const app = config.getOrThrow<AppConfig>('app');
         const driver = createPaymentDriver(app);
-        const sandbox = app.payment.driver === 'zarinpal' && app.payment.zarinpal.sandbox ? ' (sandbox)' : '';
+        const sandbox = (app.payment.driver === 'zarinpal' && app.payment.zarinpal.sandbox) || (app.payment.driver === 'zibal' && app.payment.zibal.merchant === 'zibal') ? ' (sandbox)' : '';
         new Logger('Payments').log(`payment driver: ${driver.name}${sandbox}`);
         return driver;
       },

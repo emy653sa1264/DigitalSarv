@@ -119,4 +119,11 @@ describe('loadAppConfig', () => {
     expect(loadAppConfig({ ...PROD, VAPID_PUBLIC_KEY: 'p', VAPID_PRIVATE_KEY: 'q', VAPID_SUBJECT: 'mailto:ops@sarv.example' }).vapid?.subject)
       .toBe('mailto:ops@sarv.example');
   });
+  it('zibal needs ZIBAL_MERCHANT; the sandbox merchant is refused in production unless PAYMENT_ALLOW_MOCK=1', () => {
+    expect(() => loadAppConfig({ ...PROD, PAYMENT_DRIVER: 'zibal' })).toThrow(/ZIBAL_MERCHANT/);
+    expect(loadAppConfig({ ...PROD, PAYMENT_DRIVER: 'zibal', ZIBAL_MERCHANT: 'abc123' }).payment).toMatchObject({ driver: 'zibal', zibal: { merchant: 'abc123' } });
+    expect(() => loadAppConfig({ ...PROD, PAYMENT_DRIVER: 'zibal', ZIBAL_MERCHANT: 'zibal' })).toThrow(/sandbox/);
+    expect(loadAppConfig({ ...PROD, PAYMENT_DRIVER: 'zibal', ZIBAL_MERCHANT: 'zibal', PAYMENT_ALLOW_MOCK: '1' }).payment.zibal.merchant).toBe('zibal');
+    expect(loadAppConfig({ NODE_ENV: 'development', PAYMENT_DRIVER: 'zibal', ZIBAL_MERCHANT: 'zibal' }).payment.driver).toBe('zibal');
+  });
 });

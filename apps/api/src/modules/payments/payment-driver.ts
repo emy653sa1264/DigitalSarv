@@ -126,3 +126,72 @@ export class ZarinpalPaymentDriver implements PaymentDriver {
     return { ok: false, message: ZarinpalPaymentDriver.error(body), retryable: false };
   }
 }
+
+interface ZibalBody { result?: number; message?: string; trackId?: number | string; refNumber?: number | string | null; cardNumber?: string | null }
+
+export interface ZibalOptions { merchant: string; fetch?: FetchLike; timeoutMs?: number }
+
+/**
+ * Zibal (D16): `v1/request` → `start/<trackId>` → callback (`trackId`, `success`) → `v1/verify`. Amounts in rial.
+ * `result` 100 = verified, 201 = already verified (idempotent success); anything else is a definitive failure.
+ */
+export class ZibalPaymentDriver implements PaymentDriver {
+  readonly name = 'zibal' as const;
+  readonly baseUrl = 'https://gateway.zibal.ir';
+  private readonly fetch: FetchLike;
+
+  constructor(private readonly opts: ZibalOptions) {
+    this.fetch = opts.fetch ?? ((input, init) => fetch(input, init));
+  }
+
+  private async post(path: string, payload: Record<string, unknown>): Promise<ZibalBody> {
+    const res = await this.fetch(`${this.baseUrl}${path}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ merchant: this.opts.merchant, ...payload }),
+      signal: AbortSignal.timeout(this.opts.timeoutMs ?? 15_000),
+    });
+    if (res.status >= 500) throw new Error(`zibal ${path}: HTTP ${res.status}`);
+    try {
+      return (await res.json()) as ZibalBody;
+    } catch {
+      throw new Error(`zibal ${path}: HTTP ${res.status} (non-JSON response)`);
+    }
+  }
+
+  async request(input: PaymentRequestInput): Promise<PaymentRequestResult> {
+    const body = await this.post('/v1/request', {
+      amount: tomanToRial(input.amount),
+      callbackUrl: input.callbackUrl,
+      orderId: input.code,
+      description: input.description,
+      ...(input.mobile ? { mobile: input.mobile } : {}),
+    });
+    if (body.result !== 100 || body.trackId === undefined || body.trackId === null) {
+      throw new Error(`zibal request failed: ${body.result ?? '?'} ${body.message ?? ''}`.trim());
+    }
+    const trackId = String(body.trackId);
+    return { authority: trackId, url: `${this.baseUrl}/start/${trackId}` };
+  }
+
+  async verify({ authority }: { authority: string; amount: number }): Promise<PaymentVerifyResult> {
+    if (!/^\d{1,20}$/.test(authority)) return { ok: false, message: 'trackId نامعتبر است', retryable: false };
+    let body: ZibalBody;
+    try {
+      body = await this.post('/v1/verify', { trackId: Number(authority) });
+    } catch (err) {
+      return { ok: false, message: (err as Error).message, retryable: true };
+    }
+    if (body.result === 100 || body.result === 201) {
+      return { ok: true, refId: String(body.refNumber ?? authority), ...(body.cardNumber ? { cardPan: body.cardNumber } : {}) };
+    }
+    return { ok: false, message: `${body.result ?? '?'} ${body.message ?? ''}`.trim(), retryable: false };
+  }
+}
+
+/** The gateway's callback query → `{ authority, status: 'OK' | 'NOK' }` (Zarinpal/mock `Authority`+`Status`, Zibal `trackId`+`success`). */
+export function readCallback(driver: string, q: Record<string, unknown>): { authority?: string; status?: string } {
+  const one = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
+  if (driver === 'zibal') return { authority: one(q.trackId), status: q.success === '1' ? 'OK' : 'NOK' };
+  return { authority: one(q.Authority), status: one(q.Status) };
+}

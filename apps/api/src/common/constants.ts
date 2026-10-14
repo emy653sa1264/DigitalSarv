@@ -115,7 +115,7 @@ export const DISPATCHED_EVENTS: OrderStatus[] = [
 export const UPLOAD_PURPOSES = ['docs', 'flyer', 'logo', 'cartridge', 'device', 'pickup'] as const;
 export type UploadPurpose = (typeof UPLOAD_PURPOSES)[number];
 
-export const PAYMENT_DRIVERS = ['mock', 'zarinpal'] as const;
+export const PAYMENT_DRIVERS = ['mock', 'zarinpal', 'zibal'] as const;
 export type PaymentDriverName = (typeof PAYMENT_DRIVERS)[number];
 /** `verifying`: the gateway callback said OK but the provider could not be reached to verify yet. */
 export const PAYMENT_STATUSES = ['pending', 'verifying', 'paid', 'failed'] as const;
