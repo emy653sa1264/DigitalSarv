@@ -14,12 +14,19 @@ describe('ZonesService (v3.2)', () => {
       { _id: new Types.ObjectId(), code: '2', zoneId: z1._id },
       { _id: new Types.ObjectId(), code: '3' },
     ]);
-    return { svc: new ZonesService(zones as never, couriers as never), zones, couriers };
+    const centers = fakeModel([{ _id: new Types.ObjectId(), name: 'c', serviceZoneIds: [z1._id, z2._id] }]);
+    return { svc: new ZonesService(zones as never, couriers as never, centers as never), zones, couriers, centers };
   }
 
   it('agentsCount is the number of couriers in the zone (the stored value is ignored)', async () => {
     const { svc } = setup();
     expect((await svc.list()).map((z) => [z.name, z.agentsCount])).toEqual([['منطقه ۱', 2], ['منطقه ۲', 0]]);
+  });
+
+  it('DELETE pulls the zone from providers serviceZoneIds', async () => {
+    const { svc, centers } = setup();
+    await svc.remove(String(z1._id));
+    expect(centers.docs[0].serviceZoneIds.map(String)).toEqual([String(z2._id)]);
   });
 
   it("DELETE unsets zoneId on the zone's couriers", async () => {

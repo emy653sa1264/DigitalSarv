@@ -77,6 +77,7 @@ export function applyUpdate(doc: Doc, update: Doc) {
     const items = (v as { $each?: unknown[] })?.$each ?? [v];
     setPath(doc, k, [...((get(doc, k) as unknown[]) ?? []), ...items]);
   }
+  for (const [k, v] of Object.entries((update.$pull as Doc) ?? {})) setPath(doc, k, ((get(doc, k) as unknown[]) ?? []).filter((x) => !eq(x, v)));
   for (const [k, v] of Object.entries((update.$addToSet as Doc) ?? {})) {
     const current = [...((get(doc, k) as unknown[]) ?? [])];
     for (const item of (v as { $each?: unknown[] })?.$each ?? [v]) if (!current.some((x) => eq(x, item))) current.push(item);

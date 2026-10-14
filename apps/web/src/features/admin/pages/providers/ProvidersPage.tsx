@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { DsSwitch, TONES } from '@/components/brand'
+import { DsSwitch, EmptyState, TONES } from '@/components/brand'
 import { notify } from '@/components/ui/sonner'
 import { fa } from '@/lib/format'
 import { useCan } from '@/lib/permissions'
@@ -38,6 +38,7 @@ export function ProvidersPage() {
       <QueryView query={query} rows={5} isEmpty={(d) => d.length === 0} empty={{ title: 'هنوز مجری ثبت نشده است' }}>
         {(list) => {
           const shown = list.filter((p) => (status === ALL || p.status === status) && (!search.trim() || `${p.name} ${p.businessName}`.includes(search.trim())))
+          if (shown.length === 0) return <EmptyState title="مجری‌ای با این جستجو یا فیلتر پیدا نشد" hint="عبارت جستجو یا وضعیت را تغییر دهید." />
           return (
             <AdminTable columns={COLUMNS} minWidth={980} head={['مجری', 'وضعیت', 'سفارش جدید', 'مناطق خدمت', 'ورود مجری', 'ظرفیت روزانه', '']}>
               {shown.map((p) => {
@@ -50,7 +51,7 @@ export function ProvidersPage() {
                     </span>
                     <span><Tag bg={TONES[st.tone].soft} fg={TONES[st.tone].ink}>{st.label}</Tag></span>
                     <span>
-                      <DsSwitch checked={p.availableForOrders} disabled={!canEdit} label={`دریافت سفارش جدید — ${p.name}`}
+                      <DsSwitch checked={p.availableForOrders} disabled={!canEdit || (update.isPending && update.variables?.id === p.id)} label={`دریافت سفارش جدید — ${p.name}`}
                         onCheckedChange={(v) => update.mutate({ id: p.id, availableForOrders: v }, { onSuccess: () => notify(v ? `${p.name} سفارش جدید می‌پذیرد` : `${p.name} سفارش جدید نمی‌پذیرد`) })} />
                     </span>
                     <span className="truncate text-muted-2">{p.serviceZones.map((z) => z.name).join('، ') || '—'}</span>

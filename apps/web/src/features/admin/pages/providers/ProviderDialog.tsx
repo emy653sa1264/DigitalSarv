@@ -41,12 +41,34 @@ function initial(p?: Provider): Form {
 }
 
 export function ProviderDialog({ open, onOpenChange, item }: { open: boolean; onOpenChange: (o: boolean) => void; item?: Provider }) {
-  const [form, setForm] = useState<Form>(() => initial(item))
+  const [snapshot] = useState<Form>(() => initial(item))
+  const [form, setForm] = useState<Form>(snapshot)
   const [section, setSection] = useState<Section>('base')
   const { create, update } = useProviderMutations()
   const zones = useZones()
   const papers = usePapers()
   const set = <K extends keyof Form>(k: K, v: Form[K]) => setForm((f) => ({ ...f, [k]: v }))
+
+  const coordsLocked = item?.lat !== undefined && item?.lng !== undefined
+  const zoneIds = zones.data?.map((z) => z.id)
+  const paperKeys = papers.data?.map((p) => p.key)
+
+  /** Wire body for a form state; stale zone ids / paper keys are dropped once those lists have loaded. */
+  const toBody = (f: Form, clean: boolean): ProviderBody => {
+    const rating = f.rating.trim() === '' ? NaN : toDec(f.rating)
+    return {
+      name: f.name.trim(), businessName: f.businessName.trim(), contactName: f.contactName.trim(), phone: f.phone.trim(),
+      address: f.address.trim(), zone: f.zone.trim(), status: f.status, availableForOrders: f.availableForOrders,
+      serviceZoneIds: clean && zoneIds ? f.serviceZoneIds.filter((id) => zoneIds.includes(id)) : f.serviceZoneIds,
+      canDeliver: f.canDeliver, deliveryFee: f.canDeliver ? f.deliveryFee : 0,
+      allowCustomerPickup: f.allowCustomerPickup, adminNotes: f.adminNotes.trim(), workingHours: f.workingHours,
+      capabilities: clean && paperKeys ? f.capabilities.map((c) => ({ ...c, papers: c.papers.filter((k) => paperKeys.includes(k)) })) : f.capabilities,
+      equipment: f.equipment.map((e) => ({ ...e, name: e.name.trim() })), capacity: f.capacity,
+      capacityPerDay: f.capacityPerDay, processingHours: f.processingHours, commissionPct: f.commissionPct,
+      ...(Number.isFinite(rating) ? { rating: Math.min(5, Math.max(0, rating)) } : {}),
+      ...(f.lat.trim() && f.lng.trim() ? { lat: toDec(f.lat), lng: toDec(f.lng) } : {}),
+    }
+  }
 
   const submit = () => {
     if (!form.name.trim()) {
@@ -54,19 +76,15 @@ export function ProviderDialog({ open, onOpenChange, item }: { open: boolean; on
       toast.error('نام مجری را وارد کنید')
       return
     }
-    const body: ProviderBody = {
-      name: form.name.trim(), businessName: form.businessName.trim(), contactName: form.contactName.trim(), phone: form.phone.trim(),
-      address: form.address.trim(), zone: form.zone.trim(), status: form.status, availableForOrders: form.availableForOrders,
-      serviceZoneIds: form.serviceZoneIds, canDeliver: form.canDeliver, deliveryFee: form.canDeliver ? form.deliveryFee : 0,
-      allowCustomerPickup: form.allowCustomerPickup, adminNotes: form.adminNotes.trim(), workingHours: form.workingHours,
-      capabilities: form.capabilities, equipment: form.equipment.map((e) => ({ ...e, name: e.name.trim() })), capacity: form.capacity,
-      capacityPerDay: form.capacityPerDay, processingHours: form.processingHours, commissionPct: form.commissionPct,
-      rating: Math.min(5, Math.max(0, toDec(form.rating))),
-      ...(form.lat.trim() && form.lng.trim() ? { lat: toDec(form.lat), lng: toDec(form.lng) } : {}),
-    }
+    const full = toBody(form, true)
     const done = (msg: string) => () => { notify(msg); onOpenChange(false) }
-    if (item) update.mutate({ id: item.id, ...body }, { onSuccess: done('تغییرات ذخیره شد') })
-    else create.mutate(body, { onSuccess: done(`${body.name} اضافه شد`) })
+    if (item) {
+      // PATCH only what the admin changed (stale ids in untouched fields never block a save; no overwriting of concurrent edits)
+      const base = toBody(snapshot, false) as Record<string, unknown>
+      const changed = Object.fromEntries(Object.entries(full).filter(([k, v]) => JSON.stringify(v) !== JSON.stringify(base[k]))) as ProviderBody
+      if (Object.keys(changed).length === 0) return done('تغییری برای ذخیره نبود')()
+      update.mutate({ id: item.id, ...changed }, { onSuccess: done('تغییرات ذخیره شد') })
+    } else create.mutate(full, { onSuccess: done(`${full.name} اضافه شد`) })
   }
 
   const sections = item ? SECTIONS : SECTIONS.filter((s) => s.key !== 'login')
@@ -91,15 +109,16 @@ export function ProviderDialog({ open, onOpenChange, item }: { open: boolean; on
           <Field label="آدرس"><Input value={form.address} onChange={(e) => set('address', e.target.value)} placeholder="تهران، ..." /></Field>
           <div className="grid gap-3 sm:grid-cols-3">
             <Field label="منطقه (متن)"><Input value={form.zone} onChange={(e) => set('zone', e.target.value)} /></Field>
-            <Field label="عرض جغرافیایی"><Input dir="ltr" inputMode="decimal" value={form.lat} onChange={(e) => set('lat', e.target.value)} className="text-center" /></Field>
-            <Field label="طول جغرافیایی"><Input dir="ltr" inputMode="decimal" value={form.lng} onChange={(e) => set('lng', e.target.value)} className="text-center" /></Field>
+            <Field label="عرض جغرافیایی"><Input disabled={coordsLocked} dir="ltr" inputMode="decimal" value={form.lat} onChange={(e) => set('lat', e.target.value)} className="text-center" /></Field>
+            <Field label="طول جغرافیایی"><Input disabled={coordsLocked} dir="ltr" inputMode="decimal" value={form.lng} onChange={(e) => set('lng', e.target.value)} className="text-center" /></Field>
           </div>
           <div className="grid gap-3 sm:grid-cols-4">
             <Field label="ظرفیت (کتاب/روز)"><Input inputMode="numeric" value={fa(form.capacityPerDay)} onChange={(e) => set('capacityPerDay', toNum(e.target.value))} /></Field>
             <Field label="زمان پردازش (ساعت)"><Input inputMode="numeric" value={fa(form.processingHours)} onChange={(e) => set('processingHours', toNum(e.target.value))} /></Field>
             <Field label="کمیسیون (درصد)"><Input inputMode="numeric" value={fa(form.commissionPct)} onChange={(e) => set('commissionPct', Math.min(100, toNum(e.target.value)))} /></Field>
-            <Field label="امتیاز (از ۵)"><Input dir="ltr" inputMode="decimal" value={form.rating} onChange={(e) => set('rating', e.target.value)} className="text-center" /></Field>
+            <Field label="امتیاز (از ۵)"><Input dir="ltr" inputMode="decimal" value={fa(form.rating)} onChange={(e) => set('rating', e.target.value)} className="text-center" /></Field>
           </div>
+          {coordsLocked && <div className="text-[12px] text-muted-2">برای حذف مختصات با پشتیبانی فنی تماس بگیرید</div>}
         </div>
       )}
 

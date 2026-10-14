@@ -19,6 +19,7 @@ import { Roles } from '../../common/auth/decorators.js';
 import { JwtAuthGuard, RolesGuard } from '../../common/auth/guards.js';
 import { defined } from '../../common/utils/defined.js';
 import { assertObjectId } from '../../common/utils/object-id.js';
+import { Center } from '../centers/center.schema.js';
 import { Courier } from '../courier/courier.schema.js';
 import { Zone } from './zone.schema.js';
 
@@ -42,6 +43,7 @@ export class ZonesService {
   constructor(
     @InjectModel(Zone.name) private readonly zones: Model<Zone>,
     @InjectModel(Courier.name) private readonly couriers: Model<Courier>,
+    @InjectModel(Center.name) private readonly centers: Model<Center>,
   ) {}
 
   /** Zone JSON with `agentsCount` = couriers whose `zoneId` is that zone (the stored value is ignored). */
@@ -75,6 +77,9 @@ export class ZonesService {
     assertObjectId(id, 'منطقه');
     if (!(await this.zones.findByIdAndDelete(id))) throw new NotFoundException('منطقه یافت نشد');
     await this.couriers.updateMany({ zoneId: new Types.ObjectId(id) }, { $unset: { zoneId: 1 } });
+    // providers must not keep a deleted zone (a stale id would make them unsaveable)
+    const zid = new Types.ObjectId(id);
+    await this.centers.updateMany({ serviceZoneIds: zid }, { $pull: { serviceZoneIds: zid } });
     return { ok: true };
   }
 }
