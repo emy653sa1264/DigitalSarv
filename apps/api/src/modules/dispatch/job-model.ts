@@ -187,6 +187,7 @@ export function assignmentHistory(history: JobHistoryEntry[]): AssignmentRecord[
     open = undefined;
   };
   for (const e of history) {
+    if ((e.action === 'assigned' || e.action === 'reassigned' || e.action === 'migrated') && !e.providerId) continue;
     if (e.action === 'assigned' || e.action === 'reassigned' || e.action === 'migrated') {
       end('withdrawn', e);
       open = {

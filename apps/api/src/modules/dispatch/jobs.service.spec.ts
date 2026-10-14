@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { fakeModel, type Doc } from '../../../test/fake-model.js';
 import { DEFAULT_DISPATCH } from '../catalog/catalog.defaults.js';
@@ -15,6 +16,8 @@ function setup(orderOver: Doc = {}) {
   };
   const orders = fakeModel([order]);
   const jobs = fakeModel([]);
+  orders.joins.jobs = jobs;
+  jobs.joins.orders = orders;
   const notifier = { provider: vi.fn(async () => undefined), admins: vi.fn(async () => undefined), customer: vi.fn(async () => undefined) };
   const catalog = { getSettings: vi.fn(async () => ({ dispatch: { ...DEFAULT_DISPATCH } })) };
   const svc = new JobsService(jobs as never, orders as never, catalog as never, notifier as never);
@@ -167,5 +170,113 @@ describe('JobsService.reconcile and fulfilment', () => {
     await s.svc.ensureJob(s.order as never);
     const f = await s.svc.fulfillmentFor([s.order as never]);
     expect(f.get(String(s.order._id))).toEqual({ status: 'unassigned', label: 'در صف تولید', place });
+  });
+});
+
+describe('JobsService — races and review fixes', () => {
+  it('a give-back is a compare-and-set on the assignment: a job reassigned meanwhile is not released (409)', async () => {
+    const s = setup({ centerId: P });
+    const id = await heldBy(s);
+    const stale = await s.svc.byId(id);
+    s.jobs.docs[0].assignment.id = new Types.ObjectId(); // another assignment took over
+    await expect(s.svc.giveBack(stale, 'rejected', { byRole: 'provider', providerId: String(P), reasonCode: 'other', reason: 'x' })).rejects.toMatchObject({ status: 409 });
+    expect(s.jobs.docs[0].status).toBe('assigned');
+    expect(String(s.orders.docs[0].centerId)).toBe(String(P));
+  });
+  it('a stale move cannot override a delivery-provider swap (409)', async () => {
+    const s = setup({ status: 'packing' });
+    const id = await heldBy(s, 'out_for_delivery');
+    Object.assign(s.jobs.docs[0], { deliveryMethod: 'provider', deliveryProviderId: P });
+    const stale = await s.svc.byId(id);
+    s.jobs.docs[0].deliveryProviderId = new Types.ObjectId(); // swapped after the read
+    s.svc.byId = vi.fn(async () => stale) as never;
+    await expect(s.svc.move(id, 'delivered', { actor: 'delivery', byRole: 'provider', providerId: String(P) })).rejects.toMatchObject({ status: 409 });
+    expect(s.jobs.docs[0].status).toBe('out_for_delivery');
+  });
+  it('a late give-back leaves a newer provider’s centre and price snapshot on the order', async () => {
+    const Q = new Types.ObjectId();
+    const s = setup({ centerId: Q, providerPricing: { providerId: String(Q) } });
+    const id = await heldBy(s);
+    await s.svc.giveBack(await s.svc.byId(id), 'rejected', { byRole: 'provider', providerId: String(P), reasonCode: 'other', reason: 'x' });
+    expect(s.jobs.docs[0].status).toBe('unassigned');
+    expect(String(s.orders.docs[0].centerId)).toBe(String(Q));
+    expect(s.orders.docs[0].providerPricing).toEqual({ providerId: String(Q) });
+  });
+  it('a normal give-back clears the order’s centre and price snapshot', async () => {
+    const s = setup({ centerId: P, providerPricing: { providerId: String(P) } });
+    const id = await heldBy(s);
+    await s.svc.giveBack(await s.svc.byId(id), 'rejected', { byRole: 'provider', providerId: String(P), reasonCode: 'other', reason: 'x' });
+    expect(s.orders.docs[0].centerId).toBeUndefined();
+    expect(s.orders.docs[0].providerPricing).toBeUndefined();
+  });
+  it('a failing order write after the release is logged, not a 500', async () => {
+    const s = setup({ centerId: P });
+    const id = await heldBy(s);
+    s.orders.updateOne.mockRejectedValueOnce(new Error('db down'));
+    await expect(s.svc.giveBack(await s.svc.byId(id), 'rejected', { byRole: 'provider', providerId: String(P), reasonCode: 'other', reason: 'x' })).resolves.toMatchObject({ status: 'unassigned' });
+  });
+  it('rejecting or unassigning needs a reason (400)', async () => {
+    const s = setup();
+    const id = await heldBy(s);
+    await expect(s.svc.giveBack(await s.svc.byId(id), 'rejected', { byRole: 'provider', providerId: String(P) })).rejects.toThrow('دلیل را بنویسید');
+    await expect(s.svc.giveBack(await s.svc.byId(id), 'unassigned', { byRole: 'admin', reason: '  ' })).rejects.toThrow('دلیل را بنویسید');
+    expect(s.jobs.docs[0].status).toBe('assigned');
+  });
+  it('the packing mirror is skipped when the QC checklist was un-ticked after the check', async () => {
+    const s = setup({ status: 'preparing', qc: [true] });
+    const id = await heldBy(s, 'in_production');
+    const seen = { ...s.orders.docs[0] }; // what move() read: checklist complete
+    s.orders.findById.mockImplementationOnce((() => Promise.resolve(seen)) as never);
+    s.orders.docs[0].qc = [false]; // un-ticked right after
+    await s.svc.move(id, 'ready', asP);
+    expect(s.orders.docs[0].status).toBe('preparing');
+  });
+  it('cancelForOrder / onOrderDelivered say whether they changed the job', async () => {
+    const s = setup();
+    await heldBy(s, 'in_production');
+    expect(await s.svc.onOrderDelivered(s.order._id, 'courier')).toBe(false); // a courier cannot deliver from production
+    expect(await s.svc.onOrderDelivered(s.order._id, 'admin')).toBe(true);
+    expect(await s.svc.onOrderDelivered(s.order._id, 'admin')).toBe(false);
+    expect(await s.svc.cancelForOrder(s.order)).toBe(false);
+  });
+  it('a v1 centre that is missing or inactive still holds the migrated job, with a warning', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const s = setup({ status: 'qc', centerId: P });
+    const centers = fakeModel([{ _id: P, status: 'suspended' }]);
+    const svc = new JobsService(s.jobs as never, s.orders as never, { getSettings: async () => ({ dispatch: { ...DEFAULT_DISPATCH } }) } as never, s.notifier as never, centers as never);
+    const job = await svc.ensureJob(s.order as never);
+    expect(job).toMatchObject({ status: 'in_production' });
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('inactive'));
+    warn.mockRestore();
+  });
+});
+
+describe('JobsService.reconcile pages in the database', () => {
+  it('finds a newer order without a job behind older healthy ones (limit 2)', async () => {
+    const s = setup();
+    for (let i = 0; i < 3; i++) {
+      const o = { ...s.order, _id: new Types.ObjectId(), code: `2${i}`, createdAt: new Date(2026, 0, 1 + i) };
+      s.orders.docs.push(o);
+      await s.svc.ensureJob(o as never);
+    }
+    const newer = { ...s.order, _id: new Types.ObjectId(), code: '30', createdAt: new Date(2026, 5, 1) };
+    s.orders.docs.push(newer);
+    s.orders.docs[0].status = 'pending_payment';
+    expect((await s.svc.reconcile(2)).created).toBe(1);
+    expect(s.jobs.docs.some((j) => String(j.orderId) === String(newer._id))).toBe(true);
+  });
+  it('repairs a job beyond the first page of live jobs (limit 2)', async () => {
+    const s = setup();
+    for (let i = 0; i < 3; i++) {
+      const o = { ...s.order, _id: new Types.ObjectId(), code: `2${i}` };
+      s.orders.docs.push(o);
+      await s.svc.ensureJob(o as never);
+    }
+    const late = { ...s.order, _id: new Types.ObjectId(), code: '30', status: 'delivered' };
+    s.orders.docs.push(late);
+    s.jobs.docs.push({ _id: new Types.ObjectId(), orderId: late._id, seq: 1, status: 'in_production', history: [], deliveryMethod: 'courier' });
+    s.orders.docs[0].status = 'pending_payment';
+    expect((await s.svc.reconcile(2)).delivered).toBe(1);
+    expect(s.jobs.docs.at(-1)!.status).toBe('delivered');
   });
 });

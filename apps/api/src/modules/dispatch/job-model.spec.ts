@@ -129,6 +129,14 @@ describe('assignment history (§60, §75)', () => {
     expect(a.map((r) => r.outcome)).toEqual(['withdrawn', 'timeout']);
     expect(a[0]).toMatchObject({ reason: 'فوری‌تر', endedAt: t(2) });
   });
+  it('an assignment entry without a provider is skipped (no "undefined" record)', () => {
+    const a = assignmentHistory([
+      { at: t(1), action: 'assigned', status: 'assigned', byRole: 'admin' },
+      { at: t(2), action: 'assigned', status: 'assigned', providerId: A, byRole: 'admin' },
+    ]);
+    expect(a).toHaveLength(1);
+    expect(a[0].providerId).toBe(String(A));
+  });
 });
 
 describe('tabs (§55, §57)', () => {

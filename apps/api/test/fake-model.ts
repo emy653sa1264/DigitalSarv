@@ -39,7 +39,9 @@ function matchCond(v: unknown, cond: unknown): boolean {
       case '$lte': return v != null && n <= a;
       case '$gt': return v != null && n > a;
       case '$gte': return v != null && n >= a;
-      case '$elemMatch': return Array.isArray(v) && v.some((el) => matches(el as Doc, arg as Doc));
+      case '$size': return Array.isArray(v) && v.length === (arg as number);
+      case '$not': return !matchCond(v, arg);
+      case '$elemMatch': return Array.isArray(v) && v.some((el) => (isOperatorObject(arg) && !('$or' in arg) && !('$and' in arg) ? matchCond(el, arg) : matches(el as Doc, arg as Doc)));
       default: throw new Error(`fake-model: unsupported operator ${op}`);
     }
   });
@@ -139,7 +141,25 @@ function sorted(rows: Doc[], spec?: Doc): Doc[] {
   });
 }
 
+/** Pipeline stages $match, $lookup (localField/foreignField), $sort, $limit over docs; `from` is resolved through `joins`. */
+export function runPipeline(docs: Doc[], pipeline: Doc[], joins: Record<string, { docs: Doc[] }>): Doc[] {
+  let rows: Doc[] = docs.map((d) => clone(d));
+  for (const stage of pipeline) {
+    const [op, arg] = Object.entries(stage)[0] as [string, any]; // eslint-disable-line @typescript-eslint/no-explicit-any
+    if (op === '$match') rows = rows.filter((r) => matches(r, arg));
+    else if (op === '$sort') rows = sorted(rows, arg);
+    else if (op === '$limit') rows = rows.slice(0, arg);
+    else if (op === '$lookup') {
+      const other = joins[arg.from];
+      if (!other) throw new Error(`fake-model: $lookup from "${arg.from}" is not in joins`);
+      rows = rows.map((r) => ({ ...r, [arg.as]: other.docs.filter((o) => eq(get(o, arg.foreignField), get(r, arg.localField))).map((o) => clone(o)) }));
+    } else throw new Error(`fake-model: unsupported stage ${op}`);
+  }
+  return rows;
+}
+
 export function fakeModel(docs: Doc[] = []) {
+  const joins: Record<string, { docs: Doc[] }> = {};
   const first = (filter: Doc) => docs.find((d) => matches(d, filter));
   const removeWhere = (filter: Doc, many: boolean) => {
     let deletedCount = 0;
@@ -178,6 +198,9 @@ export function fakeModel(docs: Doc[] = []) {
   };
   return {
     docs,
+    /** Collections $lookup can read, by collection name. */
+    joins,
+    aggregate: vi.fn(async (pipeline: Doc[]) => runPipeline(docs, pipeline, joins)),
     find: vi.fn((filter: Doc = {}) =>
       query((skip, limit, sort) => sorted(docs.filter((d) => matches(d, filter)), sort).slice(skip, limit === undefined ? undefined : skip + limit).map(out)),
     ),

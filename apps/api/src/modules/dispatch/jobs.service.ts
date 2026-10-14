@@ -1,11 +1,12 @@
-import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { JOB_STATUS_LABELS, STATUS_LABELS, type JobStatus, type OrderStatus, type RejectReason } from '../../common/constants.js';
 import { assertObjectId } from '../../common/utils/object-id.js';
+import { Center } from '../centers/center.schema.js';
 import { CatalogService } from '../catalog/catalog.service.js';
 import { deliveryOf, placeOf } from '../orders/delivery-rules.js';
-import { qcComplete, timelineEntry, type CustomerFulfillment } from '../orders/order-helpers.js';
+import { needsQcGuard, qcComplete, qcLabelsOf, timelineEntry, type CustomerFulfillment } from '../orders/order-helpers.js';
 import { Order, type OrderDelivery, type OrderDocument } from '../orders/order.schema.js';
 import { DispatchNotifier } from './dispatch-notifier.js';
 import {
@@ -17,11 +18,18 @@ import { jobSeed, orderNeedsJob, type JobSource } from './job-seed.js';
 
 export interface MoveOptions { actor: Actor; byRole: ByRole; by?: string; reason?: string; reasonCode?: RejectReason; providerId?: string }
 export interface GiveBackOptions { byRole: ByRole; by?: string; reason?: string; reasonCode?: RejectReason; providerId?: string; assignmentId?: string }
+/** What `cas` needs: who acts (selects the holder guard), extra guards, the field changes and the history entry. */
+export interface CasSpec {
+  actor?: Actor; extraGuard?: Record<string, unknown>; set?: Record<string, unknown>; unset?: Record<string, 1>;
+  addToSet?: Record<string, unknown>; history: JobHistoryEntry;
+}
 type GiveBackKind = 'rejected' | 'timeout' | 'failed' | 'unassigned';
 
 const NOT_FOUND = 'سفارش یافت نشد';
 export const raced = () => new ConflictException('وضعیت سفارش هم‌زمان تغییر کرد؛ دوباره تلاش کنید');
 const badMove = (from: JobStatus, to: JobStatus) => new BadRequestException(`تغییر وضعیت از «${JOB_STATUS_LABELS[from]}» به «${JOB_STATUS_LABELS[to]}» مجاز نیست`);
+/** The flow actor a role acts as (the system safety net acts with admin authority). */
+const actorOf = (r: ByRole): Actor => (r === 'provider' ? 'delivery' : r === 'courier' ? 'courier' : r === 'customer' ? 'system' : 'admin');
 const flowOf = (job: Pick<Job, 'deliveryMethod' | 'pickupAt'>): FlowCtx => ({ method: job.deliveryMethod, pickupAt: job.pickupAt });
 
 function stampsFor(to: JobStatus, now: Date): Record<string, Date> {
@@ -45,6 +53,7 @@ export class JobsService {
     @InjectModel(Order.name) private readonly orders: Model<Order>,
     private readonly catalog: CatalogService,
     private readonly notifier: DispatchNotifier,
+    @Optional() @InjectModel(Center.name) private readonly centers?: Model<Center>,
   ) {}
 
   // ------------------------------------------------------------ creation and reads
@@ -54,15 +63,31 @@ export class JobsService {
     if (!orderNeedsJob(order.status)) return null;
     const key = { orderId: order._id, seq: 1 };
     try {
-      const { dispatch } = await this.catalog.getSettings();
-      await this.jobs.updateOne(key, { $setOnInsert: jobSeed(order, dispatch, new Date()) }, { upsert: true });
-    } catch (err) {
-      if ((err as { code?: number }).code !== 11000) {
-        this.logger.warn(`job for order ${order.code} not created (reconcile retries): ${(err as Error).message}`);
-        return null;
+      try {
+        const { dispatch } = await this.catalog.getSettings();
+        await this.warnIfCentreUnusable(order);
+        await this.jobs.updateOne(key, { $setOnInsert: jobSeed(order, dispatch, new Date()) }, { upsert: true });
+      } catch (err) {
+        if ((err as { code?: number }).code !== 11000) throw err;
       }
+      return await this.jobs.findOne(key);
+    } catch (err) {
+      this.logger.warn(`job for order ${order.code} not created (reconcile retries): ${(err as Error).message}`);
+      return null;
     }
-    return this.jobs.findOne(key);
+  }
+
+  /** M10: a v1 centre that is gone or not active still holds the migrated job (contract), but an admin should know. */
+  private async warnIfCentreUnusable(order: JobSource): Promise<void> {
+    if (!order.centerId || !this.centers) return;
+    try {
+      const c = await this.centers.findById(order.centerId, { status: 1 }).lean();
+      if (!c || (c.status && c.status !== 'active')) {
+        this.logger.warn(`order ${order.code}: migrated to a centre that is ${c ? 'inactive' : 'missing'} (${String(order.centerId)})`);
+      }
+    } catch {
+      /* advisory only */
+    }
   }
 
   /** By job id, or by the order id (the dispatch center links orders by their id). */
@@ -115,6 +140,32 @@ export class JobsService {
   // ------------------------------------------------------------ transitions
 
   /**
+   * THE job write. Every job status change (move, give-back, cancel, delivered/out-for-delivery follow-ups — and
+   * Task 9's assign / reassign / unassign) MUST go through here: compare-and-set on `{_id, status}`, the current
+   * assignment id (ABA), and the holder for the acting side (production → `providerId`, delivery →
+   * `deliveryProviderId`). Pushes the history entry. Returns the updated document, or `null` on a lost race.
+   */
+  async cas(job: JobDocument, to: JobStatus, spec: CasSpec): Promise<JobDocument | null> {
+    const filter: Record<string, unknown> = {
+      _id: job._id, status: job.status,
+      ...(job.assignment?.id ? { 'assignment.id': job.assignment.id } : {}),
+      ...(spec.actor === 'production' && job.providerId ? { providerId: job.providerId } : {}),
+      ...(spec.actor === 'delivery' && job.deliveryProviderId ? { deliveryProviderId: job.deliveryProviderId } : {}),
+      ...spec.extraGuard,
+    };
+    return this.jobs.findOneAndUpdate(
+      filter,
+      {
+        $set: { status: to, ...spec.set },
+        ...(spec.unset ? { $unset: spec.unset } : {}),
+        ...(spec.addToSet ? { $addToSet: spec.addToSet } : {}),
+        $push: { history: spec.history },
+      },
+      { returnDocument: 'after' },
+    );
+  }
+
+  /**
    * The single job transition path (contract «Job flow»): flow + preconditions, compare-and-set on the status and the
    * holder, the order mirrored forward, notifications. `delivered` moves the order first (COD is money); the job follows.
    */
@@ -137,11 +188,7 @@ export class JobsService {
     const now = new Date();
     if (to === 'delivered') await this.mirrorOrder(order, 'delivered', true);
     const action: JobAction = to === 'accepted' ? 'accepted' : to === 'completed' ? 'completed' : 'status';
-    const updated = await this.jobs.findOneAndUpdate(
-      { _id: job._id, status: job.status, ...(job.providerId ? { providerId: job.providerId } : {}) },
-      { $set: { status: to, ...stampsFor(to, now) }, $push: { history: this.entry(job, action, to, o, now) } },
-      { returnDocument: 'after' },
-    );
+    const updated = await this.cas(job, to, { actor: o.actor, set: stampsFor(to, now), history: this.entry(job, action, to, o, now) });
     if (!updated) throw raced();
     if (to !== 'delivered') await this.mirrorOrder(order, ORDER_MIRROR[to], false);
     if (to === 'accepted') await this.notifier.customer('assigned', order);
@@ -162,8 +209,14 @@ export class JobsService {
     const codPaid = target === 'delivered' && order.payMethod === 'cod' && !order.paid
       ? { paid: true, chargedAmount: order.quote?.total ?? 0, paidVia: 'cod' as const }
       : {};
+    // the same QC guard as OrdersService.setStatus: a checklist un-ticked meanwhile blocks leaving production
+    let qcGuard: Record<string, unknown> = {};
+    const last = qcLabelsOf(order).length - 1;
+    if (target === 'packing' && needsQcGuard(order.status, target) && last >= 0) {
+      qcGuard = { [`qc.${last}`]: true, qc: { $not: { $elemMatch: { $ne: true } } } };
+    }
     const updated = await this.orders.findOneAndUpdate(
-      { _id: order._id, status: order.status },
+      { _id: order._id, status: order.status, ...qcGuard },
       { $set: { status: target, ...codPaid }, $push: { timeline: timelineEntry(target) }, $inc: { __v: 1 } },
       { returnDocument: 'after' },
     );
@@ -186,26 +239,22 @@ export class JobsService {
     if (!from.includes(job.status) || !job.providerId) {
       throw kind === 'rejected' ? new BadRequestException('این سفارش منتظر پاسخ شما نیست') : badMove(job.status, 'unassigned');
     }
+    if ((kind === 'rejected' || kind === 'unassigned') && !o.reasonCode && !o.reason?.trim()) throw new BadRequestException('دلیل را بنویسید');
+    if (o.assignmentId && String(job.assignment?.id) !== o.assignmentId) throw raced();
     const providerId = job.providerId;
     const now = new Date();
     const status: JobStatus = kind === 'rejected' ? 'rejected' : kind === 'failed' ? 'failed' : 'unassigned';
     const reset = { ...(job.deliveryMethod === 'provider' ? { deliveryMethod: 'courier' } : {}), ...(job.pickupAt === 'provider' ? { pickupAt: 'point' } : {}) };
-    const updated = await this.jobs.findOneAndUpdate(
-      { _id: job._id, status: job.status, providerId, ...(o.assignmentId ? { 'assignment.id': new Types.ObjectId(o.assignmentId) } : {}) },
-      {
-        $set: { status: 'unassigned', ...reset },
-        $unset: { providerId: 1, assignment: 1, deliveryProviderId: 1, providerPricing: 1 },
-        $addToSet: { releasedProviderIds: providerId },
-        $push: { history: this.entry(job, kind, status, o, now, { stage: cancelStage(job.status) }) },
-      },
-      { returnDocument: 'after' },
-    );
+    const updated = await this.cas(job, 'unassigned', {
+      actor: o.byRole === 'provider' ? 'production' : undefined,
+      extraGuard: { providerId },
+      set: reset,
+      unset: { providerId: 1, assignment: 1, deliveryProviderId: 1, providerPricing: 1 },
+      addToSet: { releasedProviderIds: providerId },
+      history: this.entry(job, kind, status, o, now, { stage: cancelStage(job.status) }),
+    });
     if (!updated) throw raced();
-    const orderSet = { ...(reset.deliveryMethod ? { 'delivery.method': 'courier' } : {}), ...(reset.pickupAt ? { 'delivery.pickupAt': 'point' } : {}) };
-    await this.orders.updateOne(
-      { _id: job.orderId },
-      { $unset: { centerId: 1, providerPricing: 1, ...(reset.pickupAt ? { 'delivery.providerShop': 1 } : {}) }, ...(Object.keys(orderSet).length ? { $set: orderSet } : {}), $inc: { __v: 1 } },
-    );
+    await this.releaseOrder(job, providerId, reset);
     if (kind === 'timeout' || kind === 'unassigned') await this.notifier.provider('job_withdrawn', providerId, updated);
     if (job.deliveryProviderId && String(job.deliveryProviderId) !== String(providerId)) await this.notifier.provider('job_withdrawn', job.deliveryProviderId, updated);
     if (kind === 'rejected') await this.notifier.admins('job_rejected', updated);
@@ -214,58 +263,86 @@ export class JobsService {
     return updated;
   }
 
+  /**
+   * Clears the released provider from the order — only while the order still names that provider, so a late give-back
+   * never wipes a newer assignment. The job is already released: a failure here is logged, never thrown.
+   */
+  private async releaseOrder(job: JobDocument, providerId: Types.ObjectId, reset: { deliveryMethod?: string; pickupAt?: string }): Promise<void> {
+    try {
+      const orderSet = { ...(reset.deliveryMethod ? { 'delivery.method': 'courier' } : {}), ...(reset.pickupAt ? { 'delivery.pickupAt': 'point' } : {}) };
+      await this.orders.updateOne(
+        { _id: job.orderId, centerId: providerId },
+        { $unset: { centerId: 1, ...(reset.pickupAt ? { 'delivery.providerShop': 1 } : {}) }, ...(Object.keys(orderSet).length ? { $set: orderSet } : {}), $inc: { __v: 1 } },
+      );
+      await this.orders.updateOne({ _id: job.orderId, 'providerPricing.providerId': String(providerId) }, { $unset: { providerPricing: 1 } });
+    } catch (err) {
+      this.logger.error(`order ${job.orderCode}: clearing the released provider failed (job already released): ${(err as Error).message}`);
+    }
+  }
+
   // ------------------------------------------------------------ order events
 
-  /** The order was cancelled: its live job becomes `cancelled` with the stage (M4) and the holder is told. Never throws. */
-  async cancelForOrder(order: { _id: unknown }, byRole: ByRole = 'admin'): Promise<void> {
+  /** The order was cancelled: its live job becomes `cancelled` with the stage (M4) and the holder is told. Never throws; `true` when this call changed the job. */
+  async cancelForOrder(order: { _id: unknown }, byRole: ByRole = 'admin'): Promise<boolean> {
     try {
       for (let attempt = 0; attempt < 3; attempt++) {
         const job = await this.forOrder(order._id);
-        if (!job || !LIVE.includes(job.status)) return;
+        if (!job || !LIVE.includes(job.status)) return false;
         const now = new Date();
         const stage = cancelStage(job.status);
-        const updated = await this.jobs.findOneAndUpdate(
-          { _id: job._id, status: job.status },
-          {
-            $set: { status: 'cancelled', cancel: { at: now, stage, ...(job.providerId ? { providerId: job.providerId } : {}), byRole } },
-            $push: { history: this.entry(job, 'cancelled', 'cancelled', { byRole }, now, { stage }) },
-          },
-          { returnDocument: 'after' },
-        );
+        const updated = await this.cas(job, 'cancelled', {
+          set: { cancel: { at: now, stage, ...(job.providerId ? { providerId: job.providerId } : {}), byRole } },
+          history: this.entry(job, 'cancelled', 'cancelled', { byRole }, now, { stage }),
+        });
         if (!updated) continue;
         if (job.providerId) await this.notifier.provider('job_cancelled', job.providerId, updated);
         if (job.deliveryProviderId && String(job.deliveryProviderId) !== String(job.providerId)) await this.notifier.provider('job_cancelled', job.deliveryProviderId, updated);
-        return;
+        return true;
       }
     } catch (err) {
       this.logger.warn(`cancel job of order ${String(order._id)} failed (reconcile retries): ${(err as Error).message}`);
     }
+    return false;
   }
 
-  /** The order was delivered (courier or admin): the job follows from whatever live stage. Never throws. */
-  async onOrderDelivered(orderId: unknown, byRole: ByRole): Promise<void> {
+  /**
+   * The order was delivered by `byRole`: the job follows. Courier / delivery-provider callers must satisfy the flow;
+   * an admin (or the system safety net) overrides from any live stage. Never throws; `true` when this call changed the job.
+   */
+  async onOrderDelivered(orderId: unknown, byRole: ByRole): Promise<boolean> {
     try {
       const job = await this.forOrder(orderId);
-      if (!job || !LIVE.includes(job.status)) return;
+      if (!job || !LIVE.includes(job.status)) return false;
+      const actor = actorOf(byRole);
+      if (actor !== 'admin' && !canMove(job.status, 'delivered', actor, flowOf(job))) {
+        this.logger.warn(`job of order ${job.orderCode}: ${byRole} cannot deliver from ${job.status}`);
+        return false;
+      }
       const now = new Date();
-      await this.jobs.updateOne(
-        { _id: job._id, status: job.status },
-        { $set: { status: 'delivered', deliveredAt: now, ...(job.readyAt ? {} : { readyAt: now }) }, $push: { history: this.entry(job, 'status', 'delivered', { byRole }, now) } },
-      );
+      const updated = await this.cas(job, 'delivered', {
+        actor,
+        set: { deliveredAt: now, ...(job.readyAt ? {} : { readyAt: now }) },
+        history: this.entry(job, 'status', 'delivered', { byRole }, now),
+      });
+      return !!updated;
     } catch (err) {
       this.logger.warn(`delivered job of order ${String(orderId)} failed (reconcile retries): ${(err as Error).message}`);
+      return false;
     }
   }
 
-  /** An admin set the order `out_for_delivery`: a courier job that is `ready` follows. Never throws. */
-  async onOrderOutForDelivery(orderId: unknown): Promise<void> {
+  /** The order went `out_for_delivery` (by `byRole`): a courier job that is `ready` follows. Never throws; `true` when changed. */
+  async onOrderOutForDelivery(orderId: unknown, byRole: ByRole = 'admin'): Promise<boolean> {
     try {
       const job = await this.forOrder(orderId);
-      if (!job || job.status !== 'ready' || job.deliveryMethod !== 'courier') return;
-      const now = new Date();
-      await this.jobs.updateOne({ _id: job._id, status: 'ready' }, { $set: { status: 'out_for_delivery' }, $push: { history: this.entry(job, 'status', 'out_for_delivery', { byRole: 'admin' }, now) } });
+      if (!job || job.status !== 'ready' || job.deliveryMethod !== 'courier') return false;
+      const actor = actorOf(byRole);
+      if (!canMove('ready', 'out_for_delivery', actor, flowOf(job))) return false;
+      const updated = await this.cas(job, 'out_for_delivery', { actor, history: this.entry(job, 'status', 'out_for_delivery', { byRole }, new Date()) });
+      return !!updated;
     } catch (err) {
       this.logger.warn(`out_for_delivery job of order ${String(orderId)} failed: ${(err as Error).message}`);
+      return false;
     }
   }
 
@@ -276,27 +353,31 @@ export class JobsService {
     await this.move(String(job._id), 'out_for_delivery', { actor: 'courier', byRole: 'courier' });
   }
 
-  /** Safety net (boot + every minute): missing jobs are created; jobs follow cancelled / delivered orders. */
+  /**
+   * Safety net (boot + every minute). Both scans are filtered in the database before `limit`, so a backlog of healthy
+   * rows can never hide the rows that need work: orders without a job get one; live jobs follow cancelled / delivered orders.
+   */
   async reconcile(limit = 500): Promise<{ created: number; cancelled: number; delivered: number }> {
     const res = { created: 0, cancelled: 0, delivered: 0 };
     try {
-      const open = await this.orders.find({ status: { $nin: ['pending_payment', 'cancelled', 'delivered'] } }).sort({ createdAt: 1 }).limit(limit);
-      if (open.length) {
-        const have = new Set((await this.jobs.find({ orderId: { $in: open.map((o) => o._id) } }, { orderId: 1 }).lean()).map((j) => String(j.orderId)));
-        for (const o of open) if (!have.has(String(o._id)) && (await this.ensureJob(o))) res.created++;
-      }
-      const live = await this.jobs.find({ status: { $in: LIVE } }, { orderId: 1 }).limit(limit).lean();
-      if (live.length) {
-        const done = await this.orders.find({ _id: { $in: live.map((j) => j.orderId) }, status: { $in: ['cancelled', 'delivered'] } }, { status: 1 });
-        for (const o of done) {
-          if (o.status === 'cancelled') {
-            await this.cancelForOrder(o, 'system');
-            res.cancelled++;
-          } else {
-            await this.onOrderDelivered(o._id, 'system');
-            res.delivered++;
-          }
-        }
+      const missing = await this.orders.aggregate<JobSource>([
+        { $match: { status: { $nin: ['pending_payment', 'cancelled', 'delivered'] } } },
+        { $sort: { createdAt: 1 } },
+        { $lookup: { from: 'jobs', localField: '_id', foreignField: 'orderId', as: 'j' } },
+        { $match: { j: { $size: 0 } } },
+        { $limit: limit },
+      ]);
+      for (const o of missing) if (await this.ensureJob(o)) res.created++;
+      const stale = await this.jobs.aggregate<{ orderId: Types.ObjectId; o: { status: OrderStatus }[] }>([
+        { $match: { status: { $in: LIVE } } },
+        { $lookup: { from: 'orders', localField: 'orderId', foreignField: '_id', as: 'o' } },
+        { $match: { o: { $elemMatch: { status: { $in: ['cancelled', 'delivered'] } } } } },
+        { $limit: limit },
+      ]);
+      for (const j of stale) {
+        if (j.o[0]?.status === 'cancelled') {
+          if (await this.cancelForOrder({ _id: j.orderId }, 'system')) res.cancelled++;
+        } else if (await this.onOrderDelivered(j.orderId, 'system')) res.delivered++;
       }
     } catch (err) {
       this.logger.warn(`reconcile failed: ${(err as Error).message}`);
