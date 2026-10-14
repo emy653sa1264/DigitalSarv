@@ -831,7 +831,7 @@ login (OTP), «قیمت‌های من», «پروفایل».
 
 ## v4.2 — dispatch and fulfillment (Master Specification V4, Milestone 3)
 
-Design: `docs/v4-design.md` (D10–D12, D15, D17–D21). Everything is additive; v1–v4.1 behaviour is unchanged unless stated.
+Design: `docs/v4-design.md` (D10–D12, D15, D17–D25). Everything is additive; v1–v4.1 behaviour is unchanged unless stated.
 
 ### Jobs («کار» = the fulfilment of an order; D11, D18)
 
@@ -1095,7 +1095,7 @@ interface ProviderJobDetail extends ProviderJobView {
   files: Upload[];                      // production role: the order's line files (never courier pickup photos)
   qc: { labels: string[]; done: boolean[] } | null;     // production role
   pricing: { lines: { label: string; unitPrice: number; quantity: number; subtotal: number }[]; missing: string[]; subtotal: number | null } | null;
-  contact: { name: string; phone: string; address: string; note: string } | null;  // delivery role, or production role handing over at its shop (§62)
+  contact: { name: string; phone: string; address?: string; note?: string } | null;  // delivery role: name, phone, address, note (§62); production role handing over at its own shop (customer pickup): name and phone only (D24)
   collectFrom: { name: string; address: string; phone: string } | null;           // delivery-only role: where to collect
   homePickup: boolean; itemsReceived: boolean;   // false while a home-pickup order is not collected yet
   history: { at: string; status: JobStatus; label: string; note?: string }[];      // the caller's own events only
