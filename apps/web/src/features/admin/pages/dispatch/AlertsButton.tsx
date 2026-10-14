@@ -1,4 +1,5 @@
 import { Bell } from 'lucide-react'
+import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { fa } from '@/lib/format'
@@ -8,11 +9,12 @@ import { when } from './format'
 
 export function AlertsButton({ onOpen }: { onOpen: (jobId: string) => void }) {
   const unread = useInboxUnread('admin')
-  const inbox = useInbox('admin')
+  const [open, setOpen] = useState(false)
+  const inbox = useInbox('admin', open)
   const markRead = useMarkInboxRead('admin')
   const items = inbox.data?.items ?? []
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button variant="outline" aria-label="هشدارهای تخصیص">
           <Bell className="size-4" strokeWidth={2.4} />
@@ -37,7 +39,7 @@ export function AlertsButton({ onOpen }: { onOpen: (jobId: string) => void }) {
           ) : (
             items.map((n) => (
               <button key={n.id} type="button"
-                onClick={() => { if (!n.read) markRead.mutate([n.id]); if (n.jobId) onOpen(n.jobId) }}
+                onClick={() => { if (!n.read) markRead.mutate([n.id]); setOpen(false); if (n.jobId) onOpen(n.jobId) }}
                 className={cn('cursor-pointer rounded-[14px] p-2.5 text-start hover:bg-accent-soft/60', !n.read && 'bg-pink-soft/50')}>
                 <div className="text-[12.5px] leading-6 font-bold">{n.text}</div>
                 <div className="mt-0.5 text-[11px] text-muted-2">سفارش {fa(n.orderCode)} · {when(n.createdAt)}</div>

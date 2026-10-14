@@ -29,11 +29,11 @@ export function useInboxUnread(audience: NotificationAudience): number {
   return enabled ? (query.data?.unread ?? 0) : 0
 }
 
-export function useInbox(audience: NotificationAudience) {
+export function useInbox(audience: NotificationAudience, active = true) {
   return useQuery({
     queryKey: inboxKeys(audience).list,
     queryFn: () => api.get<InboxPage>('/notifications/mine', { page: 1, limit: 50 }),
-    enabled: useEnabled(audience), refetchOnWindowFocus: true,
+    enabled: useEnabled(audience) && active, refetchOnWindowFocus: true,
   })
 }
 
