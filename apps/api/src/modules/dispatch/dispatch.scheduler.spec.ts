@@ -82,6 +82,14 @@ describe('DispatchScheduler (D21)', () => {
     expect(await t.sched.autoComplete(NOW, 24)).toBe(0);
     expect(await setup({ status: 'delivered', deliveredAt: min(-48 * 60) }).sched.autoComplete(NOW, 0)).toBe(0);
   });
+  it('a delivered job without deliveredAt completes from its history time', async () => {
+    const s = setup({ status: 'delivered', history: [{ at: min(-30 * 60), action: 'status', status: 'delivered', byRole: 'courier' }] });
+    s.orders.docs[0].status = 'delivered';
+    expect(await s.sched.autoComplete(NOW, 24)).toBe(1);
+    expect(s.jobsModel.docs[0]).toMatchObject({ status: 'completed' });
+    const t = setup({ status: 'delivered', history: [{ at: min(-60), action: 'status', status: 'delivered', byRole: 'courier' }] });
+    expect(await t.sched.autoComplete(NOW, 24)).toBe(0);
+  });
   it('tick runs every step with the stored settings and never throws', async () => {
     const s = setup({}, { responseTimeoutMinutes: 30 });
     await expect(s.sched.tick(NOW)).resolves.toMatchObject({ timeouts: 1 });

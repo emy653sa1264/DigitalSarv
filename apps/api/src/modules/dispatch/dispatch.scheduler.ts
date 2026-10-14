@@ -2,6 +2,7 @@ import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Interval } from '@nestjs/schedule';
 import { Model } from 'mongoose';
+import { ConflictException } from '@nestjs/common';
 import { CatalogService } from '../catalog/catalog.service.js';
 import { Center } from '../centers/center.schema.js';
 import { DispatchNotifier } from './dispatch-notifier.js';
@@ -30,11 +31,20 @@ export class DispatchScheduler implements OnApplicationBootstrap {
     private readonly notifier: DispatchNotifier,
   ) {}
 
+  /** `DISPATCH_SCHEDULER=0` switches the timer off (e2e); tests can still call `tick()`. */
+  private get off() {
+    return process.env.DISPATCH_SCHEDULER === '0';
+  }
+
   onApplicationBootstrap() {
-    void this.tick();
+    if (!this.off) void this.tick();
   }
 
   @Interval('dispatch-tick', 60_000)
+  async scheduled(): Promise<void> {
+    if (!this.off) await this.tick();
+  }
+
   async tick(now: Date = new Date()): Promise<TickResult> {
     if (this.running) return EMPTY;
     this.running = true;
@@ -52,7 +62,7 @@ export class DispatchScheduler implements OnApplicationBootstrap {
         timeouts: await step('timeouts', () => this.timeouts(now), 0),
         reminders: await step('reminders', () => this.reminders(now, dispatch.deadlineReminderMinutes), 0),
         late: await step('late', () => this.late(now), 0),
-        unavailable: await step('unavailable', () => this.unavailable(), 0),
+        unavailable: await step('unavailable', () => this.unavailable(now), 0),
         completed: await step('autoComplete', () => this.autoComplete(now, dispatch.autoCompleteHours), 0),
         reconciled: await step('reconcile', () => this.jobs.reconcile(BATCH), EMPTY.reconciled),
       };
@@ -66,14 +76,15 @@ export class DispatchScheduler implements OnApplicationBootstrap {
 
   /** D21: no answer by `respondBy` → «تخصیص‌نیافته» + admin alert; the CAS on the assignment id lets a reassignment or an accept win. */
   async timeouts(now: Date): Promise<number> {
-    const due = await this.jobModel.find({ status: 'assigned', 'assignment.respondBy': { $lte: now } }).limit(BATCH);
+    const due = await this.jobModel.find({ status: 'assigned', 'assignment.respondBy': { $lte: now } }).sort({ 'assignment.respondBy': 1 }).limit(BATCH);
     let n = 0;
     for (const job of due) {
       try {
         await this.jobs.giveBack(job, 'timeout', { byRole: 'system', assignmentId: String(job.assignment!.id) });
         n++;
-      } catch {
+      } catch (err) {
         // lost the race (accepted, rejected or reassigned meanwhile) — nothing to do
+        this.warnUnlessRace(job._id, err);
       }
     }
     return n;
@@ -108,7 +119,7 @@ export class DispatchScheduler implements OnApplicationBootstrap {
   }
 
   /** §68 «Provider unavailable»: a suspended/inactive provider holding work, or a closed one with an unanswered assignment. */
-  async unavailable(): Promise<number> {
+  async unavailable(now: Date = new Date()): Promise<number> {
     const [down, closed] = await Promise.all([
       this.centers.find({ status: { $in: ['inactive', 'suspended'] } }, { _id: 1 }).lean(),
       this.centers.find({ availableForOrders: false }, { _id: 1 }).lean(),
@@ -123,7 +134,7 @@ export class DispatchScheduler implements OnApplicationBootstrap {
     }).limit(BATCH).lean();
     let n = 0;
     for (const j of due) {
-      const won = await this.jobModel.updateOne({ _id: j._id, unavailableAlertedAt: { $exists: false } }, { $set: { unavailableAlertedAt: new Date() } });
+      const won = await this.jobModel.updateOne({ _id: j._id, unavailableAlertedAt: { $exists: false } }, { $set: { unavailableAlertedAt: now } });
       if (won.modifiedCount !== 1) continue;
       await this.notifier.admins('provider_unavailable', j);
       n++;
@@ -131,19 +142,32 @@ export class DispatchScheduler implements OnApplicationBootstrap {
     return n;
   }
 
-  /** «تکمیل‌شده» after `hours` (0 = admins complete by hand). */
+  /** «تکمیل‌شده» after `hours` (0 = admins complete by hand). A job without `deliveredAt` uses its delivered history entry. */
   async autoComplete(now: Date, hours: number): Promise<number> {
     if (hours <= 0) return 0;
-    const due = await this.jobModel.find({ status: 'delivered', deliveredAt: { $lte: new Date(now.getTime() - hours * 3_600_000) } }, { _id: 1 }).limit(BATCH).lean();
+    const cutoff = new Date(now.getTime() - hours * 3_600_000);
+    const due = await this.jobModel
+      .find({ status: 'delivered', $or: [{ deliveredAt: { $lte: cutoff } }, { deliveredAt: { $exists: false } }] }, { _id: 1, deliveredAt: 1, history: 1, updatedAt: 1 })
+      .sort({ deliveredAt: 1 })
+      .limit(BATCH)
+      .lean();
     let n = 0;
     for (const j of due) {
+      const at = j.deliveredAt ?? [...(j.history ?? [])].reverse().find((h) => h.status === 'delivered')?.at ?? j.updatedAt;
+      if (!at || new Date(at).getTime() > cutoff.getTime()) continue;
       try {
         await this.jobs.move(String(j._id), 'completed', { actor: 'system', byRole: 'system' });
         n++;
-      } catch {
+      } catch (err) {
         // completed by an admin meanwhile
+        this.warnUnlessRace(j._id, err);
       }
     }
     return n;
+  }
+
+  private warnUnlessRace(id: unknown, err: unknown) {
+    if (err instanceof ConflictException) return;
+    this.logger.warn(`job ${String(id)}: ${(err as Error).message}`);
   }
 }
