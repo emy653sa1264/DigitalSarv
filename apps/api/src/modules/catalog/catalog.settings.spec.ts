@@ -84,4 +84,14 @@ describe('list ordering and bind colours (v3.3)', () => {
     await svc.updateBindColor(String(marbled._id), { hex: '#445566' } as never);
     expect(bindColors.docs[0].css).toContain('#445566 60%');
   });
+
+  it('printAddons: only the given flags are written (per-flag paths), others survive', async () => {
+    const { svc, settings } = setup({ settings: [{ _id: 'main', prices: {}, printAddons: { glue: true } }] });
+    const res = await svc.updateSettings({ printAddons: { mixed: true } } as never);
+    const update = settings.updateOne.mock.calls[0][1] as { $set: Record<string, unknown> };
+    expect(update.$set['printAddons.mixed']).toBe(true);
+    expect(Object.keys(update.$set).filter((k) => k.startsWith('printAddons'))).toEqual(['printAddons.mixed']);
+    expect(update.$set).not.toHaveProperty('printAddons');
+    expect(res.printAddons).toMatchObject({ glue: true, mixed: true, docsSpiral: true });
+  });
 });

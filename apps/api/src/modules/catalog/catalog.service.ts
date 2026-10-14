@@ -16,6 +16,7 @@ import {
   defaultCourierPay,
   defaultOps,
   defaultPrintAddons,
+  PRINT_ADDON_FLAGS,
   type Checklists,
   type CourierPaySettings,
   type OpsSettings,
@@ -193,9 +194,15 @@ export class CatalogService {
       pickup: dto.checklists?.pickup ?? current.checklists.pickup,
     };
     const printAddons = { ...current.printAddons, ...defined(dto.printAddons ?? {}) } as PrintAddons;
+    // per-flag dotted paths: concurrent toggles of different flags do not overwrite each other
+    const addonSets: Record<string, boolean> = {};
+    for (const f of PRINT_ADDON_FLAGS) {
+      const v = dto.printAddons?.[f];
+      if (typeof v === 'boolean') addonSets[`printAddons.${f}`] = v;
+    }
     await this.settings.updateOne(
       { _id: SETTINGS_ID },
-      { $set: { ops, courier, checklists, printAddons }, $setOnInsert: { prices: { ...DEFAULT_PRICES }, urgentEnabled: true } },
+      { $set: { ops, courier, checklists, ...addonSets }, $setOnInsert: { prices: { ...DEFAULT_PRICES }, urgentEnabled: true } },
       { upsert: true },
     );
     await this.invalidate();
