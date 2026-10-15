@@ -676,7 +676,8 @@ export class PriceBookService {
   /** §23 view, paged by provider (S8): every combo of `service` x the page's providers; reads only that service's versions (admin only). */
   async compare(service: ComboService, providerId?: string, at = new Date(), page = 1, limit = 20): Promise<Paged<CompareRow>> {
     const centerFilter = providerId ? { _id: this.oid(providerId) } : {};
-    const prefix = new RegExp(`^${escapeRegex(service)}\|`);
+    // `\\|` — a bare `\|` in a template literal becomes `|` (alternation) and would match every service
+    const prefix = new RegExp(`^${escapeRegex(service)}\\|`);
     const [papers, ranges, customerRows, centers, total] = await Promise.all([
       this.papers.find().sort({ sort: 1, _id: 1 }).lean(),
       this.ranges.find().sort({ minPages: 1 }).lean(),

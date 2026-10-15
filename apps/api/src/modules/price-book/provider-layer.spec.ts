@@ -581,6 +581,11 @@ describe('compare paging (S8)', () => {
     expect([...new Set(p2.items.map((r) => r.providerId))]).toEqual([C]);
     const filters = versions.find.mock.calls.slice(-2).map((c) => c[0]);
     expect(filters.every((q) => q.comboKey instanceof RegExp)).toBe(true);
+    for (const q of filters) {
+      expect(q.comboKey.test('bw|A4|single')).toBe(true);
+      expect(q.comboKey.test('bw_x|A4')).toBe(false);
+      expect(q.comboKey.test('color|A4|full|tahrir80|single')).toBe(false);
+    }
     const provFilter = filters.find((q) => q.layer === 'provider')!;
     expect(provFilter.providerId.$in.map(String).sort()).toEqual([C].map(String));
     expect(filters.find((q) => q.layer === 'customer')).toEqual({ layer: 'customer', comboKey: expect.any(RegExp) });
