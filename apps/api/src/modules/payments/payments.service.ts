@@ -179,6 +179,11 @@ export class PaymentsService {
 
   /** The provider confirmed `amount` was captured for `authority`: record it — never drop it. */
   private async settleVerified(order: OrderDocument, authority: string, amount: number, refId: string, cardPan?: string): Promise<Outcome> {
+    // P-G2: an earlier mismatch/capture credit of this authority is pending (its marker never landed): finish that, never pay the order
+    if ((await this.credits.finishGateway(walletKey.gateway(String(order._id), authority))) === 'credited') {
+      this.logger.error(`order ${order.code}: payment ${authority} (refId ${refId}) verified again after a wallet credit was started for it - credited to the wallet, the order stays unpaid`);
+      return 'mismatch';
+    }
     const paidAt = new Date();
     const paid = {
       status: 'registered',
@@ -254,20 +259,26 @@ export class PaymentsService {
     }
     if (!credited) {
       this.logger.warn(`order ${order.code}: payment ${authority} amount mismatch was already handled`);
+      await this.noteMismatch(order, authority, credit); // the sweep may have won the marker: the status note is still ours to write (idempotent)
       return 'mismatch';
     }
     const applied = credit > 0 ? await this.credits.apply(key) : null; // never throws; a failure leaves the intent for the sweep
     this.logger.error(`order ${order.code}: payment ${authority} captured ${credit} toman instead of the requested amount (${message}) — ${applied === 'done' ? 'credited to the wallet' : 'queued for the wallet-credit sweep'}`);
+    await this.noteMismatch(order, authority, credit);
+    return 'mismatch';
+  }
+
+  /** Conditional and idempotent: only an unpaid, not-yet-noted attempt of this authority on a pending order gets the status and the timeline note. */
+  private async noteMismatch(order: OrderDocument, authority: string, credit: number) {
     try {
       const note = { status: 'pending_payment' as const, label: `مغایرت مبلغ پرداخت (${credit} تومان به کیف پول اعتبار شد)`, at: new Date() };
       await this.orders.updateOne(
-        { _id: order._id, status: 'pending_payment', 'payment.authority': authority, 'payment.status': { $ne: 'paid' } },
+        { _id: order._id, status: 'pending_payment', 'payment.authority': authority, 'payment.status': { $nin: ['paid', 'mismatch'] } },
         { $set: { 'payment.status': 'mismatch' }, $push: { timeline: note }, $inc: { __v: 1 } },
       );
     } catch (err) {
-      this.logger.error(`order ${order.code}: mismatch status note for ${authority} failed (wallet already credited ${credit} toman): ${(err as Error).message}`);
+      this.logger.error(`order ${order.code}: mismatch status note for ${authority} failed (wallet credit ${credit} toman is safe): ${(err as Error).message}`);
     }
-    return 'mismatch';
   }
 
   private async markFailed(attempt: QueryFilter<Order>) {

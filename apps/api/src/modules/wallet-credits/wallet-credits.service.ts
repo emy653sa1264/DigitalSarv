@@ -147,17 +147,18 @@ export class WalletCreditsService {
         .limit(BATCH)
         .lean()) as WalletCreditRow[];
       for (const r of stuck) {
-        const orderId = r.orderId ? String(r.orderId) : orderIdOfKey(r.key);
-        if (!orderId || (await this.markerOf(orderId, r.key))) continue;
-        const authority = r.authority ?? r.key.slice(`gw:${orderId}:`.length);
-        const took = await this.orders.findOneAndUpdate(
-          { _id: new Types.ObjectId(orderId), refundedAuthorities: { $ne: authority }, $nor: [{ paid: true, 'payment.authority': authority }] },
-          { $push: { refundedAuthorities: authority, creditKeys: { key: r.key, amount: r.amount } }, $inc: { __v: 1 } },
-          { returnDocument: 'after' },
-        );
-        if (!took) continue; // the order was paid by this authority (or the marker landed): nothing to credit
-        this.logger.warn(`wallet credit ${r.key}: the sweep ran the deciding write the request never finished`);
-        await applyCounting(r.key);
+        try {
+          const res = await this.decideGateway(r);
+          if (res === 'marked') continue; // the order already carries it: pass A/B apply it
+          if (res === 'lost') {
+            await this.intents.updateOne({ _id: r._id, state: 'pending' }, { $set: { lastSweptAt: now } }); // paid by this authority / order gone: rotate, never starve the batch
+            continue;
+          }
+          this.logger.warn(`wallet credit ${r.key}: the sweep ran the deciding write the request never finished`);
+          await applyCounting(r.key);
+        } catch (err) {
+          await this.failed(r, err, 'error'); // one poison intent never blocks the pass (backoff)
+        }
       }
     });
     await pass('A', async () => {
@@ -179,7 +180,7 @@ export class WalletCreditsService {
       for (const r of old) {
         if ((await applyCounting(r.key)) === 'waiting' && (await this.voidIntent(r, 'no order took this credit'))) {
           out.voided++;
-          if (r.key.startsWith('gw:')) this.logger.error(`wallet credit ${r.key} (${r.amount} toman, order ${r.orderCode}) was voided without a marker - a gateway intent should always be finished by the sweep (fine only if the order was paid by this authority)`);
+          if (r.key.startsWith('gw:')) this.logger.error(`wallet credit ${r.key} (${r.amount} toman, order ${r.orderCode}) was voided without a marker - پرداخت سفارش با این مجوز ثبت شد ولی مبلغ کمتر دریافت شده بود؛ بررسی دستی (orderId ${r.orderId}, authority ${r.authority ?? r.key})`);
           // the deciding write may have landed between the check and the void: the marker revives the credit
           if (r.orderId && (await this.markerOf(String(r.orderId), r.key)) && (await applyCounting(r.key)) === 'done') {
             await this.intents.updateOne({ _id: r._id, state: 'void' }, { $set: { revivedAt: now } });
@@ -220,6 +221,58 @@ export class WalletCreditsService {
     });
     if (out.applied || out.voided) this.logger.warn(`wallet credits sweep: ${out.applied} applied, ${out.voided} voided`);
     return out;
+  }
+
+  /**
+   * P-G2: the payments service calls this before it would settle the order for an authority. A pending `gw:` intent for it
+   * (its marker never landed) is finished here - the same deciding write as pass E, then `apply` - and the caller must not settle.
+   * 'none': no pending intent; 'skipped': it exists but the order cannot take it (e.g. already paid by this authority);
+   * 'credited': the order carries the marker now.
+   */
+  async finishGateway(key: string): Promise<'none' | 'skipped' | 'credited'> {
+    const r = (await this.intents.findOne({ key, state: 'pending' }).lean()) as WalletCreditRow | null;
+    if (!r) return 'none';
+    const res = await this.decideGateway(r);
+    if (res === 'lost') return 'skipped';
+    if (res === 'took') this.logger.warn(`wallet credit ${key}: finished the deciding write for a verified payment replay`);
+    await this.apply(key);
+    return 'credited';
+  }
+
+  /**
+   * The gateway deciding write (shared by pass E and `finishGateway`): push the authority and `{ key, amount }` unless the authority
+   * already decided something or the order was paid by it, then the same bookkeeping the request path writes (conditional, idempotent).
+   */
+  private async decideGateway(r: WalletCreditRow): Promise<'marked' | 'took' | 'lost'> {
+    const orderId = r.orderId ? String(r.orderId) : orderIdOfKey(r.key);
+    if (!orderId) return 'lost';
+    if (await this.markerOf(orderId, r.key)) return 'marked';
+    const authority = r.authority ?? r.key.slice(`gw:${orderId}:`.length);
+    const took = await this.orders.findOneAndUpdate(
+      { _id: new Types.ObjectId(orderId), refundedAuthorities: { $ne: authority }, $nor: [{ paid: true, 'payment.authority': authority }] },
+      { $push: { refundedAuthorities: authority, creditKeys: { key: r.key, amount: r.amount } }, $inc: { __v: 1 } },
+      { returnDocument: 'after' },
+    );
+    if (!took) return 'lost';
+    try {
+      const oid_ = new Types.ObjectId(orderId);
+      if (r.cause === 'gateway_mismatch') {
+        const note = { status: 'pending_payment', label: `مغایرت مبلغ پرداخت (${r.amount} تومان به کیف پول اعتبار شد)`, at: new Date() };
+        await this.orders.updateOne(
+          { _id: oid_, status: 'pending_payment', 'payment.authority': authority, 'payment.status': { $nin: ['paid', 'mismatch'] } },
+          { $set: { 'payment.status': 'mismatch' }, $push: { timeline: note }, $inc: { __v: 1 } },
+        );
+      } else if (r.cause === 'gateway_capture') {
+        const refId = /^refId (.+)$/.exec(r.note ?? '')?.[1];
+        await this.orders.updateOne(
+          { _id: oid_, status: 'cancelled', 'payment.authority': authority, 'payment.status': { $ne: 'paid' } },
+          { $set: { 'payment.status': 'paid', ...(refId ? { 'payment.refId': refId } : {}), 'payment.paidAt': new Date(), chargedAmount: r.amount, paidVia: 'gateway', refunded: true }, $inc: { __v: 1 } },
+        );
+      }
+    } catch (err) {
+      this.logger.error(`wallet credit ${r.key}: order bookkeeping failed (the credit itself is safe): ${(err as Error).message}`);
+    }
+    return 'took';
   }
 
   /** Intents the sweep gave up on (an admin must settle them) - for the admin dashboard / health. */
