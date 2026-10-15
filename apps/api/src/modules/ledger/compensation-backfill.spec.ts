@@ -35,6 +35,12 @@ describe('compOpen backfill (P10)', () => {
     expect(await backfillCompOpen(jobs as never, fakeModel([]) as never)).toBe(0);
     expect(jobs.docs.every((d) => d.compOpen === undefined && d.compTracked === true)).toBe(true);
   });
+  it('S11: a lost producer that later delivered as the separate delivery provider is flagged (it no longer holds the delivered job)', async () => {
+    const j = lostMid({ status: 'delivered', providerId: Q, deliveryProviderId: P });
+    const jobs = fakeModel([j]);
+    expect(await backfillCompOpen(jobs as never, fakeModel([]) as never)).toBe(1);
+    expect(j).toMatchObject({ compOpen: [String(P)] });
+  });
   it('final wave: merges with a case a live write flagged meanwhile (deploy window), never overwrites it', async () => {
     const j = lostMid({ compOpen: [String(Q)] });
     const jobs = fakeModel([j]);

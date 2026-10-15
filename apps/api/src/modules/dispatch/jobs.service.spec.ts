@@ -536,6 +536,14 @@ describe('v4.3 fix round 1 — open compensation cases flagged on the job (P10, 
     await s.svc.onOrderDelivered(s.orders.docs[0]._id, 'admin');
     expect(s.jobs.docs[0]).toMatchObject({ status: 'delivered', compOpen: ['other'] });
   });
+  it('S11: delivery closes only the producer’s case; a delivering provider keeps its production case', async () => {
+    const s = setup();
+    await heldBy(s, 'ready');
+    const D = new Types.ObjectId();
+    Object.assign(s.jobs.docs[0], { compOpen: [String(P), String(D)], deliveryMethod: 'courier', deliveryProviderId: D });
+    await s.svc.onOrderDelivered(s.orders.docs[0]._id, 'admin');
+    expect(s.jobs.docs[0]).toMatchObject({ status: 'delivered', compOpen: [String(D)] });
+  });
 });
 
 describe('D35: cash at handover through the job mirror', () => {

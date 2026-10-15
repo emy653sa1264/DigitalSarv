@@ -59,11 +59,13 @@ export function compensationCandidates(job: CompJob): CompCandidate[] {
 }
 
 /**
- * I1: the providers that hold the job now (production or delivery), in any status but `cancelled` — a cancelled job
- * keeps `providerId` for the record, but nobody holds it any more.
+ * I1 + S11: the providers that hold the job now — the producer in any status but `cancelled`, the delivery provider only while
+ * the delivery is still to happen (a delivered / completed job is no longer «held» by whoever carried it).
  */
 export function holdersOf(job: Pick<CompJob, 'status' | 'providerId' | 'deliveryProviderId'>): string[] {
-  return job.status === 'cancelled' ? [] : [job.providerId, job.deliveryProviderId].filter(Boolean).map(String);
+  if (job.status === 'cancelled') return [];
+  const delivered = job.status === 'delivered' || job.status === 'completed';
+  return [job.providerId, delivered ? undefined : job.deliveryProviderId].filter(Boolean).map(String);
 }
 
 /**

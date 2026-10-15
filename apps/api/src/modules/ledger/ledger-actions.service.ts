@@ -110,7 +110,7 @@ export class LedgerActionsService {
 
   /**
    * I1: claim the case atomically before the entry is written — only while it is flagged (open, or claimed by a decision
-   * whose entry a crash never wrote), the provider does not hold the job (any status but cancelled) and the ledger is not
+   * whose entry a crash never wrote), the provider does not hold the job (S11: a delivery provider of a delivered job does not) and the ledger is not
    * processing a delivery. The claim moves the id from `compOpen` to `compClaimed`; nothing else ever adds to
    * `compClaimed`, so a delivery or a re-assignment landing first makes the claim match nothing.
    */
@@ -121,7 +121,10 @@ export class LedgerActionsService {
         _id: oid(jobId), ledgerPending: { $ne: true },
         $and: [
           { $or: [{ compOpen: providerId }, { compClaimed: providerId }] },
-          { $or: [{ status: 'cancelled' }, { providerId: { $ne: pid }, deliveryProviderId: { $ne: pid } }] },
+          { $or: [
+            { status: 'cancelled' },
+            { providerId: { $ne: pid }, $or: [{ deliveryProviderId: { $ne: pid } }, { status: { $in: ['delivered', 'completed'] } }] },
+          ] },
         ],
       },
       { $pull: { compOpen: providerId }, $addToSet: { compClaimed: providerId } },

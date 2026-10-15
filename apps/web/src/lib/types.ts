@@ -864,3 +864,9 @@ export interface ProviderLedgerSelf {
   bank: { sheba: string; holder: string } | null
 }
 export interface ProviderLedgerLine { id: string; kind: LedgerKind; state: LedgerState; title: string; orderCode?: string; at: string; amount: number | null; bankRef?: string; voided?: boolean }
+
+/** v4.4 (S12): a delivered job whose provider credit still waits after a day. */
+export interface WaitingCreditRow {
+  jobId: string; orderId: string; orderCode: string; providerId: string | null; providerName: string | null
+  deliveredAt: string; triedAt: string | null; reason: 'unpaid' | 'retrying'
+}

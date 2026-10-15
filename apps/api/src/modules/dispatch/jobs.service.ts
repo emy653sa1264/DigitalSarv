@@ -45,10 +45,9 @@ const flowGuardOf = (job: Pick<Job, 'deliveryMethod' | 'pickupAt'>): Record<stri
 export const deliveryLegStarted = (job: Pick<Job, 'status' | 'deliveryMethod' | 'deliveryProviderId'>): boolean =>
   job.status === 'out_for_delivery' && job.deliveryMethod === 'provider' && !!job.deliveryProviderId;
 
-/** M2: a provider that delivers the job no longer has an open compensation case on it (same cas as the delivery). */
-function pullCompOpen(job: Pick<Job, 'providerId' | 'deliveryProviderId'>): { pull?: Record<string, unknown> } {
-  const ids = [job.providerId, job.deliveryProviderId].filter(Boolean).map(String);
-  return ids.length ? { pull: { compOpen: { $in: ids } } } : {};
+/** M2 + S11: the delivered write closes the producer's open case (it earns the production credit); a delivery provider keeps its own. */
+function pullCompOpen(job: Pick<Job, 'providerId'>): { pull?: Record<string, unknown> } {
+  return job.providerId ? { pull: { compOpen: { $in: [String(job.providerId)] } } } : {};
 }
 
 function stampsFor(to: JobStatus, now: Date): Record<string, Date | boolean> {

@@ -6,6 +6,7 @@ import { AdminLedgerController, ProviderLedgerController } from './ledger.contro
 import { LedgerActionsService } from './ledger-actions.service.js';
 import { LedgerReadsService } from './ledger-reads.service.js';
 import { LedgerNotifier } from './ledger-notifier.js';
+import { LedgerWaitingService } from './ledger-waiting.service.js';
 import { LedgerService } from './ledger.service.js';
 import { PayoutsService } from './payouts.service.js';
 import { WalletService } from './wallet.service.js';
@@ -14,7 +15,7 @@ import { WalletService } from './wallet.service.js';
 @Module({
   imports: [CatalogModule, NotificationsModule, CentersModule],
   controllers: [AdminLedgerController, ProviderLedgerController],
-  providers: [LedgerService, LedgerReadsService, LedgerActionsService, LedgerNotifier, PayoutsService, WalletService],
+  providers: [LedgerService, LedgerReadsService, LedgerActionsService, LedgerNotifier, PayoutsService, WalletService, LedgerWaitingService],
   exports: [LedgerService],
 })
 export class LedgerModule {}

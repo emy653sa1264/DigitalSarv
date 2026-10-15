@@ -1,7 +1,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type {
-  BankAccountView, CompensationItem, LedgerEntryView, LedgerKind, Paged, ProviderBalanceRow, ProviderLedgerAdmin, WalletReport, WeeklyStatement,
+  BankAccountView, CompensationItem, LedgerEntryView, LedgerKind, Paged, ProviderBalanceRow, ProviderLedgerAdmin, WaitingCreditRow, WalletReport, WeeklyStatement,
 } from '@/lib/types'
 
 export interface EntriesParams { page: number; limit?: number; kind?: LedgerKind; from?: string; to?: string }
@@ -18,9 +18,13 @@ export const lk = {
   entries: (id: string, p: EntriesParams) => ['admin', 'ledger', 'entries', id, p] as const,
   statement: (id: string, cutoff: string) => ['admin', 'ledger', 'statement', id, cutoff] as const,
   pending: (page: number) => ['admin', 'ledger', 'pending', page] as const,
+  waiting: (page: number) => ['admin', 'ledger', 'waiting', page] as const,
   compensation: (page: number) => ['admin', 'ledger', 'compensation', page] as const,
   wallet: (from: string, to: string) => ['admin', 'ledger', 'wallet', from, to] as const,
 }
+
+export const useWaitingCredits = (page: number, enabled = true) =>
+  useQuery({ queryKey: lk.waiting(page), enabled, placeholderData: keepPreviousData, queryFn: () => api.get<Paged<WaitingCreditRow>>('/admin/ledger/waiting', { page, limit: 20 }) })
 
 export const useLedgerBalances = (page: number, q?: string) =>
   useQuery({ queryKey: lk.balances(page, q), placeholderData: keepPreviousData, queryFn: () => api.get<Paged<ProviderBalanceRow>>('/admin/ledger/balances', { page, limit: 20, q }) })

@@ -151,6 +151,7 @@ instances left behind, so it must run when no older instance can still deliver j
 - **Ledger backfill (R11):** delivered / completed jobs without `ledgerAt` are flagged once, and the dispatch tick credits
   them. (The tick also flags jobs of the last 7 days that an older instance delivered, but older ones need the seed.)
 - **Compensation backfill (P10):** jobs that lost work mid-production before v4.3 get their open «جبران خسارت مجری» cases.
+  Since v4.4 (S11) a delivery provider no longer «holds» a delivered job, so the next `seed:base` may newly flag lost producers who later delivered the job as a separate delivery provider.
 - **Templates:** `payout_recorded`, `payout_voided` and `bank_account_changed` (the provider's security notice when a
   bank account changes). Without them these notices are not sent, and the API logs
   `notification template "…" is missing — run seed:base` once per event.

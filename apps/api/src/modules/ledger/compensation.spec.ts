@@ -1,4 +1,4 @@
-import { basisOf, compensationCandidates, openCandidates } from './compensation.js';
+import { basisOf, compensationCandidates, holdersOf, openCandidates } from './compensation.js';
 
 const at = (h: number) => new Date(Date.UTC(2026, 9, 18, h));
 const base = { _id: 'j1', orderId: 'o1', orderCode: '10421', status: 'in_production', history: [] as never[] };
@@ -67,5 +67,22 @@ describe('compensation candidates (D30, R6)', () => {
     const done = { ...base, status: 'delivered', providerId: 'P', compOpen: ['P'], history: [{ at: at(9), action: 'unassigned', stage: 'in_production', providerId: 'P' }] };
     expect(openCandidates(done as never)).toEqual([]);
     expect(openCandidates({ ...done, providerId: 'Q' } as never)).toHaveLength(1);
+  });
+});
+
+describe('N2 (S11): a lost producer that delivers the job keeps its production case', () => {
+  const job = {
+    ...base, status: 'delivered', providerId: 'Q', deliveryProviderId: 'P', compOpen: ['P'],
+    providerPricing: snap('Q', 50000, { providerId: 'P', fee: 20000 }), pricingHistory: [snap('P', 70000), snap('Q', 50000, { providerId: 'P', fee: 20000 })],
+    history: [{ at: at(9), action: 'reassigned', stage: 'in_production', providerId: 'Q', previousProviderId: 'P' }],
+  };
+  it('a delivery provider does not hold a delivered / completed job; it still holds one on its way', () => {
+    expect(holdersOf(job as never)).toEqual(['Q']);
+    expect(holdersOf({ ...job, status: 'completed' } as never)).toEqual(['Q']);
+    expect(holdersOf({ ...job, status: 'out_for_delivery' } as never)).toEqual(['Q', 'P']);
+  });
+  it('the case is listed once the job is delivered, with the production basis', () => {
+    expect(openCandidates(job as never).map((c) => [c.providerId, c.cause, c.payoutBasis])).toEqual([['P', 'reassigned', 70000]]);
+    expect(openCandidates({ ...job, status: 'out_for_delivery' } as never)).toEqual([]);
   });
 });

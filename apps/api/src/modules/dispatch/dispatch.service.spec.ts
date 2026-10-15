@@ -484,6 +484,13 @@ describe('delivery defaults and pricing history (I2, I3, M5-M9)', () => {
     expect(String(s.jobsModel.docs[0].deliveryProviderId)).toBe(String(F));
     await expect(s.svc.updateDelivery(id, { deliveryMethod: 'courier', deliveryProviderId: String(F) } as never, String(ADMIN))).rejects.toMatchObject({ status: 400 });
   });
+  it('S13: the delivery cannot change once the job left «ready», so a started leg is never changed', async () => {
+    const s = setup();
+    const id = await withJob(s);
+    await s.svc.assign(id, { providerId: String(C), deliveryMethod: 'provider', deliveryProviderId: String(F) } as never, String(ADMIN));
+    s.jobsModel.docs[0].status = 'out_for_delivery';
+    await expect(s.svc.updateDelivery(id, { deliveryMethod: 'courier' } as never, String(ADMIN))).rejects.toThrow('روش تحویل این سفارش دیگر قابل تغییر نیست');
+  });
   it('updateDelivery appends a refreshed snapshot to the pricing history', async () => {
     const s = setup();
     const id = await withJob(s);

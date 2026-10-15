@@ -157,6 +157,19 @@ describe('«جبران خسارت مجری» (D30, R6)', () => {
       await expect(s.svc.decideCompensation({ jobId: String(j._id), providerId: String(P), amount: 1, reason: 'x' }, ADMIN)).rejects.toThrow(new NotFoundException('مورد جبران خسارت یافت نشد'));
     }
   });
+  it('S11: a provider that lost production and delivered the job as the delivery provider is listed and decidable', async () => {
+    const Q = new Types.ObjectId();
+    const job = cancelledJob({
+      status: 'delivered', cancel: undefined, providerId: Q, deliveryProviderId: P,
+      providerPricing: { providerId: String(Q), providerSubtotal: 50000, delivery: { providerId: String(P), fee: 20000 } },
+      pricingHistory: [{ providerId: String(P), providerSubtotal: 90000, delivery: null }],
+      history: [{ at: new Date(), action: 'reassigned', stage: 'in_production', providerId: Q, previousProviderId: P }],
+    });
+    const s = setup({ jobs: [job] });
+    expect((await s.svc.compensationQueue({})).items).toEqual([expect.objectContaining({ providerId: String(P), cause: 'reassigned', payoutBasis: 90000 })]);
+    await s.svc.decideCompensation({ jobId: String(job._id), providerId: String(P), amount: 40000, reason: 'تولید از دست رفت' }, ADMIN);
+    expect(s.entries.docs).toEqual([expect.objectContaining({ key: `comp:${String(job._id)}:${String(P)}`, amount: 40000, cause: 'compensation' })]);
+  });
   it('M5 (P11): the cap is the production subtotal, plus the delivery fee only when the leg had started', async () => {
     const snap = { providerId: String(P), providerSubtotal: 90000, delivery: { providerId: String(P), fee: 20000 } };
     const notStarted = cancelledJob({ providerPricing: snap });

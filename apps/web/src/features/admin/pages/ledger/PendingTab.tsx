@@ -11,6 +11,7 @@ import { QueryView } from '../../components/kit'
 import { AdminRow, AdminTable, Pager } from '../../components/table'
 import { lk, useLedgerMutations, usePendingCredits } from '../../ledger-api'
 import { AmountDialog } from './AmountDialog'
+import { WaitingCard } from './WaitingCard'
 
 const COLUMNS = '130px minmax(0,1.1fr) minmax(0,1.8fr) 140px 120px'
 
@@ -57,6 +58,7 @@ export function PendingTab({ onOpenProvider }: { onOpenProvider: (providerId: st
             onError: (err) => { if (err instanceof ApiError && err.status === 409) { void qc.invalidateQueries({ queryKey: lk.all }); setEditing(null) } },
           })} />
       )}
+      <WaitingCard onOpenProvider={onOpenProvider} />
     </div>
   )
 }

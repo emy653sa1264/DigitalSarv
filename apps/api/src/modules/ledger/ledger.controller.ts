@@ -7,6 +7,7 @@ import { PermissionsGuard } from '../../common/auth/permissions.guard.js';
 import { CurrentProvider, ProviderScopeGuard } from '../centers/provider-scope.guard.js';
 import { AdjustmentDto, BankAccountDto, CompensationDto, LedgerEntriesQueryDto, LedgerPageQueryDto, PayoutDto, ResolvePendingDto, StatementQueryDto, VoidPayoutDto, WalletQueryDto } from './dto/ledger.dto.js';
 import { LedgerActionsService } from './ledger-actions.service.js';
+import { LedgerWaitingService } from './ledger-waiting.service.js';
 import { LedgerReadsService } from './ledger-reads.service.js';
 import { PayoutsService } from './payouts.service.js';
 import { WalletService } from './wallet.service.js';
@@ -16,7 +17,7 @@ import { WalletService } from './wallet.service.js';
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Roles('admin')
 export class AdminLedgerController {
-  constructor(private readonly reads: LedgerReadsService, private readonly actions: LedgerActionsService, private readonly payouts: PayoutsService, private readonly wallet: WalletService) {}
+  constructor(private readonly reads: LedgerReadsService, private readonly actions: LedgerActionsService, private readonly payouts: PayoutsService, private readonly wallet: WalletService, private readonly waitingCredits: LedgerWaitingService) {}
 
   @Get('balances') @RequirePermissions('ledger_view')
   balances(@Query() q: LedgerPageQueryDto) { return this.reads.balances(q); }
@@ -35,6 +36,10 @@ export class AdminLedgerController {
 
   @Get('pending') @RequirePermissions('ledger_view')
   pending(@Query() q: LedgerPageQueryDto) { return this.reads.pending(q); }
+
+  /** S12: delivered jobs whose credit still waits after a day (unpaid order or a failing write). */
+  @Get('waiting') @RequirePermissions('ledger_view')
+  waiting(@Query() q: LedgerPageQueryDto) { return this.waitingCredits.waiting(q); }
 
   @Post('entries/:id/resolve') @HttpCode(200) @RequirePermissions('ledger_adjust')
   resolve(@Param('id') id: string, @Body() dto: ResolvePendingDto, @CurrentUser() user: AuthUser) { return this.actions.resolve(id, dto, user.id); }
