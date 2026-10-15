@@ -104,6 +104,21 @@ describe('wallet credit intents (D34)', () => {
     await s.svc.sweep(later(26 * 60 * MIN));
     expect(s.user.walletBalance).toBe(50000);
   });
+  it('a marker landing after the sweep re-check with a crashed caller: the next sweep revives the voided intent, credited once', async () => {
+    const s = setup();
+    const key = walletKey.cancel(String(s.orderId));
+    await credit(s, key);
+    expect(await s.svc.sweep(later(25 * 60 * MIN))).toMatchObject({ voided: 1, applied: 0 });
+    expect(s.intents.docs[0]).toMatchObject({ state: 'void', origKey: key });
+    mark(s, key, 50000); // the order write lands after the re-check; its caller crashed and never applies
+    expect(s.user.walletBalance).toBe(0);
+    expect(await s.svc.sweep(later(26 * 60 * MIN))).toMatchObject({ applied: 1 });
+    expect(s.user.walletBalance).toBe(50000);
+    expect(s.intents.docs.find((d) => d.key === key)).toMatchObject({ state: 'done', amount: 50000 });
+    expect(s.intents.docs.find((d) => d.origKey === key)?.revivedAt).toBeInstanceOf(Date);
+    expect(await s.svc.sweep(later(27 * 60 * MIN))).toMatchObject({ applied: 0 });
+    expect(s.user.walletBalance).toBe(50000);
+  });
   it('a marker revives a voided or lost intent and the user key prevents a double (C2, M6)', async () => {
     const s = setup();
     const key = walletKey.cancel(String(s.orderId));

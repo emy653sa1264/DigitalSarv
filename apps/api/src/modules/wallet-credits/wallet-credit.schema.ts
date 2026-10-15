@@ -26,6 +26,10 @@ export class WalletCredit {
   @Prop({ type: Date }) nextAttemptAt?: Date;
   /** Rotation for the sweep: the last time it looked at this intent without a marker. */
   @Prop({ type: Date }) lastSweptAt?: Date;
+  /** Set when the 24 h no-marker rule voided the intent: the key it held, and when (the sweep re-checks for 7 days). */
+  @Prop({ type: String }) origKey?: string;
+  @Prop({ type: Date }) voidedAt?: Date;
+  @Prop({ type: Date }) revivedAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }

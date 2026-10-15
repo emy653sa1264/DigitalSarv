@@ -110,7 +110,7 @@ export class WalletCreditsService {
    * Every minute, two bounded passes. A: pending intents between `SWEEP_AFTER_MS` and `MARKER_WAIT_MS` old, least recently
    * looked-at first (a marker-less one is stamped so it cannot starve the rest). B: intents older than `MARKER_WAIT_MS`, oldest
    * first - applied when the order carries them, otherwise voided (key freed; a marker that lands meanwhile revives it). Intents
-   * at the attempt cap or in backoff are skipped. Then user keys settled more than `KEY_KEEP_MS` ago are pulled. Never throws.
+   * at the attempt cap or in backoff are skipped. C: recently voided intents whose order carries the key are revived. Then user keys settled more than `KEY_KEEP_MS` ago are pulled. Never throws.
    */
   async sweep(now: Date = new Date()): Promise<SweepResult> {
     const out: SweepResult = { applied: 0, voided: 0, pulled: 0 };
@@ -139,6 +139,24 @@ export class WalletCreditsService {
           out.voided++;
           // the deciding write may have landed between the check and the void: the marker revives the credit
           if (r.orderId && (await this.markerOf(String(r.orderId), r.key)) && (await this.apply(r.key)) === 'done') out.applied++;
+        }
+      }
+      // C: intents voided by the 24 h rule in the last 7 days whose order took the key after all (the deciding write landed after
+      // the void's re-check and its caller died): the marker revives the credit; the user key keeps it once.
+      const voided = (await this.intents
+        .find({ state: 'void', origKey: { $exists: true }, revivedAt: { $exists: false }, voidedAt: { $gte: new Date(t - KEY_KEEP_MS) } })
+        .sort({ lastSweptAt: 1, voidedAt: 1 })
+        .limit(BATCH)
+        .lean()) as WalletCreditRow[];
+      for (const v of voided) {
+        const orderId = v.orderId ? String(v.orderId) : null;
+        if (orderId && v.origKey && (await this.markerOf(orderId, v.origKey))) {
+          if ((await this.apply(v.origKey)) === 'done') {
+            out.applied++;
+            await this.intents.updateOne({ _id: v._id, state: 'void' }, { $set: { revivedAt: now } });
+          }
+        } else {
+          await this.intents.updateOne({ _id: v._id, state: 'void' }, { $set: { lastSweptAt: now } });
         }
       }
       const settled = (await this.intents
@@ -205,7 +223,7 @@ export class WalletCreditsService {
 
   /** A void frees the key in the same update. CAS on _id + state + amount. */
   private async voidIntent(doc: WalletCreditRow, note: string): Promise<boolean> {
-    const res = await this.intents.updateOne({ _id: doc._id, state: 'pending', amount: doc.amount }, { $set: { state: 'void', key: voidedKey(doc.key, doc._id), note } });
+    const res = await this.intents.updateOne({ _id: doc._id, state: 'pending', amount: doc.amount }, { $set: { state: 'void', key: voidedKey(doc.key, doc._id), origKey: doc.key, voidedAt: new Date(), note } });
     return res.modifiedCount === 1;
   }
 
