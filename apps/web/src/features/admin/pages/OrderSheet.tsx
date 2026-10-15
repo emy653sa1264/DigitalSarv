@@ -18,7 +18,7 @@ import { ApiError } from '@/lib/api'
 import { DELIVERY_METHOD_LABEL } from '@/lib/dispatch-labels'
 import { useCan } from '@/lib/permissions'
 import { fa, jalali, jalaliDayTime, money } from '@/lib/format'
-import type { Order, OrderStatus } from '@/lib/types'
+import type { Order, OrderSettlement, OrderStatus } from '@/lib/types'
 import { ORDER_STATUS_LABEL } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { useAdminOrder, useCenters, useCouriers, useOrderMutations } from '../api'
@@ -114,6 +114,7 @@ function finalEffect(order: Order, target: OrderStatus): string {
     return 'مبلغی از مشتری دریافت نشده است؛ بازگشت وجهی انجام نمی‌شود.'
   }
   if (order.payMethod === 'cod' && !order.paid) return `پرداخت در محل ثبت می‌شود (${money(order.quote?.total ?? 0)}).`
+  if (order.amountDue) return `مابه‌التفاوت ${money(order.amountDue)} هنوز دریافت نشده است؛ فقط اگر این مبلغ را نقدی از مشتری گرفته‌اید تحویل را ثبت کنید.`
   return 'سفارش به‌عنوان تحویل‌شده بسته می‌شود.'
 }
 
@@ -130,9 +131,11 @@ function ControlsCard({ order }: { order: Order }) {
   const unpaid = order.status === 'pending_payment'
   const final = isTerminal(order.status)
   const options = adminStatusOptions(order.status)
+  // ruling F-I2: «تحویل شد» while a difference is due = the admin confirms the cash was taken (server value only)
+  const cashDue = confirming === 'delivered' && (order.amountDue ?? 0) > 0
 
-  const applyStatus = (status: OrderStatus) =>
-    setStatus.mutate({ id: order.id, status }, { onSuccess: () => notify(`وضعیت سفارش: ${ORDER_STATUS_LABEL[status]}`) })
+  const applyStatus = (status: OrderStatus, confirmCashCollected?: boolean) =>
+    setStatus.mutate({ id: order.id, status, ...(confirmCashCollected ? { confirmCashCollected: true } : {}) }, { onSuccess: () => notify(`وضعیت سفارش: ${ORDER_STATUS_LABEL[status]}`) })
 
   const changeStatus = (v: string) => {
     const status = v as OrderStatus
@@ -247,8 +250,8 @@ function ControlsCard({ order }: { order: Order }) {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>انصراف</AlertDialogCancel>
-            <AlertDialogAction variant={confirming === 'cancelled' ? 'destructive' : 'default'} onClick={() => confirming && applyStatus(confirming)}>
-              {confirming === 'cancelled' ? 'لغو سفارش' : 'ثبت تحویل'}
+            <AlertDialogAction variant={confirming === 'cancelled' ? 'destructive' : 'default'} onClick={() => confirming && applyStatus(confirming, cashDue)}>
+              {confirming === 'cancelled' ? 'لغو سفارش' : cashDue ? `مبلغ ${money(order.amountDue ?? 0)} نقدی دریافت شد` : 'ثبت تحویل'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -408,6 +411,12 @@ function PickupPhotosCard({ order }: { order: Order }) {
   )
 }
 
+const SETTLEMENT_LABEL: Record<OrderSettlement['kind'], string> = {
+  recount_refund: 'بازگشت به کیف پول پس از شمارش',
+  due_wallet: 'مابه‌التفاوت از کیف پول',
+  due_cash: 'مابه‌التفاوت نقدی هنگام تحویل',
+}
+
 function paidLabel(order: Order): string {
   if (order.status === 'pending_payment') return order.payment?.status === 'failed' ? 'پرداخت ناموفق' : 'در انتظار پرداخت'
   return order.paid ? 'پرداخت شده' : 'پرداخت نشده'
@@ -422,6 +431,10 @@ function QuoteCard({ order }: { order: Order }) {
         <Row key={l.key} label={l.label} value={l.amount < 0 ? `−${money(-l.amount)}` : l.amount ? money(l.amount) : '—'} accent={l.accent || l.amount < 0} />
       ))}
       {order.chargedAmount !== undefined && <Row label="مبلغ دریافت‌شده" value={money(order.chargedAmount)} strong />}
+      {(order.settlements ?? []).map((s, i) => (
+        <Row key={`${s.kind}-${s.at}-${i}`} label={`${SETTLEMENT_LABEL[s.kind]} · ${jalali(s.at, { day: 'numeric', month: 'long' })}`} value={money(s.amount)} />
+      ))}
+      {!!order.amountDue && <Row label="مابه‌التفاوت دریافت‌نشده" value={money(order.amountDue)} strong />}
       {payment?.refId && <Row label="کد پیگیری درگاه" value={<span dir="ltr">{payment.refId}</span>} />}
       {payment?.cardPan && <Row label="کارت" value={<span dir="ltr">{payment.cardPan}</span>} />}
       {payment?.paidAt && <Row label="زمان پرداخت" value={`${jalaliDayTime(payment.paidAt)} · ${jalali(payment.paidAt, { day: 'numeric', month: 'long' })}`} />}

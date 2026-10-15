@@ -188,7 +188,7 @@ function Timeline({ order: o }: { order: Order }) {
 
       {!!o.amountDue && (
         <InfoBanner tone="amber" className="mt-3">
-          <div>پس از شمارش کتاب‌ها مبلغ سفارش {money(o.amountDue)} بیشتر شد. آن را از کیف پول بپردازید یا هنگام تحویل به پیک بدهید.</div>
+          <div>پس از شمارش کتاب‌ها مبلغ سفارش {money(o.amountDue)} بیشتر شد. آن را از کیف پول بپردازید یا هنگام تحویل پرداخت کنید.</div>
           {walletBalance !== undefined && <div className="mt-1 text-[12.5px] font-bold">موجودی کیف پول: {money(walletBalance)}</div>}
           <button
             type="button"

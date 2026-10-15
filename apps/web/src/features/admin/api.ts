@@ -174,8 +174,11 @@ export function useOrderMutations() {
     ])
 
   const setStatus = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: OrderStatus }) => api.patch<Order>(`/admin/orders/${id}/status`, { status }),
+    mutationFn: ({ id, status, confirmCashCollected }: { id: string; status: OrderStatus; confirmCashCollected?: boolean }) =>
+      api.patch<Order>(`/admin/orders/${id}/status`, { status, ...(confirmCashCollected ? { confirmCashCollected: true } : {}) }),
     onSuccess: (_d, { id }) => settle(id),
+    // ruling F-I2: a difference due the sheet had not seen yet (409 DUE_OUTSTANDING) — reload so the sheet shows it and asks
+    onError: (_e, { id }) => settle(id),
   })
 
   const assign = useMutation({
