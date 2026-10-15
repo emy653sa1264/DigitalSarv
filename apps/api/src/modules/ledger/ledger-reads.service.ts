@@ -8,7 +8,7 @@ import { escapeRegex, pageParams, type Paged } from '../../common/utils/paginati
 import { Center, type BankAccount, type BankAccountChange } from '../centers/center.schema.js';
 import { User } from '../users/user.schema.js';
 import type { LedgerEntriesQueryDto } from './dto/ledger.dto.js';
-import { entryView, type EntryRow, type LedgerEntryView } from './ledger-json.js';
+import { entryView, providerLine, type EntryRow, type LedgerEntryView, type ProviderLedgerLine } from './ledger-json.js';
 import { LedgerEntry } from './ledger-entry.schema.js';
 import { nextSettlementYmd, settlementCutoff, weekEndingAt } from './ledger-model.js';
 import { EMPTY_BALANCE, LedgerService, type Balance } from './ledger.service.js';
@@ -20,6 +20,11 @@ export interface ProviderBalanceRow { providerId: string; name: string; business
 export interface ProviderLedgerAdmin { provider: { id: string; name: string; businessName: string; status: string }; balance: Balance; bank: BankAccountView | null; bankHistory: BankChangeView[]; settlement: SettlementInfo }
 export interface BankChangeView { at: string; by: string; old: { sheba: string; holder: string } | null; new: { sheba: string; holder: string } }
 export interface WeeklyStatement { providerId: string; from: string; to: string; opening: number; earned: number; paid: number; closing: number; lines: LedgerEntryView[] }
+export interface ProviderLedgerSelf {
+  balance: { available: number; due: number; pendingCount: number };
+  settlement: { weekday: number; next: string };
+  bank: { sheba: string; holder: string } | null;
+}
 export type ProviderRow = { bankAccountHistory?: BankAccountChange[]; _id: Types.ObjectId; name: string; businessName?: string; status?: string; bankAccount?: BankAccount; userId?: Types.ObjectId };
 
 export const MAX_RANGE_DAYS = 366;
@@ -163,6 +168,31 @@ export class LedgerReadsService {
       this.entryModel.countDocuments(filter),
     ]);
     return { items: await this.views(rows, true), total, page, limit };
+  }
+
+  /** «سرو مجری» → «تسویه»: the caller's own balance, the next settlement day and its masked bank account (R7, R8). */
+  async providerSummary(providerId: string): Promise<ProviderLedgerSelf> {
+    const p = await this.findProvider(providerId);
+    const [b, s] = await Promise.all([this.ledger.balanceOf(providerId), this.settlement()]);
+    return {
+      balance: { available: b.available, due: b.due, pendingCount: b.pendingCount },
+      settlement: { weekday: s.weekday, next: s.next },
+      bank: p.bankAccount?.sheba ? { sheba: maskSheba(p.bankAccount.sheba), holder: p.bankAccount.holder } : null,
+    };
+  }
+
+  /** The caller's own lines, newest first (D32): titles, dates, own amounts and payout bank references only. */
+  async providerEntries(providerId: string, q: { page?: number; limit?: number }): Promise<Paged<ProviderLedgerLine>> {
+    const { page, limit, skip } = pageParams(q);
+    const filter = { providerId: oid(providerId) };
+    const [rows, total] = await Promise.all([
+      this.entryModel.find(filter).sort({ createdAt: -1, _id: -1 }).skip(skip).limit(limit).lean() as Promise<EntryRow[]>,
+      this.entryModel.countDocuments(filter),
+    ]);
+    const payoutIds = rows.filter((r) => r.kind === 'payout').map((r) => r._id);
+    const voids = payoutIds.length ? ((await this.entryModel.find({ kind: 'payout_void', voidOf: { $in: payoutIds } }, { voidOf: 1 }).lean()) as { voidOf?: unknown }[]) : [];
+    const voided = new Set(voids.map((v) => String(v.voidOf)));
+    return { items: rows.map((r) => providerLine(r, voided)), total, page, limit };
   }
 
   /** Admin views: void flags of payouts, author / resolver names (batched, never phones) and (optionally) provider names. */

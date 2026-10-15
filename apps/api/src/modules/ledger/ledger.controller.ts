@@ -5,6 +5,7 @@ import { CurrentUser, RequirePermissions, Roles } from '../../common/auth/decora
 import { JwtAuthGuard, RolesGuard } from '../../common/auth/guards.js';
 import { PermissionsGuard } from '../../common/auth/permissions.guard.js';
 import { PageQueryDto } from '../../common/utils/pagination.js';
+import { CurrentProvider, ProviderScopeGuard } from '../centers/provider-scope.guard.js';
 import { AdjustmentDto, BankAccountDto, CompensationDto, LedgerEntriesQueryDto, PayoutDto, ResolvePendingDto, StatementQueryDto, VoidPayoutDto, WalletQueryDto } from './dto/ledger.dto.js';
 import { LedgerActionsService } from './ledger-actions.service.js';
 import { LedgerReadsService } from './ledger-reads.service.js';
@@ -67,4 +68,16 @@ export class AdminLedgerController {
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
     return body;
   }
+}
+
+/** «سرو مجری» → «تسویه» (contract v4.3 «Provider endpoints»): read-only, always the caller's own provider (§64). */
+@Controller('provider/ledger')
+@UseGuards(JwtAuthGuard, RolesGuard, ProviderScopeGuard)
+@Roles('provider')
+export class ProviderLedgerController {
+  constructor(private readonly reads: LedgerReadsService) {}
+
+  @Get() summary(@CurrentProvider() providerId: string) { return this.reads.providerSummary(providerId); }
+
+  @Get('entries') entries(@CurrentProvider() providerId: string, @Query() q: PageQueryDto) { return this.reads.providerEntries(providerId, q); }
 }
