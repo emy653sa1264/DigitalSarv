@@ -7,6 +7,7 @@ import { PricesScreen } from './PricesScreen'
 import { ProfileScreen } from './ProfileScreen'
 import { ProviderLogin } from './ProviderLogin'
 import { ProviderShell } from './ProviderShell'
+import { SettlementScreen } from './SettlementScreen'
 
 export const providerRoutes: RouteObject[] = [
   { path: '/provider/login', element: <ProviderLogin /> },
@@ -20,6 +21,7 @@ export const providerRoutes: RouteObject[] = [
           { index: true, element: <JobsScreen /> },
           { path: 'jobs/:id', element: <JobScreen /> },
           { path: 'prices', element: <PricesScreen /> },
+          { path: 'settlement', element: <SettlementScreen /> },
           { path: 'notifications', element: <NotificationsScreen /> },
           { path: 'me', element: <ProfileScreen /> },
           { path: '*', element: <Navigate to="/provider" replace /> },

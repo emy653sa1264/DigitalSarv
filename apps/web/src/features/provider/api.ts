@@ -1,9 +1,9 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { queryClient } from '@/lib/query'
-import type { ProviderPriceRow, ProviderPriceView, ProviderSelf } from '@/lib/types'
+import type { PriceComboService, ProviderPriceRow, ProviderPriceView, ProviderSelf } from '@/lib/types'
 
-export type ProviderPriceService = 'bw' | 'color' | 'spiral' | 'addon'
+export type ProviderPriceService = PriceComboService
 /** Provider query keys — everything under `['provider']` so one invalidation refreshes the app. */
 export const providerKeys = {
   all: ['provider'] as const,

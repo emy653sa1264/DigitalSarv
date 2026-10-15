@@ -1,21 +1,19 @@
 import { useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { Chip, InfoBanner } from '@/components/brand'
-import { PROVIDER_STATUS } from '@/lib/provider-labels'
-import type { MatrixRow } from '@/lib/types'
+import { PRICE_SERVICE_LABEL, PRINT_PRICE_SERVICES, PROVIDER_ONLY_SERVICES, PROVIDER_STATUS } from '@/lib/provider-labels'
+import type { MatrixRow, PriceComboService } from '@/lib/types'
 import { useCan } from '@/lib/permissions'
 import { useCenters } from '../../api'
 import { AdminSelect } from '../../components/controls'
 import { QueryView } from '../../components/kit'
 import { SearchInput } from '../../components/table'
-import { usePriceMatrix, type PriceService } from '../../pricing-api'
+import { usePriceMatrix } from '../../pricing-api'
 import { PriceEditDialog } from './PriceEditDialog'
 import { PriceHistoryDialog } from './PriceHistoryDialog'
 import { PriceTable } from './PriceTable'
 
-const SERVICES: { key: PriceService; label: string }[] = [
-  { key: 'bw', label: 'چاپ سیاه‌وسفید' }, { key: 'color', label: 'چاپ رنگی' }, { key: 'spiral', label: 'فنری' }, { key: 'addon', label: 'خدمات جانبی' },
-]
+const SERVICES: { key: PriceComboService; label: string }[] = [...PRINT_PRICE_SERVICES, ...PROVIDER_ONLY_SERVICES].map((key) => ({ key, label: PRICE_SERVICE_LABEL[key] }))
 
 /** «قیمت مجریان»: one provider's price list, edited by the admin or approved from its submissions (separate from the customer layer). */
 export function ProviderLayerTab() {
@@ -25,7 +23,7 @@ export function ProviderLayerTab() {
   const wanted = params.get('provider')
   const list0 = providers.data ?? []
   const providerId = (list0.some((p) => p.id === wanted) ? wanted : list0[0]?.id) ?? ''
-  const [service, setService] = useState<PriceService>('bw')
+  const [service, setService] = useState<PriceComboService>('bw')
   const [search, setSearch] = useState('')
   const [editing, setEditing] = useState<MatrixRow | null>(null)
   const [history, setHistory] = useState<MatrixRow | null>(null)

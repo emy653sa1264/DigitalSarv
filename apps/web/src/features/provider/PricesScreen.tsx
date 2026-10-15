@@ -3,15 +3,13 @@ import { ChevronLeft, Tags } from 'lucide-react'
 import { Chip, EmptyState, LoadingBlock, MobileHeader, ScreenBody, ToneTag } from '@/components/brand'
 import { Input } from '@/components/ui/input'
 import { jalali, money } from '@/lib/format'
-import { NO_PROVIDER_PRICE } from '@/lib/provider-labels'
+import { NO_PROVIDER_PRICE, PRICE_SERVICE_LABEL, PRINT_PRICE_SERVICES, PROVIDER_ONLY_SERVICES } from '@/lib/provider-labels'
 import type { ProviderPriceRow } from '@/lib/types'
 import { useProviderPrices, type ProviderPriceService } from './api'
 import { PriceSheet } from './PriceSheet'
 import { ProviderError } from './ProviderError'
 
-const SERVICES: { key: ProviderPriceService; label: string }[] = [
-  { key: 'bw', label: 'سیاه‌وسفید' }, { key: 'color', label: 'رنگی' }, { key: 'spiral', label: 'فنری' }, { key: 'addon', label: 'خدمات جانبی' },
-]
+const SERVICES: { key: ProviderPriceService; label: string }[] = [...PRINT_PRICE_SERVICES, ...PROVIDER_ONLY_SERVICES].map((key) => ({ key, label: PRICE_SERVICE_LABEL[key] }))
 
 export function PricesScreen() {
   const [service, setService] = useState<ProviderPriceService>('bw')

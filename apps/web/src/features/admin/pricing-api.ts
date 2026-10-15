@@ -2,13 +2,13 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { api } from '@/lib/api'
 import { qk } from '@/lib/query'
 import type {
-  BindingRange, BulkBody, BulkPreview, CompareRow, MatrixRow, Paged, PendingItem, PriceAuditEntry, PriceLayer, PriceRounding, PriceVersionView,
+  BindingRange, BulkBody, BulkPreview, CompareRow, MatrixRow, Paged, PendingItem, PriceAuditEntry, PriceComboService, PriceLayer, PriceRounding, PriceVersionView,
 } from '@/lib/types'
 
 export type PriceService = 'bw' | 'color' | 'spiral' | 'addon'
 export const pk = {
   all: ['admin', 'price-book'] as const,
-  matrix: (service: PriceService, layer: PriceLayer = 'customer', providerId = '') => ['admin', 'price-book', 'matrix', layer, service, providerId] as const,
+  matrix: (service: PriceService | PriceComboService, layer: PriceLayer = 'customer', providerId = '') => ['admin', 'price-book', 'matrix', layer, service, providerId] as const,
   history: (comboKey: string, layer: PriceLayer = 'customer', providerId = '') => ['admin', 'price-book', 'history', layer, comboKey, providerId] as const,
   audit: (page: number) => ['admin', 'price-book', 'audit', page] as const,
   pending: (page: number) => ['admin', 'price-book', 'pending', page] as const,
@@ -39,7 +39,7 @@ interface ReasonArg { id: string; reason: string; confirmNegativeMargin?: boolea
 /** Publish-type calls answer 409 NEGATIVE_MARGIN; `useMarginGuard` shows it, so the global toast stays quiet. */
 const MARGIN_QUIET = { quietCodes: ['NEGATIVE_MARGIN'] }
 
-export const usePriceMatrix = (service: PriceService, layer: PriceLayer = 'customer', providerId?: string) =>
+export const usePriceMatrix = (service: PriceService | PriceComboService, layer: PriceLayer = 'customer', providerId?: string) =>
   useQuery({
     queryKey: pk.matrix(service, layer, providerId),
     enabled: layer === 'customer' || !!providerId,

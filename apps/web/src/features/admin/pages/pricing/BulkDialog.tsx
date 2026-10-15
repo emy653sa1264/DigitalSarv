@@ -7,7 +7,8 @@ import { notify, toast } from '@/components/ui/sonner'
 import { Textarea } from '@/components/ui/textarea'
 import { fa, money } from '@/lib/format'
 import { useCan } from '@/lib/permissions'
-import type { BulkBody, BulkOp, ColorType, PriceLayer, PriceRounding, PrintSize } from '@/lib/types'
+import { PRICE_SERVICE_LABEL, PROVIDER_ONLY_SERVICES } from '@/lib/provider-labels'
+import type { BulkBody, BulkOp, ColorType, PriceComboService, PriceLayer, PriceRounding, PrintSize } from '@/lib/types'
 import { usePapers, useCenters } from '../../api'
 import { AdminSelect, NumInput, Tag, type SelectOption } from '../../components/controls'
 import { Field } from '../../components/FormDialog'
@@ -23,13 +24,14 @@ const SERVICE_OPTIONS: SelectOption[] = [
   { value: 'spiral', label: 'فنری' },
   { value: 'addon', label: 'خدمات جانبی' },
 ]
+const PROVIDER_ONLY_OPTIONS: SelectOption[] = PROVIDER_ONLY_SERVICES.map((s) => ({ value: s, label: PRICE_SERVICE_LABEL[s] }))
 const OP_OPTIONS: SelectOption[] = (Object.keys(BULK_OP_LABEL) as BulkOp[]).map((k) => ({ value: k, label: BULK_OP_LABEL[k] }))
 
-export function BulkDialog({ open, onOpenChange, defaultService, defaultLayer = 'customer', defaultProviderId }: { open: boolean; onOpenChange: (o: boolean) => void; defaultService: PriceService; defaultLayer?: PriceLayer; defaultProviderId?: string }) {
+export function BulkDialog({ open, onOpenChange, defaultService, defaultLayer = 'customer', defaultProviderId }: { open: boolean; onOpenChange: (o: boolean) => void; defaultService: PriceService | PriceComboService; defaultLayer?: PriceLayer; defaultProviderId?: string }) {
   return <BulkForm key={String(open)} open={open} onOpenChange={onOpenChange} defaultService={defaultService} defaultLayer={defaultLayer} defaultProviderId={defaultProviderId} />
 }
 
-function BulkForm({ open, onOpenChange, defaultService, defaultLayer = 'customer', defaultProviderId }: { open: boolean; onOpenChange: (o: boolean) => void; defaultService: PriceService; defaultLayer?: PriceLayer; defaultProviderId?: string }) {
+function BulkForm({ open, onOpenChange, defaultService, defaultLayer = 'customer', defaultProviderId }: { open: boolean; onOpenChange: (o: boolean) => void; defaultService: PriceService | PriceComboService; defaultLayer?: PriceLayer; defaultProviderId?: string }) {
   const { bulkPreview, bulkApply } = usePriceBookMutations()
   const papers = usePapers()
   // a layer needs both the bulk-update and the publish permission (the apply endpoint checks both)
@@ -42,7 +44,7 @@ function BulkForm({ open, onOpenChange, defaultService, defaultLayer = 'customer
   const pid = providerId && (centers.data ?? []).some((c) => c.id === providerId) ? providerId : ''
   const guard = useMarginGuard()
   const isProvider = layer === 'provider'
-  const [service, setService] = useState<PriceService>(defaultService)
+  const [service, setService] = useState<PriceComboService>(defaultService)
   const [size, setSize] = useState(ALL)
   const [colorType, setColorType] = useState(ALL)
   const [paper, setPaper] = useState(ALL)
@@ -117,7 +119,7 @@ function BulkForm({ open, onOpenChange, defaultService, defaultLayer = 'customer
         </DialogHeader>
 
         <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="لایه قیمت">
-          {canCustomer && <Chip size="sm" role="radio" aria-checked={!isProvider} selected={!isProvider} onClick={() => setLayer('customer')}>قیمت مشتری</Chip>}
+          {canCustomer && <Chip size="sm" role="radio" aria-checked={!isProvider} selected={!isProvider} onClick={() => { setLayer('customer'); if (PROVIDER_ONLY_SERVICES.includes(service)) setService('bw') }}>قیمت مشتری</Chip>}
           {canProvider && <Chip size="sm" role="radio" aria-checked={isProvider} selected={isProvider} onClick={() => setLayer('provider')}>قیمت یک مجری</Chip>}
         </div>
         {isProvider && (
@@ -131,7 +133,7 @@ function BulkForm({ open, onOpenChange, defaultService, defaultLayer = 'customer
 
         <div className="grid gap-3 sm:grid-cols-2">
           <Field label="سرویس">
-            <AdminSelect value={service} onValueChange={(v) => setService(v as PriceService)} options={SERVICE_OPTIONS} ariaLabel="سرویس" />
+            <AdminSelect value={service} onValueChange={(v) => setService(v as PriceComboService)} options={isProvider ? [...SERVICE_OPTIONS, ...PROVIDER_ONLY_OPTIONS] : SERVICE_OPTIONS} ariaLabel="سرویس" />
           </Field>
           {hasSize && (
             <Field label="قطع">

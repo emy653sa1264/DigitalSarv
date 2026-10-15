@@ -1,11 +1,12 @@
 import type { ReactNode } from 'react'
 import { Outlet } from 'react-router'
-import { Bell, ClipboardList, Store, Tags } from 'lucide-react'
+import { Bell, ClipboardList, Store, Tags, Wallet } from 'lucide-react'
 import { AppShell, BottomTabs, type TabItem } from '@/components/brand'
 
 export const PROVIDER_TABS: TabItem[] = [
   { to: '/provider', label: 'سفارش‌ها', icon: ClipboardList, end: true },
   { to: '/provider/prices', label: 'قیمت‌های من', icon: Tags },
+  { to: '/provider/settlement', label: 'تسویه', icon: Wallet },
   { to: '/provider/notifications', label: 'اعلان‌ها', icon: Bell },
   { to: '/provider/me', label: 'پروفایل', icon: Store },
 ]
