@@ -1,8 +1,8 @@
 /**
  * In-memory stand-in for the subset of a Mongoose Model the services use: Mongo-style filters
  * (dotted paths, $in/$nin/$ne/$exists/$lt/$lte/$gt/$gte/$elemMatch/$or) and updates
- * ($set/$unset/$inc/$push/$pull/$addToSet, $setOnInsert on upserts), aggregate stages $match/$sort/$limit/$lookup/$group
- * ($sum/$max) and opt-in unique indexes (`fakeModel(docs, { unique })`, E11000 like Mongo). Each update matches and applies without an await in between, so it is
+ * ($set/$unset/$inc/$push/$pull/$addToSet, $setOnInsert on upserts), aggregate stages $match/$sort/$limit/$lookup/$unwind/$addFields/$group
+ * ($sum/$max/$min over expressions) and opt-in unique indexes (`fakeModel(docs, { unique })`, E11000 like Mongo). Each update matches and applies without an await in between, so it is
  * atomic like a real findOneAndUpdate — concurrency tests can rely on it. Test-only helper.
  */
 import { Types } from 'mongoose';
@@ -166,15 +166,43 @@ function sorted(rows: Doc[], spec?: Doc): Doc[] {
   });
 }
 
-/** `$group` with `_id: '$field' | null` and `$sum` (`'$field'` or a constant) / `$max` accumulators. */
+/** Aggregation expressions: `$field` paths, literals, and $add/$subtract/$divide/$floor/$cond/$ifNull/$lt/$lte/$gt/$gte/$eq/$ne/$and/$or/$not (dates compare/subtract as milliseconds). */
+function evalExpr(e: unknown, row: Doc): unknown {
+  if (typeof e === 'string') return e.startsWith('$') ? get(row, e.slice(1)) : e;
+  if (!e || typeof e !== 'object' || Array.isArray(e) || e instanceof Date || e instanceof Types.ObjectId) return e;
+  const entries = Object.entries(e as Doc);
+  if (!entries[0][0].startsWith('$')) return Object.fromEntries(entries.map(([k, v]) => [k, evalExpr(v, row)])); // object literal (e.g. a compound group _id)
+  const [op, arg] = entries[0];
+  const args = (Array.isArray(arg) ? arg : [arg]).map((x) => evalExpr(x, row));
+  const n = (i: number) => norm(args[i]) as number;
+  switch (op) {
+    case '$add': return args.reduce<number>((t, x) => t + (norm(x) as number), 0);
+    case '$subtract': return n(0) - n(1);
+    case '$divide': return n(0) / n(1);
+    case '$floor': return Math.floor(n(0));
+    case '$cond': return args[0] ? args[1] : args[2];
+    case '$ifNull': return args[0] ?? args[1];
+    case '$lt': return n(0) < n(1);
+    case '$lte': return n(0) <= n(1);
+    case '$gt': return n(0) > n(1);
+    case '$gte': return n(0) >= n(1);
+    case '$eq': return eq(args[0], args[1]);
+    case '$ne': return !eq(args[0], args[1]);
+    case '$and': return args.every(Boolean);
+    case '$or': return args.some(Boolean);
+    case '$not': return !args[0];
+    default: throw new Error(`fake-model: unsupported expression ${op}`);
+  }
+}
+
+/** `$group` with `_id` an expression (`'$field'`, null, or a compound object) and `$sum` / `$max` / `$min` accumulators over expressions. */
 function groupStage(rows: Doc[], spec: Doc): Doc[] {
   const { _id: idSpec, ...acc } = spec;
-  const pathOf = (e: unknown) => (typeof e === 'string' && e.startsWith('$') ? e.slice(1) : null);
   const groups = new Map<string, { id: unknown; rows: Doc[] }>();
+  const keyOf = (v: unknown): string => (v && typeof v === 'object' && !(v instanceof Date) && !(v instanceof Types.ObjectId) ? JSON.stringify(Object.entries(v as Doc).map(([k, x]) => [k, keyOf(x)])) : String(norm(v)));
   for (const r of rows) {
-    const p = pathOf(idSpec);
-    const id = p ? (get(r, p) ?? null) : (idSpec ?? null);
-    const k = String(norm(id));
+    const id = idSpec === undefined ? null : (evalExpr(idSpec, r) ?? null);
+    const k = keyOf(id);
     if (!groups.has(k)) groups.set(k, { id, rows: [] });
     groups.get(k)!.rows.push(r);
   }
@@ -182,10 +210,11 @@ function groupStage(rows: Doc[], spec: Doc): Doc[] {
     const out: Doc = { _id: id };
     for (const [name, a] of Object.entries(acc as Record<string, Doc>)) {
       const [fn, expr] = Object.entries(a)[0];
-      const p = pathOf(expr);
-      const val = (r: Doc) => (p ? get(r, p) : expr);
+      const val = (r: Doc) => evalExpr(expr, r);
+      const present = () => rs.map(val).filter((v) => v != null);
       if (fn === '$sum') out[name] = rs.reduce((t, r) => t + (typeof val(r) === 'number' ? (val(r) as number) : 0), 0);
-      else if (fn === '$max') out[name] = rs.map(val).filter((v) => v != null).reduce<unknown>((m, v) => (m == null || (norm(v) as number) > (norm(m) as number) ? v : m), null);
+      else if (fn === '$max') out[name] = present().reduce<unknown>((m, v) => (m == null || (norm(v) as number) > (norm(m) as number) ? v : m), null);
+      else if (fn === '$min') out[name] = present().reduce<unknown>((m, v) => (m == null || (norm(v) as number) < (norm(m) as number) ? v : m), null);
       else throw new Error(`fake-model: unsupported accumulator ${fn}`);
     }
     return out;
@@ -205,6 +234,14 @@ export function runPipeline(docs: Doc[], pipeline: Doc[], joins: Record<string, 
       if (!other) throw new Error(`fake-model: $lookup from "${arg.from}" is not in joins`);
       rows = rows.map((r) => ({ ...r, [arg.as]: other.docs.filter((o) => eq(get(o, arg.foreignField), get(r, arg.localField))).map((o) => clone(o)) }));
     } else if (op === '$group') rows = groupStage(rows, arg);
+    else if (op === '$addFields' || op === '$set') rows = rows.map((r) => ({ ...r, ...Object.fromEntries(Object.entries(arg as Doc).map(([k, v]) => [k, evalExpr(v, r)])) }));
+    else if (op === '$unwind') {
+      const path = String(typeof arg === 'string' ? arg : arg.path).slice(1); // an array field becomes one row per element; missing/empty drops the row
+      rows = rows.flatMap((r) => {
+        const list = get(r, path);
+        return Array.isArray(list) ? list.map((el) => ({ ...r, [path]: clone(el) })) : [];
+      });
+    }
     else throw new Error(`fake-model: unsupported stage ${op}`);
   }
   return rows;

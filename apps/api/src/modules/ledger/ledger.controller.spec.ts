@@ -4,7 +4,7 @@ import { AdminLedgerController } from './ledger.controller.js';
 
 /** D33: every admin ledger route names its permission (grows with Tasks 10–12). */
 export const ADMIN_LEDGER_PERMISSIONS: Record<string, string[]> = {
-  balances: ['ledger_view'], provider: ['ledger_view'], entries: ['ledger_view'], statement: ['ledger_view'], pending: ['ledger_view'],
+  balances: ['ledger_view'], walletReport: ['ledger_view'], walletExport: ['ledger_view'], provider: ['ledger_view'], entries: ['ledger_view'], statement: ['ledger_view'], pending: ['ledger_view'],
   resolve: ['ledger_adjust'], compensation: ['ledger_view'], decideCompensation: ['ledger_adjust'], adjust: ['ledger_adjust'],
   recordPayout: ['payout_record'], voidPayout: ['payout_record'], setBank: ['payout_record'],
 };

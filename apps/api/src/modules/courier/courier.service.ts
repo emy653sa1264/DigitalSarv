@@ -19,7 +19,7 @@ import { CatalogService } from '../catalog/catalog.service.js';
 import { Center } from '../centers/center.schema.js';
 import { Job } from '../dispatch/job.schema.js';
 import { JobsService } from '../dispatch/jobs.service.js';
-import { deliveryOf } from '../orders/delivery-rules.js';
+import { deliveryOf, isCourierDelivery } from '../orders/delivery-rules.js';
 import { NotificationsService } from '../notifications/notifications.service.js';
 import {
   courierDetail,
@@ -178,7 +178,7 @@ export class CourierService {
     const { orders, since } = await this.todaysOrders(courier._id);
     const pickupsToday = orders.filter((o) => eventToday(o, 'picked_up', since) || eventToday(o, 'awaiting_approval', since)).length;
     // paid per delivery the courier made: provider deliveries and handovers at a pickup point / shop are not theirs
-    const deliveriesToday = orders.filter((o) => deliveryOf(o).method === 'courier' && eventToday(o, 'delivered', since)).length;
+    const deliveriesToday = orders.filter((o) => isCourierDelivery(o) && eventToday(o, 'delivered', since)).length;
     // v3.3 «تنظیمات»: the fee per completed task and the settlement weekday
     const { courier: pay } = await this.catalog.getSettings();
     const todayEarnings = (pickupsToday + deliveriesToday) * pay.perTaskFee;

@@ -55,5 +55,6 @@ LedgerEntrySchema.index({ providerId: 1, state: 1, countedAt: 1 });
 LedgerEntrySchema.index({ providerId: 1, createdAt: -1 });
 LedgerEntrySchema.index({ state: 1, createdAt: 1 });
 LedgerEntrySchema.index({ countedAt: 1 });
+LedgerEntrySchema.index({ state: 1, occurredAt: 1 });
 LedgerEntrySchema.index({ voidOf: 1 }, { unique: true, partialFilterExpression: { voidOf: { $type: 'objectId' } } });
 LedgerEntrySchema.index({ jobId: 1 }, { sparse: true });

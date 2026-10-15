@@ -1,20 +1,22 @@
-import { Body, Controller, Get, HttpCode, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
+import type { Response } from 'express';
 import type { AuthUser } from '../../common/auth/auth-user.js';
 import { CurrentUser, RequirePermissions, Roles } from '../../common/auth/decorators.js';
 import { JwtAuthGuard, RolesGuard } from '../../common/auth/guards.js';
 import { PermissionsGuard } from '../../common/auth/permissions.guard.js';
 import { PageQueryDto } from '../../common/utils/pagination.js';
-import { AdjustmentDto, BankAccountDto, CompensationDto, LedgerEntriesQueryDto, PayoutDto, ResolvePendingDto, StatementQueryDto, VoidPayoutDto } from './dto/ledger.dto.js';
+import { AdjustmentDto, BankAccountDto, CompensationDto, LedgerEntriesQueryDto, PayoutDto, ResolvePendingDto, StatementQueryDto, VoidPayoutDto, WalletQueryDto } from './dto/ledger.dto.js';
 import { LedgerActionsService } from './ledger-actions.service.js';
 import { LedgerReadsService } from './ledger-reads.service.js';
 import { PayoutsService } from './payouts.service.js';
+import { WalletService } from './wallet.service.js';
 
 /** «تسویه مجریان» (contract v4.3 «Admin endpoints»; D33 permissions). */
 @Controller('admin/ledger')
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Roles('admin')
 export class AdminLedgerController {
-  constructor(private readonly reads: LedgerReadsService, private readonly actions: LedgerActionsService, private readonly payouts: PayoutsService) {}
+  constructor(private readonly reads: LedgerReadsService, private readonly actions: LedgerActionsService, private readonly payouts: PayoutsService, private readonly wallet: WalletService) {}
 
   @Get('balances') @RequirePermissions('ledger_view')
   balances(@Query() q: PageQueryDto) { return this.reads.balances(q); }
@@ -54,4 +56,15 @@ export class AdminLedgerController {
 
   @Put('providers/:id/bank') @RequirePermissions('payout_record')
   setBank(@Param('id') id: string, @Body() dto: BankAccountDto, @CurrentUser() user: AuthUser) { return this.payouts.setBank(id, dto, user.id); }
+
+  @Get('wallet') @RequirePermissions('ledger_view')
+  walletReport(@Query() q: WalletQueryDto) { return this.wallet.report(q); }
+
+  @Get('wallet/export') @RequirePermissions('ledger_view')
+  async walletExport(@Query() q: WalletQueryDto, @Res({ passthrough: true }) res: Response): Promise<string> {
+    const { filename, body } = await this.wallet.csv(q);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    return body;
+  }
 }

@@ -248,3 +248,5 @@ OrderSchema.index({ customerId: 1, createdAt: -1 });
 /** The dispatch reconcile scan: live statuses (`$in`) oldest first, `_id` as the paging tie-break. */
 OrderSchema.index({ status: 1, createdAt: 1, _id: 1 });
 OrderSchema.index({ 'payment.authority': 1 }, { sparse: true });
+/** The wallet report (v4.3 D32): orders with a delivered / pickup timeline entry in a date range. */
+OrderSchema.index({ 'timeline.status': 1, 'timeline.at': 1 });

@@ -47,6 +47,22 @@ describe('fake-model (v4.3 additions)', () => {
     ]);
     expect(await m.aggregate([{ $match: { p: 'a' } }, { $group: { _id: null, total: { $sum: '$n' } } }])).toEqual([{ _id: null, total: 5 }]);
   });
+  it('aggregate: $unwind, $addFields with expressions, compound $group _id, $min/$max and $sum over an expression', async () => {
+    const d = (n: number) => new Date(n * 1000);
+    const m = fakeModel([
+      { _id: 1, c: 10, tl: [{ s: 'x', at: d(5) }, { s: 'x', at: d(1) }, { s: 'y', at: d(9) }] },
+      { _id: 2, q: 7, tl: [{ s: 'x', at: d(20) }] },
+      { _id: 3, tl: [] },
+    ]);
+    const r = await m.aggregate([
+      { $unwind: '$tl' },
+      { $match: { 'tl.s': 'x' } },
+      { $group: { _id: '$_id', first: { $min: '$tl.at' }, c: { $max: '$c' }, q: { $max: '$q' } } },
+      { $addFields: { wk: { $cond: [{ $lt: ['$first', d(10)] }, 0, { $add: [1, { $floor: { $divide: [{ $subtract: ['$first', d(10)] }, 5000] } }] }] } } },
+      { $group: { _id: { wk: '$wk' }, n: { $sum: 1 }, amount: { $sum: { $ifNull: ['$c', '$q'] } } } },
+    ]);
+    expect(r).toEqual([{ _id: { wk: 0 }, n: 1, amount: 10 }, { _id: { wk: 3 }, n: 1, amount: 7 }]);
+  });
   it('opt-in unique indexes: create and upsert throw E11000 with the keyPattern; a missing value is not indexed', async () => {
     const m = fakeModel([], { unique: [['key'], ['slot']] });
     await m.create({ key: 'a', slot: 's1' });

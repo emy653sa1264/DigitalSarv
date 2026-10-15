@@ -22,6 +22,14 @@ export function deliveryOf(order: { delivery?: Partial<OrderDelivery> | null }):
   };
 }
 
+/**
+ * A delivery the courier is paid for: only method `courier` (provider deliveries and handovers at a pickup point / shop are
+ * not theirs; orders saved before v4.2 read as courier). Shared by «سرو پیک» `deliveriesToday` and the wallet report.
+ */
+export function isCourierDelivery(order: { delivery?: Partial<OrderDelivery> | null }): boolean {
+  return deliveryOf(order).method === 'courier';
+}
+
 /** Where a customer-pickup order is handed over (the provider shop wins once the admin moved it there). */
 export function placeOf(d: OrderDelivery): PlaceSnapshot | undefined {
   if (d.method !== 'customer_pickup') return undefined;

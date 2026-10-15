@@ -1354,15 +1354,17 @@ ProviderLedgerAdmin { provider: { id, name, businessName, status }, balance: Led
 WeeklyStatement     { providerId, from, to /* yyyy-mm-dd, inclusive */, opening, earned, paid, closing, lines: LedgerEntryView[] }
 CompensationItem    { jobId, orderId, orderCode, providerId, providerName, cause, stage: 'in_production' | 'after_production', at, payoutBasis: number | null }
 WalletRow           { from, to, orders, charged, providerCost, courierTasks, courierCost, share }
-WalletReport        { from, to, perTaskFee, rows: WalletRow[], total: WalletRow }
+WalletReport        { from, to, perTaskFee, rows: WalletRow[], total: WalletRow, pendingCredits /* credits awaiting an amount that occurred in the range; in no row */ }
 ```
 `WeeklyStatement`: `opening` = balance counted before `from`, `earned` = Σ credits/adjustments counted in the week,
 `paid` = −Σ payouts/voids counted in the week, `closing` = opening + earned − paid; `lines` = the week's counted entries.
 CSV columns: «از تاریخ, تا تاریخ, سفارش‌های تحویل‌شده, دریافتی از مشتریان, سهم مجریان, کارهای پیک, دستمزد پیک (برآورد), سهم دیجیتال سرو», one row per
-week and «جمع»; ASCII digits and Gregorian dates.
+week and «جمع»; ASCII digits and Gregorian dates; UTF-8 BOM, CRLF; text cells are quoted and a cell starting with `= + - @` is prefixed with `'`.
+The range is validated like the other date params (400 «بازه‌ی تاریخ حداکثر ۳۶۶ روز است», «تاریخ شروع نباید بعد از تاریخ پایان باشد»). The report holds no customer or bank data.
 
-**Wallet formula (D32, R9):** `charged` = Σ `chargedAmount` (fallback `quote.total`) of paid orders whose last `delivered`
-timeline entry is in the row; `providerCost` = Σ counted credits + adjustments by `countedAt`; `courierTasks` = home
+**Wallet formula (D32, R9):** `charged` = Σ `chargedAmount` (what was actually charged: total after discounts, including fees; fallback
+`quote.total`) of paid orders that are not cancelled/refunded whose last `delivered`
+timeline entry is in the row; `orders` counts them; `providerCost` = Σ counted credits + adjustments (incl. compensation) by `countedAt` (payouts/voids are cash movements, pending credits have no amount); `courierTasks` = home
 pickups (`picked_up` / `awaiting_approval` timeline) + courier deliveries (`delivery.method = 'courier'`, `delivered`
 timeline) in the row; `courierCost` = `courierTasks × courier.perTaskFee` (current setting, an estimate); `share` =
 `charged − providerCost − courierCost`. Rows are the settlement weeks intersecting [from, to] (first/last clipped).

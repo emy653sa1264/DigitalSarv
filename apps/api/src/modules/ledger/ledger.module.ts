@@ -7,12 +7,13 @@ import { LedgerReadsService } from './ledger-reads.service.js';
 import { LedgerNotifier } from './ledger-notifier.js';
 import { LedgerService } from './ledger.service.js';
 import { PayoutsService } from './payouts.service.js';
+import { WalletService } from './wallet.service.js';
 
 /** v4.3 provider ledger and settlement (M4). Uses the global models; imports nothing from dispatch/orders (no cycles). */
 @Module({
   imports: [CatalogModule, NotificationsModule],
   controllers: [AdminLedgerController],
-  providers: [LedgerService, LedgerReadsService, LedgerActionsService, LedgerNotifier, PayoutsService],
+  providers: [LedgerService, LedgerReadsService, LedgerActionsService, LedgerNotifier, PayoutsService, WalletService],
   exports: [LedgerService],
 })
 export class LedgerModule {}
