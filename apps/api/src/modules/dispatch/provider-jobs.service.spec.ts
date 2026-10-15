@@ -224,7 +224,12 @@ describe('ProviderJobsService — fix round 1', () => {
   });
   it('M1: QC is not ticked once the order is packing', async () => {
     const s = setup({ status: 'in_production' }, { status: 'packing' });
-    await expect(s.svc.setQc(String(P), s.id, 0, true)).rejects.toThrow();
+    await expect(s.svc.setQc(String(P), s.id, 0, true)).rejects.toMatchObject({ status: 409 });
     expect(s.orders.docs[0].qc).toEqual([false]);
+  });
+  it('re-ticking a row that is already ticked is a no-op, not a 409 (matched, not modified)', async () => {
+    const s = setup({ status: 'in_production' }, { status: 'preparing', qc: [true] });
+    s.orders.updateOne.mockResolvedValueOnce({ matchedCount: 1, modifiedCount: 0, upsertedCount: 0 } as never);
+    await expect(s.svc.setQc(String(P), s.id, 0, true)).resolves.toMatchObject({ qc: { done: [true] } });
   });
 });

@@ -117,6 +117,17 @@ describe('v4.2 dispatch settings and pickup points', () => {
     const cat = await svc.getCatalog();
     expect(cat.pickupPoints).toEqual([{ id: res.pickupPoints[0].id, name: 'دفتر مرکزی', address: 'تهران، ونک', phone: '02191002233', hours: '۹ تا ۱۸' }]);
   });
+  it('dispatch timings are saved per field: a concurrent save of another timing is not reverted', async () => {
+    const { svc, settings } = setup({ settings: [{ _id: 'main', prices: {}, dispatch: { leadHours: 48 } }] });
+    const real = settings.updateOne.getMockImplementation()!;
+    // another admin saves autoCompleteHours between this save's read and its write
+    settings.updateOne.mockImplementationOnce((async (...a: unknown[]) => {
+      settings.docs[0].dispatch.autoCompleteHours = 6;
+      return (real as (...x: unknown[]) => unknown)(...a);
+    }) as never);
+    await svc.updateSettings({ dispatch: { responseTimeoutMinutes: 30 } } as never);
+    expect(settings.docs[0].dispatch).toMatchObject({ leadHours: 48, responseTimeoutMinutes: 30, autoCompleteHours: 6 });
+  });
   it('duplicate pickup point ids are refused', async () => {
     const { svc } = setup({ settings: [{ _id: 'main', prices: {} }] });
     const p = { id: 'pp1', name: 'الف', address: 'آدرس', phone: '02100000000', hours: '', on: true };

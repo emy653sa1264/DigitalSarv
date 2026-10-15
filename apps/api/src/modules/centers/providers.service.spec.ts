@@ -16,8 +16,9 @@ function setup() {
   const papers = fakeModel([{ _id: new Types.ObjectId(), key: 'glossy200', name: 'گلاسه ۲۰۰ گرم' }]);
   const versions = fakeModel([]);
   const sessions = { revokeUser: vi.fn(async () => undefined) };
-  const svc = new ProvidersService(centers as never, orders as never, users as never, zones as never, papers as never, versions as never, sessions as never);
-  return { svc, centers, orders, users, versions, sessions, zoneId, id: String(centers.docs[0]._id) };
+  const jobs = fakeModel([]);
+  const svc = new ProvidersService(centers as never, orders as never, users as never, zones as never, papers as never, versions as never, sessions as never, jobs as never);
+  return { svc, centers, orders, users, versions, sessions, jobs, zoneId, id: String(centers.docs[0]._id) };
 }
 
 describe('ProvidersService', () => {
@@ -117,6 +118,22 @@ describe('ProvidersService', () => {
     await svc.linkLogin(id, '09122222222');
     await expect(svc.remove(id)).resolves.toEqual({ ok: true });
     expect(users.docs.find((u) => u.phone === '09122222222')!.role).toBe('customer');
+  });
+  it('I5: refuses (409) to delete a provider any job names as producer or delivery provider, in any status, or whose price snapshot an order carries', async () => {
+    const { svc, jobs, orders, centers, id } = setup();
+    const P = new Types.ObjectId(id);
+    for (const ref of [{ providerId: P, status: 'completed' }, { deliveryProviderId: P, status: 'out_for_delivery' }, { deliveryProviderId: P, status: 'cancelled' }]) {
+      jobs.docs.length = 0;
+      jobs.docs.push({ _id: new Types.ObjectId(), ...ref });
+      await expect(svc.remove(id)).rejects.toThrow('این مجری در سفارش‌های ثبت‌شده (تولید یا ارسال) سابقه دارد؛ به‌جای حذف آن را غیرفعال کنید');
+    }
+    jobs.docs.length = 0;
+    orders.docs.push({ _id: new Types.ObjectId(), status: 'delivered', providerPricing: { providerId: id } });
+    await expect(svc.remove(id)).rejects.toMatchObject({ status: 409 });
+    expect(centers.docs).toHaveLength(1);
+    orders.docs.length = 0;
+    jobs.docs.push({ _id: new Types.ObjectId(), providerId: new Types.ObjectId(), status: 'completed' }); // another provider's job
+    await expect(svc.remove(id)).resolves.toEqual({ ok: true });
   });
   it('self view never exposes admin notes, commission, rating or the login', async () => {
     const { svc, id } = setup();

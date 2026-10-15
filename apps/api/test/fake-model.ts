@@ -86,6 +86,15 @@ function unsetPath(doc: Doc, path: string) {
   if (parent && typeof parent === 'object') delete (parent as Doc)[keys[keys.length - 1]];
 }
 
+const UPDATE_OPERATORS = ['$set', '$unset', '$inc', '$push', '$pull', '$addToSet', '$setOnInsert'];
+
+/** Like Mongo: one path in two operators (or as parent and child, `a` vs `a.b`) is a conflict error, also with `$setOnInsert`. */
+export function assertNoConflict(update: Doc) {
+  const paths = UPDATE_OPERATORS.flatMap((op) => Object.keys((update[op] as Doc) ?? {}));
+  const dup = paths.find((x, i) => paths.some((y, j) => i !== j && (x === y || x.startsWith(`${y}.`) || y.startsWith(`${x}.`))));
+  if (dup) throw Object.assign(new Error(`fake-model: Updating the path '${dup}' would create a conflict`), { code: 40 });
+}
+
 export function applyUpdate(doc: Doc, update: Doc) {
   for (const [k, v] of Object.entries((update.$set as Doc) ?? {})) setPath(doc, k, v);
   for (const k of Object.keys((update.$unset as Doc) ?? {})) unsetPath(doc, k);
@@ -195,6 +204,7 @@ export function fakeModel(docs: Doc[] = []) {
     return d;
   };
   const updateOne = async (filter: Doc, update: Doc, options?: { upsert?: boolean }) => {
+    assertNoConflict(update);
     await Promise.resolve();
     const d = first(filter);
     if (!d && options?.upsert) {
@@ -228,6 +238,7 @@ export function fakeModel(docs: Doc[] = []) {
       return d ? out(d) : null;
     })),
     findByIdAndUpdate: vi.fn(async (id: unknown, update: Doc) => {
+      assertNoConflict(update);
       await Promise.resolve();
       const d = docs.find((x) => eq(x._id, id));
       if (!d) return null;
@@ -246,6 +257,7 @@ export function fakeModel(docs: Doc[] = []) {
       return [...new Map(values.map((v) => [String(norm(v)), v])).values()];
     }),
     findOneAndUpdate: vi.fn(async (filter: Doc, update: Doc, options?: { upsert?: boolean }) => {
+      assertNoConflict(update);
       await Promise.resolve();
       const d = first(filter);
       if (!d && options?.upsert) return out(insertFromUpsert(filter, update));
@@ -255,6 +267,7 @@ export function fakeModel(docs: Doc[] = []) {
     }),
     updateOne: vi.fn(updateOne),
     updateMany: vi.fn(async (filter: Doc, update: Doc) => {
+      assertNoConflict(update);
       await Promise.resolve();
       const hits = docs.filter((d) => matches(d, filter));
       hits.forEach((d) => applyUpdate(d, update));

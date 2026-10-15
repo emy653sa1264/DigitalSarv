@@ -391,6 +391,7 @@ export class DispatchService {
     if (!updated) throw raced();
     // the order follows the job, ordered by the job's revision (a late write never replaces a newer provider's fields)
     await this.jobs.mirrorProvider(updated);
+    if (prev && job.status === 'in_production') await this.jobs.resetQc(job.orderId);
     if (prev) await this.notifier.provider('job_withdrawn', prev, updated);
     if (oldDp && String(oldDp) !== String(prev) && String(oldDp) !== String(delivery.deliveryProviderId)) await this.notifier.provider('job_withdrawn', oldDp, updated);
     await this.notifier.provider('job_assigned', p._id, updated);

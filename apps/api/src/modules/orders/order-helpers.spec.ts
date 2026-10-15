@@ -145,6 +145,19 @@ describe('v4.2 customer order view', () => {
     const json = customerOrderJson({ id: 'o', code: '10300', centerId: 'c', providerPricing: { providerId: 'c' }, status: 'packing' }, { status: 'ready', label: 'آماده شد' });
     expect(json).toEqual({ id: 'o', code: '10300', status: 'packing', delivery: { method: 'courier', homePickup: true, note: '' }, fulfillment: { status: 'ready', label: 'آماده شد' } });
   });
+  it('M3: never the provider shop id or providerRev; a Digital Sarv point keeps its id', () => {
+    const shop = { id: '6a0000000000000000000001', name: 'چاپ نگین', address: 'کاج', phone: '021', hours: '', kind: 'provider' };
+    const point = { id: 'pp1', name: 'دفتر', address: 'ونک', phone: '0', hours: '', kind: 'point' };
+    const json = customerOrderJson(
+      { id: 'o', providerRev: 4, delivery: { method: 'customer_pickup', homePickup: false, note: '', pickupAt: 'provider', pickupPoint: point, providerShop: shop } },
+      { status: 'ready_for_pickup', label: 'آماده تحویل', place: shop as never },
+    ) as { delivery: { providerShop: { id: string; name: string }; pickupPoint: { id: string } }; fulfillment: { place: { id: string; name: string } } };
+    expect(json).not.toHaveProperty('providerRev');
+    expect(json.delivery.providerShop).toMatchObject({ id: '', name: 'چاپ نگین', address: 'کاج' });
+    expect(json.fulfillment.place).toMatchObject({ id: '', name: 'چاپ نگین' });
+    expect(json.delivery.pickupPoint.id).toBe('pp1');
+    expect(JSON.stringify(json)).not.toContain(shop.id);
+  });
   it('a reorder keeps the customer-pickup choice', () => {
     const d = draftFromOrder({ children: [], services: [], planId: 'bronze', urgent: false,
       delivery: { method: 'customer_pickup', homePickup: false, note: '', pickupAt: 'point', pickupPoint: { id: 'pp1', name: 'x', address: '', phone: '', hours: '', kind: 'point' } } } as never);

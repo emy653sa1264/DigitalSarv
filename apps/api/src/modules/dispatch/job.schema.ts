@@ -49,7 +49,7 @@ export class Job {
   @Prop({ type: String, enum: PICKUP_AT }) pickupAt?: PickupAt;
   @Prop({ type: JobAssignmentSchema }) assignment?: JobAssignment;
   @Prop({ type: Number, default: 0 }) attempts: number;
-  /** Monotonic revision, +1 on every `cas`; orders the job→order provider mirror (`Order.providerRev`). */
+  /** Monotonic revision, +1 on every provider-field `cas` (`mirror: true`); orders the job→order provider mirror (`Order.providerRev`). */
   @Prop({ type: Number, default: 0 }) rev: number;
   /** The `rev` last mirrored onto the order (bookkeeping for reconcile: `rev > mirroredRev` = stale). */
   @Prop({ type: Number }) mirroredRev?: number;
@@ -70,6 +70,10 @@ export class Job {
   @Prop({ type: Date }) deadlineNotifiedAt?: Date;
   @Prop({ type: Date }) lateAlertedAt?: Date;
   @Prop({ type: Date }) unavailableAlertedAt?: Date;
+  /** Q26: created by reconcile for an order placed before v4.2 — its late / deadline alerts were stamped at creation. */
+  @Prop({ type: Boolean }) backfilled?: boolean;
+  /** I4: set by every `cas` that bumps `rev`, cleared once that revision is mirrored onto the order (reconcile's scan). */
+  @Prop({ type: Boolean }) mirrorPending?: boolean;
   @Prop({ type: Date, required: true }) orderCreatedAt: Date;
 
   createdAt: Date;
@@ -87,3 +91,5 @@ JobSchema.index({ releasedProviderIds: 1 });
 JobSchema.index({ orderCreatedAt: -1 });
 JobSchema.index({ 'assignment.assignedAt': 1 }, { sparse: true });
 JobSchema.index({ status: 1, updatedAt: -1 });
+JobSchema.index({ updatedAt: -1 });
+JobSchema.index({ mirrorPending: 1, _id: 1 }, { sparse: true });

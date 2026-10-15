@@ -93,13 +93,18 @@ export class NotificationsService {
       if (!template) return;
       const audience = audienceOf(event);
       const text = template.text + suffix;
+      // one recipient at a time: a failed insert for one user never silences the rest
       for (const id of ids) {
-        const userId = new Types.ObjectId(id);
-        await this.inbox.create({
-          userId, orderId: new Types.ObjectId(String(ref.orderId)), orderCode: ref.orderCode, event, audience, url: ref.url, text, read: false,
-          ...(ref.jobId ? { jobId: new Types.ObjectId(String(ref.jobId)) } : {}),
-        });
-        void this.pushToUser(userId, { title: PUSH_TITLE[audience], body: text, url: ref.url, tag: ref.tag });
+        try {
+          const userId = new Types.ObjectId(id);
+          await this.inbox.create({
+            userId, orderId: new Types.ObjectId(String(ref.orderId)), orderCode: ref.orderCode, event, audience, url: ref.url, text, read: false,
+            ...(ref.jobId ? { jobId: new Types.ObjectId(String(ref.jobId)) } : {}),
+          });
+          void this.pushToUser(userId, { title: PUSH_TITLE[audience], body: text, url: ref.url, tag: ref.tag });
+        } catch (err) {
+          this.logger.warn(`notification ${event} for order ${ref.orderCode} to ${id} failed: ${(err as Error).message}`);
+        }
       }
     } catch (err) {
       this.logger.warn(`notification ${event} for order ${ref.orderCode} failed: ${(err as Error).message}`);

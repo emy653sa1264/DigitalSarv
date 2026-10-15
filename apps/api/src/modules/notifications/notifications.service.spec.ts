@@ -148,6 +148,21 @@ describe('v4.2 provider / admin notifications (§68, D19)', () => {
     await expect(svc.notify('job_late', [otherId], { orderId, orderCode: '1', url: '/', tag: 't' })).resolves.toBeUndefined();
   });
 
+  it('a failed inbox insert for one recipient never silences the others', async () => {
+    const { svc, templates, inbox } = setup();
+    templates.docs.push(tpl('job_late', 'دیر شد'));
+    inbox.create.mockRejectedValueOnce(new Error('insert failed'));
+    await svc.notify('job_late', [customerId, otherId], { orderId, orderCode: '1', url: '/admin/dispatch', tag: 't' });
+    expect(inbox.docs.map((d) => String(d.userId))).toEqual([String(otherId)]);
+  });
+  it('mine/read refuses ids that are not object ids (400 in Persian)', async () => {
+    const { plainToInstance } = await import('class-transformer');
+    const { validate } = await import('class-validator');
+    const { ReadNotificationsDto } = await import('./notifications.controller.js');
+    const errors = await validate(plainToInstance(ReadNotificationsDto, { ids: ['nope'] }));
+    expect(errors[0].constraints).toMatchObject({ isMongoId: 'شناسه اعلان معتبر نیست' });
+    expect(await validate(plainToInstance(ReadNotificationsDto, { ids: [String(orderId)] }))).toEqual([]);
+  });
   it('each role sees only its own audience in its inbox', async () => {
     const { svc, templates } = setup();
     templates.docs.push(tpl('job_timeout', 'مجری پاسخ نداد'));

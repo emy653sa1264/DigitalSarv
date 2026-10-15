@@ -531,3 +531,18 @@ describe('delivery defaults and pricing history (I2, I3, M5-M9)', () => {
     expect(s.jobsModel.docs).toHaveLength(0);
   });
 });
+
+describe('M3 final review — reassign during production', () => {
+  it('M2: a reassign from in_production unticks the order’s QC checklist (status-guarded)', async () => {
+    const s = setup();
+    const G = new Types.ObjectId();
+    s.centers.docs.push({ ...s.centers.docs[2], _id: G, name: 'آزمون G', userId: new Types.ObjectId() });
+    const id = await withJob(s);
+    await s.svc.assign(id, { providerId: String(C) } as never, String(ADMIN));
+    Object.assign(s.jobsModel.docs[0], { status: 'in_production' });
+    Object.assign(s.orders.docs[0], { status: 'qc', qc: [true] });
+    await s.svc.reassign(id, { providerId: String(G), reason: 'تغییر', confirmMissingPrice: true } as never, String(ADMIN));
+    expect(s.orders.docs[0].qc).toEqual([false]);
+    expect(s.orders.docs[0].status).toBe('qc');
+  });
+});

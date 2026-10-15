@@ -17,14 +17,14 @@ export type Actor = 'production' | 'delivery' | 'courier' | 'admin' | 'system';
 export type ByRole = 'admin' | 'provider' | 'courier' | 'customer' | 'system';
 
 /** A provider holds the job (it can be reassigned or taken back). */
-export const HELD: JobStatus[] = ['assigned', 'accepted', 'in_production'];
+export const HELD: readonly JobStatus[] = ['assigned', 'accepted', 'in_production'];
 /** Not finished yet. */
-export const LIVE: JobStatus[] = ['unassigned', 'assigned', 'accepted', 'in_production', 'ready', 'out_for_delivery', 'ready_for_pickup'];
-export const AFTER_READY: JobStatus[] = ['ready', 'out_for_delivery', 'ready_for_pickup', 'delivered', 'completed'];
+export const LIVE: readonly JobStatus[] = ['unassigned', 'assigned', 'accepted', 'in_production', 'ready', 'out_for_delivery', 'ready_for_pickup'];
+export const AFTER_READY: readonly JobStatus[] = ['ready', 'out_for_delivery', 'ready_for_pickup', 'delivered', 'completed'];
 /** A separate delivery provider sees the job from `ready` on. */
-export const DELIVERY_VISIBLE: JobStatus[] = ['ready', 'out_for_delivery', 'delivered', 'completed'];
+export const DELIVERY_VISIBLE: readonly JobStatus[] = ['ready', 'out_for_delivery', 'delivered', 'completed'];
 /** The production provider may download the order's files in these statuses (§65). */
-export const FILE_STATUSES: JobStatus[] = ['assigned', 'accepted', 'in_production', 'ready', 'ready_for_pickup'];
+export const FILE_STATUSES: readonly JobStatus[] = ['assigned', 'accepted', 'in_production', 'ready', 'ready_for_pickup'];
 
 export interface FlowCtx { method: DeliveryMethod; pickupAt?: PickupAt }
 interface Step { from: JobStatus; to: JobStatus; who: Actor[]; when?: (c: FlowCtx) => boolean }

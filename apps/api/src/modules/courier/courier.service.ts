@@ -148,7 +148,9 @@ export class CourierService {
         ...(o.pickup?.lng != null ? { lng: o.pickup.lng } : {}),
       };
       const job = info.get(o.id as string);
-      const homePickup = deliveryOf(o).homePickup;
+      const { homePickup, method } = deliveryOf(o);
+      // only a courier delivery is the courier's delivery leg (the provider or a pickup point may hand over a home-pickup order)
+      const courierDelivers = method === 'courier';
       const pickupPending = homePickup && PICKUP_PENDING.includes(o.status) && (o.pickup?.date ?? today) <= today;
       const pickedToday = eventToday(o, 'picked_up', since) || eventToday(o, 'awaiting_approval', since);
       if (pickupPending || (homePickup && pickedToday)) {
@@ -156,8 +158,8 @@ export class CourierService {
       }
       // D15: a courier job that is ready waits at the provider — collect it there, then deliver
       const atProvider = o.status === 'packing' && job?.status === 'ready' && job.deliveryMethod === 'courier';
-      const deliveryPending = o.status === 'out_for_delivery' || atProvider;
-      if (deliveryPending || eventToday(o, 'delivered', since)) {
+      const deliveryPending = (courierDelivers && o.status === 'out_for_delivery') || atProvider;
+      if (deliveryPending || (courierDelivers && eventToday(o, 'delivered', since))) {
         tasks.push({ ...base, id: `${o.id}-delivery`, kind: 'delivery', done: !deliveryPending, ...(atProvider && job?.place ? { from: job.place } : {}) });
       }
     }
@@ -175,7 +177,8 @@ export class CourierService {
     const courier = await this.forUser(user);
     const { orders, since } = await this.todaysOrders(courier._id);
     const pickupsToday = orders.filter((o) => eventToday(o, 'picked_up', since) || eventToday(o, 'awaiting_approval', since)).length;
-    const deliveriesToday = orders.filter((o) => eventToday(o, 'delivered', since)).length;
+    // paid per delivery the courier made: provider deliveries and handovers at a pickup point / shop are not theirs
+    const deliveriesToday = orders.filter((o) => deliveryOf(o).method === 'courier' && eventToday(o, 'delivered', since)).length;
     // v3.3 «تنظیمات»: the fee per completed task and the settlement weekday
     const { courier: pay } = await this.catalog.getSettings();
     const todayEarnings = (pickupsToday + deliveriesToday) * pay.perTaskFee;
@@ -258,6 +261,11 @@ export class CourierService {
     const { order } = await this.assignedOrder(user, orderId);
     if (!['out_for_delivery', 'packing'].includes(order.status)) {
       throw new BadRequestException('این سفارش هنوز آماده تحویل نیست');
+    }
+    // the delivery leg is the courier's only for a courier delivery (the job decides; an order without one reads its own)
+    const job = await this.jobs.findOne({ orderId: order._id, seq: 1 }, { deliveryMethod: 1 }).lean();
+    if ((job?.deliveryMethod ?? deliveryOf(order).method) !== 'courier') {
+      throw new BadRequestException('تحویل این سفارش با پیک نیست');
     }
     if (order.status === 'packing') pushStatus(order, 'out_for_delivery');
     pushStatus(order, 'delivered');

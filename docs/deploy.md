@@ -211,6 +211,14 @@ Logs use the json-file driver, rotated at 10 MB × 5 files per container. For up
 
 Health endpoints: `/healthz` (nginx), `/api/health` (API liveness, used by the container healthcheck), `/api/health/ready` (Mongo + Redis).
 
+## 10b. Dispatch scheduler (v4.2)
+
+Every API instance runs the dispatch tick at boot and then once a minute: assignment response timeouts, deadline reminders, late and provider-unavailable alerts, auto-complete and the reconcile pass (missing jobs, jobs that must follow a cancelled or delivered order, unmirrored provider fields). Each effect is a conditional (compare-and-set) write and only the instance that wins it notifies, so several instances are correct. They do multiply the load, though.
+
+- One API container (the default compose file): leave `DISPATCH_SCHEDULER` unset.
+- Several API instances: set `DISPATCH_SCHEDULER=0` on all but one of them to save load. At least one instance must run it, otherwise timeouts, alerts and auto-complete stop.
+- First deploy of v4.2: the reconcile pass creates jobs for orders placed before v4.2 within the first ticks (bounded per tick). These backfilled jobs have their late and deadline alerts stamped at creation, so they send no alert flood. Centre-less legacy orders that were already past `registered` become «تخصیص‌نیافته» jobs that an admin assigns, or closes from the order page.
+
 ## 11. Security checklist
 
 - [ ] `.env.production` is `chmod 600`, never committed (it is in `.gitignore`), and every secret is freshly generated (`openssl rand -hex …`).

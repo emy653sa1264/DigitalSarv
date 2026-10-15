@@ -6,7 +6,7 @@ import { assertObjectId } from '../../common/utils/object-id.js';
 import { Center } from '../centers/center.schema.js';
 import { CatalogService } from '../catalog/catalog.service.js';
 import { deliveryOf, placeOf } from '../orders/delivery-rules.js';
-import { needsQcGuard, qcComplete, qcLabelsOf, timelineEntry, type CustomerFulfillment } from '../orders/order-helpers.js';
+import { BEFORE_QC_DONE, needsQcGuard, qcComplete, qcLabelsOf, timelineEntry, type CustomerFulfillment } from '../orders/order-helpers.js';
 import { Order, type OrderDelivery, type OrderDocument } from '../orders/order.schema.js';
 import { DispatchNotifier } from './dispatch-notifier.js';
 import {
@@ -14,7 +14,7 @@ import {
   type Actor, type ByRole, type FlowCtx, type JobAction, type JobHistoryEntry, type MirrorSource,
 } from './job-model.js';
 import { Job, JobDocument } from './job.schema.js';
-import { jobSeed, orderNeedsJob, type JobSource } from './job-seed.js';
+import { JOB_ORDER_STATUSES, isBackfill, jobSeed, orderNeedsJob, type JobSource } from './job-seed.js';
 
 export interface MoveOptions { actor: Actor; byRole: ByRole; by?: string; reason?: string; reasonCode?: RejectReason; providerId?: string; assignmentId?: string }
 export interface GiveBackOptions { byRole: ByRole; by?: string; reason?: string; reasonCode?: RejectReason; providerId?: string; assignmentId?: string }
@@ -60,15 +60,20 @@ export class JobsService {
 
   // ------------------------------------------------------------ creation and reads
 
-  /** Creates the order's job once — an idempotent, race-safe upsert on `{orderId, seq: 1}`. Never throws. */
-  async ensureJob(order: JobSource): Promise<JobDocument | null> {
+  /**
+   * Creates the order's job once — an idempotent, race-safe upsert on `{orderId, seq: 1}`. Never throws.
+   * `viaReconcile`: the safety net creates it; an order placed long before is a backfill (Q26, no alert flood).
+   */
+  async ensureJob(order: JobSource, opts: { viaReconcile?: boolean } = {}): Promise<JobDocument | null> {
     if (!orderNeedsJob(order.status)) return null;
     const key = { orderId: order._id, seq: 1 };
     try {
       try {
         const { dispatch } = await this.catalog.getSettings();
         await this.warnIfCentreUnusable(order);
-        await this.jobs.updateOne(key, { $setOnInsert: jobSeed(order, dispatch, new Date()) }, { upsert: true });
+        const now = new Date();
+        const backfill = isBackfill(order, now, !!opts.viaReconcile);
+        await this.jobs.updateOne(key, { $setOnInsert: jobSeed(order, dispatch, now, { backfill }) }, { upsert: true });
       } catch (err) {
         if ((err as { code?: number }).code !== 11000) throw err;
       }
@@ -173,7 +178,7 @@ export class JobsService {
     };
     const paths = [
       'status', ...Object.keys(spec.set ?? {}), ...Object.keys(spec.unset ?? {}), ...Object.keys(spec.addToSet ?? {}),
-      ...(spec.mirror ? ['rev'] : []), ...Object.keys(spec.inc ?? {}), 'history', ...Object.keys(spec.push ?? {}),
+      ...(spec.mirror ? ['rev', 'mirrorPending'] : []), ...Object.keys(spec.inc ?? {}), 'history', ...Object.keys(spec.push ?? {}),
     ];
     // dev assertion: one path in two operators (or twice, or as parent and child: `a` vs `a.b`) is a Mongo conflict error
     // at best, a silent drop at worst
@@ -182,7 +187,8 @@ export class JobsService {
     return this.jobs.findOneAndUpdate(
       filter,
       {
-        $set: { status: to, ...spec.set },
+        // a provider-field write leaves the order mirror pending until `mirrorProvider` lands it (reconcile scans the flag)
+        $set: { status: to, ...spec.set, ...(spec.mirror ? { mirrorPending: true } : {}) },
         ...(spec.unset ? { $unset: spec.unset } : {}),
         ...(spec.addToSet ? { $addToSet: spec.addToSet } : {}),
         ...(spec.mirror || spec.inc ? { $inc: { ...spec.inc, ...(spec.mirror ? { rev: 1 } : {}) } } : {}),
@@ -209,6 +215,8 @@ export class JobsService {
       if (!res.matchedCount) this.logger.debug(`order ${String(job.orderId)}: mirror rev ${rev} skipped (a newer revision landed)`);
       // bookkeeping only (the mirror is satisfied either way): not a status change, so it does not go through `cas`
       await this.jobs.updateOne({ _id: job._id, $or: [{ mirroredRev: { $exists: false } }, { mirroredRev: { $lt: rev } }] }, { $set: { mirroredRev: rev } });
+      // done with this revision; a newer one (rev moved on) keeps its own flag
+      await this.jobs.updateOne({ _id: job._id, rev, mirrorPending: true }, { $unset: { mirrorPending: 1 } });
     } catch (err) {
       this.logger.error(`order ${String(job.orderId)}: provider mirror failed (reconcile repairs): ${(err as Error).message}`);
     }
@@ -238,7 +246,9 @@ export class JobsService {
     const now = new Date();
     if (to === 'delivered') await this.mirrorOrder(order, 'delivered', true);
     const action: JobAction = to === 'accepted' ? 'accepted' : to === 'completed' ? 'completed' : 'status';
-    const updated = await this.cas(job, to, { actor: o.actor, set: stampsFor(to, now), history: this.entry(job, action, to, o, now) });
+    // the flow was checked on this delivery method / pickup place: a concurrent delivery change makes the move a lost race
+    const flowGuard = { ...(job.deliveryMethod ? { deliveryMethod: job.deliveryMethod } : {}), pickupAt: job.pickupAt ?? null };
+    const updated = await this.cas(job, to, { actor: o.actor, extraGuard: flowGuard, set: stampsFor(to, now), history: this.entry(job, action, to, o, now) });
     if (!updated) throw raced();
     if (to !== 'delivered') await this.mirrorOrder(order, ORDER_MIRROR[to], false);
     if (to === 'accepted') await this.notifier.customer('assigned', order);
@@ -285,7 +295,7 @@ export class JobsService {
    */
   async giveBack(job: JobDocument, kind: GiveBackKind, o: GiveBackOptions): Promise<JobDocument> {
     if (o.providerId && String(job.providerId) !== o.providerId) throw new NotFoundException(NOT_FOUND);
-    const from: JobStatus[] = kind === 'rejected' || kind === 'timeout' ? ['assigned'] : kind === 'failed' ? ['accepted', 'in_production'] : HELD;
+    const from: readonly JobStatus[] = kind === 'rejected' || kind === 'timeout' ? ['assigned'] : kind === 'failed' ? ['accepted', 'in_production'] : HELD;
     if (!from.includes(job.status) || !job.providerId) {
       throw kind === 'rejected' ? new BadRequestException('این سفارش منتظر پاسخ شما نیست') : badMove(job.status, 'unassigned');
     }
@@ -306,12 +316,30 @@ export class JobsService {
     });
     if (!updated) throw raced();
     await this.mirrorProvider(updated);
+    if (job.status === 'in_production') await this.resetQc(job.orderId);
     if (kind === 'timeout' || kind === 'unassigned') await this.notifier.provider('job_withdrawn', providerId, updated);
     if (job.deliveryProviderId && String(job.deliveryProviderId) !== String(providerId)) await this.notifier.provider('job_withdrawn', job.deliveryProviderId, updated);
     if (kind === 'rejected') await this.notifier.admins('job_rejected', updated);
     if (kind === 'timeout') await this.notifier.admins('job_timeout', updated);
     if (kind === 'failed') await this.notifier.admins('job_failed', updated);
     return updated;
+  }
+
+  /**
+   * M2: the producer left the job during production — its QC ticks must not let the next provider skip the checklist.
+   * Unticks the order's checklist while the order is still before QC sign-off (status-guarded). Never throws.
+   */
+  async resetQc(orderId: unknown): Promise<void> {
+    try {
+      const o = await this.orders.findById(orderId, { qcLabels: 1, status: 1 }).lean();
+      if (!o || !BEFORE_QC_DONE.includes(o.status)) return;
+      await this.orders.updateOne(
+        { _id: orderId, status: { $in: BEFORE_QC_DONE } },
+        { $set: { qc: qcLabelsOf(o).map(() => false) }, $inc: { __v: 1 } },
+      );
+    } catch (err) {
+      this.logger.warn(`order ${String(orderId)}: QC reset failed: ${(err as Error).message}`);
+    }
   }
 
   // ------------------------------------------------------------ order events
@@ -388,10 +416,10 @@ export class JobsService {
   }
 
   /**
-   * Re-mirrors the provider from the job (the source of truth) onto the orders of jobs whose `rev` is ahead of the
-   * `mirroredRev` bookkeeping. The stale rows are chosen in the database (`$expr`) before `$limit`, so healthy rows
-   * never hide them; each repair writes the complete field set and clears the row from the next scan.
-   * Pages by `_id`, bounded to 10 pages per run. Never throws.
+   * Re-mirrors the provider from the job (the source of truth) onto the orders of jobs whose provider write is not
+   * mirrored yet (`mirrorPending`, set by every `cas` that bumps `rev`, sparse-indexed) — in every status, so a job that
+   * was delivered, completed or cancelled before the repair still fixes its order (M4 reads `providerPricing`). Each
+   * repair writes the complete field set and clears the flag. Pages by `_id`, bounded to 10 pages per run. Never throws.
    */
   private async reconcileMirror(limit: number): Promise<number> {
     let fixed = 0;
@@ -399,7 +427,7 @@ export class JobsService {
       let after: Types.ObjectId | undefined;
       for (let page = 0; page < 10; page++) {
         const rows = await this.jobs.aggregate<JobDocument & MirrorSource & { _id: Types.ObjectId }>([
-          { $match: { status: { $in: LIVE }, rev: { $gt: 0 }, $expr: { $gt: ['$rev', '$mirroredRev'] }, ...(after ? { _id: { $gt: after } } : {}) } },
+          { $match: { mirrorPending: true, ...(after ? { _id: { $gt: after } } : {}) } },
           { $sort: { _id: 1 } },
           { $limit: limit },
         ]);
@@ -416,6 +444,50 @@ export class JobsService {
     return fixed;
   }
 
+  /** Where the «missing job» scan resumes (per instance): a run that hit its page bound continues there next tick. */
+  private missingCursor?: { createdAt: Date; _id: Types.ObjectId };
+
+  /**
+   * Live orders without a job. Matches `status $in` the live statuses on the `{status, createdAt}` index, oldest first,
+   * one bounded page (`limit`) at a time — the `$lookup` runs only on that page — up to 10 pages per run; the cursor
+   * carries over to the next run, so a large live backlog is covered across ticks and never hides a missing job.
+   */
+  private async missingJobs(limit: number): Promise<JobSource[]> {
+    const out: JobSource[] = [];
+    let cursor = this.missingCursor;
+    for (let page = 0; page < 10; page++) {
+      const rows = await this.orders.aggregate<JobSource & { j: unknown[] }>([
+        {
+          $match: {
+            status: { $in: JOB_ORDER_STATUSES },
+            ...(cursor ? { $or: [{ createdAt: { $gt: cursor.createdAt } }, { createdAt: cursor.createdAt, _id: { $gt: cursor._id } }] } : {}),
+          },
+        },
+        { $sort: { createdAt: 1, _id: 1 } },
+        { $limit: limit },
+        { $lookup: { from: 'jobs', localField: '_id', foreignField: 'orderId', as: 'j' } },
+      ]);
+      let full = false;
+      for (const r of rows) {
+        if (!r.j.length) {
+          if (out.length >= limit) {
+            full = true; // the next run resumes at this order
+            break;
+          }
+          out.push(r);
+        }
+        cursor = { createdAt: r.createdAt, _id: r._id };
+      }
+      if (full) break;
+      if (rows.length < limit) {
+        cursor = undefined; // reached the newest order: the next run starts over
+        break;
+      }
+    }
+    this.missingCursor = cursor;
+    return out;
+  }
+
   /**
    * Safety net (boot + every minute). Both scans are filtered in the database before `limit`, so a backlog of healthy
    * rows can never hide the rows that need work: orders without a job get one; live jobs follow cancelled / delivered orders.
@@ -423,14 +495,8 @@ export class JobsService {
   async reconcile(limit = 500): Promise<{ created: number; cancelled: number; delivered: number; mirrored: number }> {
     const res = { created: 0, cancelled: 0, delivered: 0, mirrored: 0 };
     try {
-      const missing = await this.orders.aggregate<JobSource>([
-        { $match: { status: { $nin: ['pending_payment', 'cancelled', 'delivered'] } } },
-        { $sort: { createdAt: 1 } },
-        { $lookup: { from: 'jobs', localField: '_id', foreignField: 'orderId', as: 'j' } },
-        { $match: { j: { $size: 0 } } },
-        { $limit: limit },
-      ]);
-      for (const o of missing) if (await this.ensureJob(o)) res.created++;
+      const missing = await this.missingJobs(limit);
+      for (const o of missing) if (await this.ensureJob(o, { viaReconcile: true })) res.created++;
       const stale = await this.jobs.aggregate<{ orderId: Types.ObjectId; o: { status: OrderStatus }[] }>([
         { $match: { status: { $in: LIVE } } },
         { $lookup: { from: 'orders', localField: 'orderId', foreignField: '_id', as: 'o' } },

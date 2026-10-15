@@ -7,6 +7,7 @@ import { fa } from '../../common/utils/fa.js';
 import { assertObjectId } from '../../common/utils/object-id.js';
 import { normalizePhone } from '../../common/utils/phone.js';
 import { Paper } from '../catalog/schemas/paper.schema.js';
+import { Job } from '../dispatch/job.schema.js';
 import { TERMINAL_STATUSES } from '../orders/order-helpers.js';
 import { Order } from '../orders/order.schema.js';
 import { PriceVersion } from '../price-book/schemas/price-version.schema.js';
@@ -32,6 +33,7 @@ export class ProvidersService {
     @InjectModel(Paper.name) private readonly papers: Model<Paper>,
     @InjectModel(PriceVersion.name) private readonly versions: Model<PriceVersion>,
     private readonly sessions: TokenVerifier,
+    @InjectModel(Job.name) private readonly jobs: Model<Job>,
   ) {}
 
   async list(): Promise<ProviderAdmin[]> {
@@ -63,11 +65,19 @@ export class ProvidersService {
     return this.get(id);
   }
 
-  /** 409 while open orders reference it or it has price history (deactivate instead); deletes, then unlinks the login. */
+  /**
+   * 409 while open orders reference it, it has price history, or any job (any status) names it as producer or
+   * delivery provider or any order carries its price snapshot (M4 payouts) — deactivate instead; deletes, then unlinks the login.
+   */
   async remove(id: string): Promise<{ ok: true }> {
     const c = await this.find(id);
     const open = await this.orders.countDocuments({ centerId: c._id, status: { $nin: TERMINAL_STATUSES } });
     if (open) throw new ConflictException(`این مجری ${fa(open)} سفارش باز دارد؛ ابتدا سفارش‌ها را به مجری دیگری بدهید`);
+    const [job, priced] = await Promise.all([
+      this.jobs.exists({ $or: [{ providerId: c._id }, { deliveryProviderId: c._id }, { 'providerPricing.providerId': String(c._id) }] }),
+      this.orders.exists({ 'providerPricing.providerId': String(c._id) }),
+    ]);
+    if (job || priced) throw new ConflictException('این مجری در سفارش‌های ثبت‌شده (تولید یا ارسال) سابقه دارد؛ به‌جای حذف آن را غیرفعال کنید');
     if (await this.versions.exists({ $or: [{ layer: 'provider', providerId: c._id }, { baseProviderId: c._id }] })) {
       throw new ConflictException('این مجری قیمت ثبت‌شده دارد؛ به‌جای حذف آن را غیرفعال کنید');
     }

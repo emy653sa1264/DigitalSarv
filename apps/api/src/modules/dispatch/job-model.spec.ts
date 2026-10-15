@@ -165,3 +165,25 @@ describe('tabs (§55, §57)', () => {
     expect(matches(delivering, providerTabFilter('ready', P))).toBe(true);
   });
 });
+
+describe('job → order provider fields and backfill detection (final wave)', () => {
+  it('orderProviderFields: held → centre, snapshot, method, shop only while pickupAt = provider; released → unset', async () => {
+    const { orderProviderFields } = await import('./job-model.js');
+    const P = new Types.ObjectId();
+    const shop = { id: String(P), name: 'نگین', kind: 'provider' };
+    expect(orderProviderFields({ providerId: P, providerPricing: { a: 1 }, deliveryMethod: 'customer_pickup', pickupAt: 'provider', providerShop: shop })).toEqual({
+      set: { centerId: P, providerPricing: { a: 1 }, 'delivery.method': 'customer_pickup', 'delivery.pickupAt': 'provider', 'delivery.providerShop': shop }, unset: {},
+    });
+    expect(orderProviderFields({ deliveryMethod: 'courier', providerShop: shop })).toEqual({
+      set: { 'delivery.method': 'courier' }, unset: { centerId: 1, providerPricing: 1, 'delivery.providerShop': 1 },
+    });
+  });
+  it('isBackfill: only a reconcile-created job of an order older than an hour', async () => {
+    const { isBackfill, BACKFILL_AFTER_MS } = await import('./job-seed.js');
+    const now = new Date('2026-10-16T12:00:00Z');
+    const old = { createdAt: new Date(now.getTime() - BACKFILL_AFTER_MS - 1) };
+    expect(isBackfill(old, now, true)).toBe(true);
+    expect(isBackfill(old, now, false)).toBe(false);
+    expect(isBackfill({ createdAt: new Date(now.getTime() - BACKFILL_AFTER_MS) }, now, true)).toBe(false);
+  });
+});

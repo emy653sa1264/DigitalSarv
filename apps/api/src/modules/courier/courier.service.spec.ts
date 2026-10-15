@@ -158,4 +158,45 @@ describe('v4.2 courier tasks', () => {
     o.docs[0].status = 'registered';
     await expect(svc.collected(user, String(ready._id))).rejects.toThrow('این سفارش هنوز آماده تحویل نیست');
   });
+  describe('I1: the delivery leg is the courier’s only for a courier delivery', () => {
+    const at = (status: string) => [{ status, label: '', at: new Date() }];
+    it('a home-pickup order delivered by the provider is no pending delivery task for the pickup courier', async () => {
+      const school = order({ status: 'out_for_delivery', children: [{ name: 'سارا', books: 9 }], delivery: { method: 'provider', homePickup: true, note: '' } });
+      const { svc } = setup([{ _id: courierId, userId }], [school], [], [{ _id: new Types.ObjectId(), orderId: school._id, seq: 1, status: 'out_for_delivery', deliveryMethod: 'provider', providerId: P, deliveryProviderId: P }], [provider]);
+      expect((await svc.tasks(user)).filter((t) => t.kind === 'delivery')).toEqual([]);
+    });
+    it('a delivery made by the provider or at a pickup point is neither a done task nor paid', async () => {
+      const byProvider = order({ status: 'delivered', delivery: { method: 'provider', homePickup: true, note: '' }, timeline: at('delivered') });
+      const atPoint = order({ status: 'delivered', delivery: { method: 'customer_pickup', homePickup: true, note: '', pickupAt: 'point' }, timeline: at('delivered') });
+      const byCourier = order({ status: 'delivered', delivery: { method: 'courier', homePickup: true, note: '' }, timeline: at('delivered') });
+      const { svc, o } = setup([{ _id: courierId, userId, earningsWeekBase: 0 }], [byProvider, atPoint, byCourier]);
+      // the fake model has no array paths (`timeline.at`): today's list is the three orders
+      const list = [byProvider, atPoint, byCourier].map((d) => ({ ...d, id: String(d._id) }));
+      o.find.mockImplementation((() => ({ sort: async () => list })) as never);
+      const tasks = await svc.tasks(user);
+      expect(tasks.filter((t) => t.kind === 'delivery').map((t) => t.orderId)).toEqual([String(byCourier._id)]);
+      const me = await svc.me(user);
+      expect(me.stats.deliveriesToday).toBe(1);
+      expect(me.earnings.today).toBe(75000);
+    });
+    it('delivered: 400 for a provider- or pickup-method order; COD is booked only for a courier delivery', async () => {
+      const prov = order({ status: 'out_for_delivery', payMethod: 'cod', paid: false, quote: { total: 5000, totalBooks: 0 }, delivery: { method: 'provider', homePickup: true, note: '' } });
+      const pick = order({ status: 'packing', payMethod: 'cod', paid: false, quote: { total: 5000, totalBooks: 0 }, delivery: { method: 'customer_pickup', homePickup: true, note: '', pickupAt: 'point' } });
+      const cour = order({ status: 'out_for_delivery', payMethod: 'cod', paid: false, quote: { total: 5000, totalBooks: 0 }, delivery: { method: 'courier', homePickup: true, note: '' } });
+      const docs = [prov, pick, cour].map((d) => Object.assign(d, { save: vi.fn(async () => d) }));
+      const { svc, o, jobsSvc } = setup([{ _id: courierId, userId }], docs, [], [
+        { _id: new Types.ObjectId(), orderId: prov._id, seq: 1, status: 'out_for_delivery', deliveryMethod: 'provider', deliveryProviderId: P },
+        { _id: new Types.ObjectId(), orderId: cour._id, seq: 1, status: 'out_for_delivery', deliveryMethod: 'courier' },
+      ]);
+      o.findById.mockImplementation(((id: unknown) => docs.find((d) => String(d._id) === String(id)) ?? null) as never);
+      await expect(svc.delivered(user, String(prov._id))).rejects.toThrow('تحویل این سفارش با پیک نیست');
+      await expect(svc.delivered(user, String(pick._id))).rejects.toThrow('تحویل این سفارش با پیک نیست');
+      expect(prov).toMatchObject({ status: 'out_for_delivery', paid: false });
+      expect(pick).toMatchObject({ status: 'packing', paid: false });
+      expect(jobsSvc.onOrderDelivered).not.toHaveBeenCalled();
+      await svc.delivered(user, String(cour._id));
+      expect(cour).toMatchObject({ status: 'delivered', paid: true, paidVia: 'cod', chargedAmount: 5000 });
+      expect(jobsSvc.onOrderDelivered).toHaveBeenCalledWith(cour._id, 'courier', String(userId));
+    });
+  });
 });

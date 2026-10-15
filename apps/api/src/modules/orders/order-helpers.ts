@@ -18,12 +18,22 @@ import type { Order, OrderChild, OrderService, PlaceSnapshot } from './order.sch
 
 export interface CustomerFulfillment { status: JobStatus; label: string; place?: PlaceSnapshot }
 
-/** The customer's view of an order (contract v4.2): never the provider id or provider prices. */
+/** A provider shop as the customer sees it: name, address, phone and hours — never the provider's id (M3). */
+function customerPlace<T extends PlaceSnapshot | undefined>(p: T): T {
+  return (p && p.kind === 'provider' ? { ...p, id: '' } : p) as T;
+}
+
+/** The customer's view of an order (contract v4.2): never the provider id, provider prices or the mirror bookkeeping. */
 export function customerOrderJson(order: unknown, fulfillment?: CustomerFulfillment): Record<string, unknown> {
   const o = order as { toJSON?: () => Record<string, unknown> };
   const json = typeof o.toJSON === 'function' ? o.toJSON() : { ...(order as Record<string, unknown>) };
-  const { centerId: _center, providerPricing: _pricing, ...rest } = json;
-  return { ...rest, delivery: deliveryOf(rest as { delivery?: never }), ...(fulfillment ? { fulfillment } : {}) };
+  const { centerId: _center, providerPricing: _pricing, providerRev: _rev, ...rest } = json;
+  const delivery = deliveryOf(rest as { delivery?: never });
+  return {
+    ...rest,
+    delivery: { ...delivery, ...(delivery.providerShop ? { providerShop: customerPlace(delivery.providerShop) } : {}), ...(delivery.pickupPoint ? { pickupPoint: customerPlace(delivery.pickupPoint) } : {}) },
+    ...(fulfillment ? { fulfillment: { ...fulfillment, ...(fulfillment.place ? { place: customerPlace(fulfillment.place) } : {}) } } : {}),
+  };
 }
 
 export function timelineEntry(status: OrderStatus, at: Date = new Date()) {

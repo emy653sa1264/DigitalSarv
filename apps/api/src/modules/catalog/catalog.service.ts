@@ -266,9 +266,11 @@ export class CatalogService {
       const v = dto.printAddons?.[f];
       if (typeof v === 'boolean') addonSets[`printAddons.${f}`] = v;
     }
+    // dispatch timings likewise per field: saving one timing never reverts another admin's concurrent change
+    const dispatchSets = Object.fromEntries(Object.entries(defined(dto.dispatch ?? {})).map(([k, v]) => [`dispatch.${k}`, v]));
     await this.settings.updateOne(
       { _id: SETTINGS_ID },
-      { $set: { ops, courier, checklists, dispatch, pickupPoints, ...addonSets }, $setOnInsert: { prices: { ...DEFAULT_PRICES }, urgentEnabled: true } },
+      { $set: { ops, courier, checklists, pickupPoints, ...addonSets, ...dispatchSets }, $setOnInsert: { prices: { ...DEFAULT_PRICES }, urgentEnabled: true } },
       { upsert: true },
     );
     await this.invalidate();

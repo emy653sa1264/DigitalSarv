@@ -118,7 +118,7 @@ export const NOTIFICATIONS = [
   { event: 'extras', channel: 'push', text: 'خدمات اضافی سفارش در حال انجام است.', on: false },
   { event: 'qc', channel: 'push', text: 'سفارش در حال کنترل کیفیت است.', on: false },
   { event: 'packing', channel: 'push', text: 'سفارش آماده شده است.', on: true },
-  { event: 'out_for_delivery', channel: 'push', text: 'پیک در مسیر شماست.', on: true },
+  { event: 'out_for_delivery', channel: 'push', text: 'سفارش شما در مسیر ارسال است.', on: true }, // neutral: a courier or the provider delivers
   { event: 'delivered', channel: 'push', text: 'سفارش تحویل داده شد.', on: true },
   // cash-on-delivery and unpaid orders are cancelled too, so the refund is worded conditionally
   { event: 'cancelled', channel: 'push', text: 'سفارش شما لغو شد؛ اگر مبلغی پرداخت کرده بودید، به کیف پول شما برگشت.', on: true },

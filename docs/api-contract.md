@@ -255,7 +255,7 @@ interface Courier { id: string; userId?: string; name: string; phone: string; co
 | Zones | `GET/POST /admin/zones` · `PATCH/DELETE /admin/zones/:id` — `{ id, name, feeNote, feePct, sla, agentsCount }` |
 | Centers | `GET/POST /admin/centers` · `PATCH/DELETE /admin/centers/:id` — `{ id, name, zone, capacityPerDay, processingHours, commissionPct, rating, address, lat?, lng? }` |
 | CMS | `GET /cms` (public: `{ key, label, on, order }[]`) · `GET /admin/cms` · `PATCH /admin/cms/:id {label?, on?, order?}` (v3.2: `POST /admin/cms` removed — sections are fixed by the landing code) |
-| Notifications | `GET /admin/notifications` · `PATCH /admin/notifications/:id {text?, on?}` — `{ id, event: OrderStatus, channel: 'sms' | 'push', text, on }` |
+| Notifications | `GET /admin/notifications` · `PATCH /admin/notifications/:id {text?, on?}` — `{ id, event: NotificationEvent, channel: 'sms' | 'push', text, on }` (v4.2: `NotificationEvent = OrderStatus | DispatchEvent`) |
 
 ### Admin status transitions
 
@@ -432,7 +432,7 @@ Approved items (owner's numbering): 1 flyer sides · 3 cartridge type · 5 repai
   | GET | `/notifications/push/key` | — (public) | `{ publicKey: string \| null }` |
   | POST | `/notifications/push/subscribe` | `{ endpoint, keys: { p256dh, auth } }` | `{ ok: true }` (upsert by endpoint, owned by the caller) |
   | POST | `/notifications/push/unsubscribe` | `{ endpoint }` | `{ ok: true }` |
-- Admin (item 22): `POST /admin/notifications { event: OrderStatus, text, on? }` (409 if the event already has a template) and `DELETE /admin/notifications/:id`; `PATCH` unchanged.
+- Admin (item 22): `POST /admin/notifications { event: NotificationEvent, text, on? }` (409 if the event already has a template) and `DELETE /admin/notifications/:id`; `PATCH` unchanged.
 - Web: the header bell shows the unread count and opens `/app/notifications` (tap an item → mark read → `/app/track/<orderId>`, «همه خوانده شد»). Profile «اعلان‌ها» row → «فعال‌سازی اعلان‌های مرورگر» (permission + subscribe through `public/sw.js`, which handles `push` and `notificationclick`). Admin «اعلان‌ها» says «پیامک فقط برای کد ورود ارسال می‌شود».
 
 ### «تنظیمات» (item 19) and courier pay (item 20)
@@ -856,7 +856,23 @@ type CancelStage = 'before_production' | 'in_production' | 'after_production';
   `registered|confirmed|courier_assigned|picked_up|awaiting_approval → accepted`, `preparing|binding|extras|qc → in_production`,
   `packing → ready`, `out_for_delivery → out_for_delivery`, history action `migrated`, and **no** provider price snapshot.
   A migrated job has no `providerPricing`, so a separate delivery-provider fee set on it later is recorded only in the `delivery_changed` history entry (`deliveryFee`, for M4).
-  The job is the source of truth for the provider: every job write bumps `Job.rev`, and the order's `centerId` / `providerPricing` / provider-dependent `delivery` are mirrored by revision (`Order.providerRev`); reconcile repairs a stale mirror.
+- **Migration (Q26).** A job the reconcile pass creates for an order placed more than 60 minutes earlier is a
+  *backfill* (`backfilled: true`): its deadline (`createdAt + lead`) is usually past already, so `lateAlertedAt` and
+  `deadlineNotifiedAt` are stamped at creation, and the first deploy sends no `job_late` / `job_deadline` flood. Jobs
+  created at placement or payment verification are never backfills. Centre-less legacy orders already past
+  `registered` become `unassigned` jobs: an admin assigns them (or closes the order from the order page), and they get
+  no late or reminder alerts. An admin deadline change re-arms both alerts.
+- The reconcile «missing job» scan matches `status $in` the live order statuses on the `{status, createdAt}` index,
+  oldest first, one bounded page at a time (the jobs `$lookup` runs only on that page), at most 10 pages per run; the
+  next run resumes where a bounded run stopped.
+- The job is the source of truth for the provider: only provider-field writes (assign, reassign, unassign/give-back,
+  delivery change: `mirror: true`) bump `Job.rev` (status moves never do), and the order's `centerId` /
+  `providerPricing` / provider-dependent `delivery` are mirrored by revision (`Order.providerRev`). Such a write sets
+  `Job.mirrorPending` until the mirror lands; reconcile repairs every pending mirror **in any job status** (also
+  delivered, completed and cancelled jobs, since M4 reads `providerPricing`).
+- Every API instance runs the dispatch tick (boot + every minute). Effects are compare-and-set safe and only the winner
+  notifies; `DISPATCH_SCHEDULER=0` switches the timer off. With several instances, set it on all but one to save load
+  (docs/deploy.md).
 - `rejected` and `failed` are **history statuses**: the job itself returns to `unassigned` at once (D21) and the
   provider joins `releasedProviderIds`. `attempts` counts assignments.
 - `deadline` = order `createdAt` + `dispatch.leadHours` (`dispatch.urgentLeadHours` for urgent orders); `priority`
@@ -886,6 +902,11 @@ type CancelStage = 'before_production' | 'in_production' | 'after_production';
 | ready_for_pickup → delivered | production provider (at its shop), admin | |
 | delivered → completed | admin, system (`dispatch.autoCompleteHours` after delivery; 0 = off) | |
 | any live → cancelled | the order was cancelled | `cancel.stage` recorded (M4 compensation) |
+
+Every move is a compare-and-set on the status, the assignment id, the acting holder **and the delivery method /
+pickup place it was checked on**: a concurrent delivery change makes it a lost race (409). A job that leaves its
+producer while `in_production` (failed, unassigned, reassigned) unticks the order's QC checklist (while the order is
+before QC sign-off), so the next provider runs the checklist again.
 
 **Order status mapping (D10 — forward only, along the v1 happy path; never out of `pending_payment`,
 `awaiting_approval`, `delivered`, `cancelled`):**
@@ -941,7 +962,9 @@ interface OrderDelivery {
 `centerId`** and never `providerPricing`. They gain `delivery: OrderDelivery` and
 `fulfillment?: { status: JobStatus; label: string; place?: PlaceSnapshot }` (labels: در صف تولید · تأیید شد · در حال
 تولید · آماده شد · آماده تحویل حضوری · در مسیر تحویل · تحویل شد · لغو شد; `place` = the provider shop when
-`pickupAt = 'provider'`, else the chosen point). Admin and courier views are unchanged.
+`pickupAt = 'provider'`, else the chosen point). A provider shop (`kind: 'provider'`) in `delivery.providerShop`,
+`delivery.pickupPoint` or `fulfillment.place` carries `id: ''` (never the provider id); `providerRev` is never
+serialized. Admin and courier views are unchanged.
 
 ### Provider price snapshot at assignment (§40, §52–53, §66)
 
@@ -1019,9 +1042,10 @@ interface DispatchJobRow {
 type JobAction = 'created' | 'migrated' | 'assigned' | 'reassigned' | 'accepted' | 'rejected' | 'timeout' | 'unassigned' | 'status'
   | 'failed' | 'delivery_changed' | 'updated' | 'cancelled' | 'completed';
 interface JobHistoryView { at: string; action: JobAction; status: JobStatus; label: string; providerName?: string; deliveryProviderName?: string;
-  byName?: string; byRole: 'admin' | 'provider' | 'courier' | 'customer' | 'system'; reason?: string; reasonCode?: RejectReason; override?: boolean; stage?: CancelStage }
+  byName?: string; byRole: 'admin' | 'provider' | 'courier' | 'customer' | 'system'; reason?: string; reasonCode?: RejectReason; override?: boolean; stage?: CancelStage;
+  changes?: { priority?: [string, string]; deadline?: [string, string] } }   // action `updated`: [before, after]
 interface AssignmentView { providerId: string; providerName: string; assignedByName?: string; assignedAt: string; acceptedAt?: string;
-  rejectedAt?: string; completedAt?: string; endedAt?: string; reason?: string; reasonCode?: RejectReason; override?: boolean;
+  rejectedAt?: string; completedAt?: string; endedAt?: string; reason?: string; reasonCode?: RejectReason; override?: boolean; overrideReason?: string;
   outcome: 'pending' | 'active' | 'rejected' | 'timeout' | 'withdrawn' | 'failed' | 'cancelled' | 'completed' }   // §75
 interface DispatchJobDetail extends DispatchJobRow {
   homePickup: boolean; sheets: number; units: Partial<Record<ProviderService, number>>; requirements: string[];
@@ -1034,13 +1058,14 @@ interface ProviderCheck { key: 'capability' | 'status' | 'available' | 'hours' |
 interface EligibilityRow {
   providerId: string; name: string; businessName: string; status: ProviderStatus; current: boolean;
   eligible: boolean; assignable: boolean; checks: ProviderCheck[];
-  price: { subtotal: number | null; missing: string[]; lines: { label: string; unitPrice: number; quantity: number; subtotal: number }[] };
+  priced: boolean; priceMissing: string[];   // always visible
+  price: { subtotal: number | null; missing: string[]; lines: { label: string; unitPrice: number; quantity: number; subtotal: number }[] } | null;   // null without provider_price_view (Q18)
   capacityLeft: { sheets: number | null; jobs: number | null; perService: { service: ProviderService; left: number }[] };
   hourlySheets?: number; openNow: boolean | null; activeJobs: number; hasLogin: boolean;
-  canDeliver: boolean; deliveryFee: number; allowCustomerPickup: boolean;
+  canDeliver: boolean; deliveryFee: number | null /* null without provider_price_view */; allowCustomerPickup: boolean;
 }
 interface Eligibility { jobId: string; requirements: string[]; eligible: EligibilityRow[]; others: EligibilityRow[];
-  deliveryProviders: { id: string; name: string; deliveryFee: number; zoneOk: boolean }[] }
+  deliveryProviders: { id: string; name: string; deliveryFee: number | null; zoneOk: boolean; status: ProviderStatus; reason?: string /* busy: «مجری فعلاً مشغول است» */ }[] }
 interface ProviderPerformance {
   providerId: string; name: string; assigned: number; accepted: number; rejected: number; timeouts: number; failed: number;
   rejectReasons: { code: RejectReason; label: string; count: number }[]; completed: number; cancelled: number; late: number;
@@ -1048,6 +1073,10 @@ interface ProviderPerformance {
   activeJobs: number; todaySheets: number;
 }   // §67 — collected and shown to admins only; never used to penalize
 ```
+
+**Provider prices (Q18):** `DispatchJobDetail.providerPricing`, `EligibilityRow.price`, `EligibilityRow.deliveryFee` and
+`deliveryProviders[].deliveryFee` are `null` for admins without `provider_price_view` (super-admins see them); every
+dispatch write answers with the detail redacted for the caller. `priced` / `priceMissing` stay visible.
 
 Errors (Persian):
 - 404 «سفارش یافت نشد» (unknown job / order), 404 «مجری یافت نشد».
@@ -1061,7 +1090,12 @@ Errors (Persian):
 - 400 «دلیل را بنویسید» (reassign, unassign, respond, status).
 - 400 «مجری تحویل باید فعال باشد و امکان ارسال داشته باشد» · 400 «تحویل حضوری در محل این مجری مجاز نیست» ·
   400 «روش تحویل انتخابی مشتری (ارسال یا تحویل حضوری) تغییر نمی‌کند» · 400 «روش تحویل این سفارش دیگر قابل تغییر نیست» (after `ready`).
+- 400 «مهلت باید در آینده باشد» (PATCH job) · 400 «مجری تحویل فقط برای روش «تحویل توسط مجری» تعیین می‌شود» ·
+  400 «ابتدا مجری سفارش را تعیین کنید» (pickup at the provider shop without a provider) · 400 «این سفارش در انتظار پاسخ مجری نیست» (respond).
 - 409 «وضعیت سفارش هم‌زمان تغییر کرد؛ دوباره تلاش کنید» (any lost compare-and-set).
+- Provider (centre) delete: 409 «این مجری در سفارش‌های ثبت‌شده (تولید یا ارسال) سابقه دارد؛ به‌جای حذف آن را غیرفعال کنید»
+  when any job (any status) names it as `providerId` or `deliveryProviderId`, or any order or job carries its
+  `providerPricing` (M4 payouts). This is in addition to the v4.1 open-order and price-history 409s.
 
 `PATCH /admin/orders/:id/assign { centerId }` (v1) delegates: a provider id → `assign` (or `reassign` with reason
 «تغییر از صفحه سفارش» when held) under the same checks and permissions (`dispatch_assign` / `dispatch_reassign`, 403
@@ -1081,7 +1115,7 @@ cancel/delivered/out-for-delivery moves; `fulfillment` reads never fail the orde
 | GET | `/provider/jobs/:id` | `ProviderJobDetail` (the first open of an `assigned` job sets `assignment.seenAt`) |
 | POST | `/provider/jobs/:id/accept` | → `ProviderJobDetail` |
 | POST | `/provider/jobs/:id/reject` | `{ reasonCode: RejectReason, note? }` (note required for `other`: 400 «برای «سایر» توضیح بنویسید») → `{ ok: true }` |
-| POST | `/provider/jobs/:id/status` | `{ status: 'in_production'\|'ready'\|'out_for_delivery'\|'ready_for_pickup'\|'delivered'\|'failed', reasonCode?, note? }` → `ProviderJobDetail` (`failed` needs `reasonCode`; then `{ ok: true }`) |
+| POST | `/provider/jobs/:id/status` | `{ status: 'in_production'\|'ready'\|'out_for_delivery'\|'ready_for_pickup'\|'delivered'\|'failed', reasonCode?, note? }` → `ProviderJobDetail` (`failed` needs `reasonCode`: 400 «دلیل را انتخاب کنید»; then `{ ok: true }`) |
 | PATCH | `/provider/jobs/:id/qc` | `{ index, done }` → `ProviderJobDetail` (production provider, while `accepted`/`in_production`) |
 
 ```ts
@@ -1102,7 +1136,7 @@ interface ProviderJobDetail extends ProviderJobView {
   files: Upload[];                      // production role: the order's line files (never courier pickup photos)
   qc: { labels: string[]; done: boolean[] } | null;     // production role
   pricing: { lines: { label: string; unitPrice: number; quantity: number; subtotal: number }[]; missing: string[]; subtotal: number | null } | null;
-  contact: { name: string; phone: string; address?: string; note?: string } | null;  // delivery role: name, phone, address, note (§62); production role handing over at its own shop (customer pickup): name and phone only (D24)
+  contact: { name: string; phone: string; address: string; note: string } | null;   // address / note always present ('' when none)  // delivery role: name, phone, address, note (§62); production role handing over at its own shop (customer pickup): name and phone only (D24)
   collectFrom: { name: string; address: string; phone: string } | null;           // delivery-only role: where to collect
   homePickup: boolean; itemsReceived: boolean;   // false while a home-pickup order is not collected yet
   history: { at: string; status: JobStatus; label: string; note?: string }[];      // the caller's own events only
@@ -1124,13 +1158,18 @@ interface ProviderJobDetail extends ProviderJobView {
   `packing` orders whose job is `ready` with method `courier`.
 - `POST /courier/orders/:id/collected` → `Order` — the courier took the parcel at the provider: job `ready →
   out_for_delivery`, order `packing → out_for_delivery` (400 «این سفارش هنوز آماده تحویل نیست» otherwise).
-- `POST /courier/orders/:id/delivered` additionally sets the job `delivered`.
+- `POST /courier/orders/:id/delivered` additionally sets the job `delivered`. The delivery leg is the courier's only for
+  method `courier` (the job's, else the order's `delivery.method`): on a `provider` or `customer_pickup` order it is
+  400 «تحویل این سفارش با پیک نیست» (no COD booking). Delivery tasks (pending and done) and the courier pay
+  (`deliveriesToday` × `perTaskFee`) count only orders with `delivery.method = 'courier'`; home-pickup tasks are
+  unchanged. `from` / `dropoff` are read live from the provider (centre) record.
 
 ### Files (§65)
 
 `GET /uploads/:id` for role `provider`: allowed only for the linked provider of a job that references the upload's
 order, with job `providerId` = caller and status ∈ `assigned, accepted, in_production, ready, ready_for_pickup`, and
-never for `pickup`-purpose uploads (courier photos). Otherwise 403 «به این فایل دسترسی ندارید».
+never for `pickup`-purpose uploads (courier photos). The upload must be one of that order's own line files
+(`services[i]` file refs), and a `suspended` or `inactive` provider is refused. Otherwise 403 «به این فایل دسترسی ندارید».
 
 ### Notifications (§68, D19)
 
@@ -1144,14 +1183,16 @@ never for `pickup`-purpose uploads (courier photos). Otherwise 403 «به این
   `provider_unavailable` «مجری این سفارش در دسترس نیست؛ تخصیص را بررسی کنید.»; customer — `assigned` «سفارش شما به
   واحد تولید سپرده شد.», `ready_for_pickup` «سفارش شما آماده تحویل حضوری است.» (the place is appended:
   « — <name>، <address>»). Customer «received / in production / ready / out for delivery / completed» reuse the
-  `registered`, `preparing`, `packing`, `out_for_delivery`, `delivered` templates. `seed:base` inserts the missing
-  templates (`on: true`).
+  `registered`, `preparing`, `packing`, `out_for_delivery`, `delivered` templates (the default `out_for_delivery` text
+  is neutral, «سفارش شما در مسیر ارسال است.», since a courier or the provider may deliver). `seed:base` inserts the
+  missing templates (`on: true`) and never overwrites an existing (admin-edited) one.
 - `UserNotification` gains `audience: 'customer' | 'provider' | 'admin'` (absent = customer), `url: string`, `jobId?`.
   Provider rows: url `/provider/jobs/<jobId>`, push title «سرو مجری»; admin rows (every admin with `dispatch_view`, or
   a super-admin): url `/admin/dispatch?job=<jobId>`, push title «دیجیتال سرو · مدیریت». Customer rows unchanged.
 - `GET /notifications/mine`, `POST /notifications/mine/read`, `POST /notifications/push/subscribe|unsubscribe` accept
   roles `customer`, `provider`, `admin`; each role sees only its own audience. SMS stays OTP-only.
 - Alerts are sent once per job and cause: `deadlineNotifiedAt`, `lateAlertedAt`, `unavailableAlertedAt` guard them.
+  `notify` writes one recipient at a time: a failed insert for one user never silences the others.
 - Admin «اعلان‌ها» lists and edits every template, grouped by audience.
 
 ### Settings («تنظیمات»)
@@ -1168,7 +1209,8 @@ interface DispatchSettings {
 `GET /admin/settings` / `PUT /admin/settings` gain `dispatch: DispatchSettings` and `pickupPoints: PickupPoint[]`
 (≤ 30; replaced as a whole; a point without `id` (an empty id counts as absent) gets one; 400 «شناسه محل تحویل تکراری است», «نام محل تحویل را
 وارد کنید», «آدرس محل تحویل را وارد کنید», «شماره تماس محل تحویل معتبر نیست»). A timeout change applies to
-assignments made afterwards.
+assignments made afterwards. Each given `dispatch` field is saved on its own path, so concurrent saves of different
+timings never revert each other.
 
 ### Permissions (§81)
 

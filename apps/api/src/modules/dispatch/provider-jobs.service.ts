@@ -162,9 +162,9 @@ export class ProviderJobsService {
       { _id: job._id, providerId: job.providerId, 'assignment.id': job.assignment?.id, status: { $in: ['accepted', 'in_production'] } },
       { $set: { updatedAt: new Date() } },
     );
-    if (!held.modifiedCount) throw raced();
+    if (!held.matchedCount) throw raced();
     const res = await this.orders.updateOne({ _id: order._id, status: { $nin: ['packing', 'out_for_delivery', 'delivered', 'cancelled'] } }, { $set: { [`qc.${index}`]: done }, $inc: { __v: 1 } });
-    if (!res.modifiedCount) throw raced();
+    if (!res.matchedCount) throw raced(); // matched: re-ticking an already ticked row is a no-op, not a race
     return this.render(await this.own(providerId, id), providerId, userId);
   }
 }

@@ -31,4 +31,10 @@ describe('fake-model (v4.2 additions)', () => {
     expect((await m.find({ $expr: { $lt: ['$m', '$rev'] } })).map((x) => (x as unknown as { _id: unknown })._id)).toEqual([2, 3, 4]);
     expect((await m.find({ $expr: { $ne: ['$rev', '$m'] } })).map((x) => (x as unknown as { _id: unknown })._id)).toEqual([2, 3, 4]);
   });
+  it('an update naming one path in two operators (also $set vs $setOnInsert) is a conflict, like Mongo', async () => {
+    const m = fakeModel([{ _id: 1, a: { b: 1 } }]);
+    await expect(m.updateOne({ _id: 1 }, { $set: { a: 1 }, $setOnInsert: { a: 2 } }, { upsert: true })).rejects.toThrow(/conflict/);
+    await expect(m.findOneAndUpdate({ _id: 1 }, { $set: { a: { b: 2 } }, $inc: { 'a.b': 1 } })).rejects.toThrow(/conflict/);
+    await expect(m.updateOne({ _id: 1 }, { $set: { 'a.c': 1 }, $setOnInsert: { d: 1 } }, { upsert: true })).resolves.toMatchObject({ matchedCount: 1 });
+  });
 });

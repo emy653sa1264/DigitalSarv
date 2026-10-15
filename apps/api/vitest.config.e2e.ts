@@ -8,5 +8,7 @@ export default defineConfig({
     env: { DISPATCH_SCHEDULER: '0' },
     root: './',
     include: ['**/*.e2e-spec.ts'],
+    // a cold AppModule start (Mongo indexes, seed) can exceed the 10 s default
+    hookTimeout: 30000,
   },
 });

@@ -310,3 +310,100 @@ describe('v4.2 fix round 1', () => {
     expect(s.jobs.docs[0]).toMatchObject({ status: 'cancelled', cancel: { byRole: 'system' } });
   });
 });
+
+describe('M3 final review', () => {
+  it('I2 (Q26): a job reconcile backfills for an order placed long ago is stamped — no late / deadline alert flood', async () => {
+    const s = setup({ status: 'binding', createdAt: new Date(Date.now() - 5 * 86_400_000) }); // legacy, no centre, past registered
+    expect((await s.svc.reconcile()).created).toBe(1);
+    expect(s.jobs.docs[0]).toMatchObject({ status: 'unassigned', backfilled: true });
+    expect(s.jobs.docs[0].lateAlertedAt).toBeInstanceOf(Date);
+    expect(s.jobs.docs[0].deadlineNotifiedAt).toBeInstanceOf(Date);
+    expect(s.jobs.docs[0].deadline.getTime()).toBeLessThan(Date.now()); // overdue, but already «alerted»
+  });
+  it('I2: a fresh order (placement, or reconcile right after it) keeps its alerts armed', async () => {
+    const placed = setup({ createdAt: new Date(Date.now() - 5 * 86_400_000) });
+    await placed.svc.ensureJob(placed.order as never); // the placement / verify path is never a backfill
+    expect(placed.jobs.docs[0].lateAlertedAt).toBeUndefined();
+    const recent = setup({ createdAt: new Date(Date.now() - 5 * 60_000) });
+    await recent.svc.reconcile();
+    expect(recent.jobs.docs[0]).not.toHaveProperty('backfilled');
+    expect(recent.jobs.docs[0].lateAlertedAt).toBeUndefined();
+    expect(recent.jobs.docs[0].deadlineNotifiedAt).toBeUndefined();
+  });
+  it('I3: the missing-job scan matches the live statuses with $in, pages before the $lookup and resumes on the next run', async () => {
+    const s = setup();
+    s.orders.docs.length = 0;
+    for (let i = 0; i < 12; i++) {
+      const o = { ...s.order, _id: new Types.ObjectId(), code: `5${i}`, createdAt: new Date(2026, 0, 1 + i) };
+      s.orders.docs.push(o);
+      await s.svc.ensureJob(o as never);
+    }
+    const newest = { ...s.order, _id: new Types.ObjectId(), code: '99', createdAt: new Date(2026, 5, 1) };
+    s.orders.docs.push(newest);
+    expect((await s.svc.reconcile(1)).created).toBe(0); // 10 pages of 1 healthy order: bound reached
+    expect((await s.svc.reconcile(1)).created).toBe(1); // resumed where it stopped
+    expect(s.jobs.docs.some((j) => String(j.orderId) === String(newest._id))).toBe(true);
+    const [pipeline] = s.orders.aggregate.mock.calls[0] as [Record<string, Record<string, unknown>>[]];
+    expect(pipeline[0].$match.status).toEqual({ $in: expect.arrayContaining(['registered', 'packing', 'out_for_delivery']) });
+    expect(Object.keys(pipeline[0].$match.status as object)).toEqual(['$in']);
+    expect(pipeline.map((st) => Object.keys(st)[0])).toEqual(['$match', '$sort', '$limit', '$lookup']);
+  });
+  it('I4: a stale mirror is repaired after the job was cancelled (finished jobs are scanned too)', async () => {
+    const s = setup({ centerId: P, providerPricing: { providerId: String(P) } });
+    const id = await heldBy(s);
+    s.orders.updateOne.mockRejectedValueOnce(new Error('db down'));
+    await s.svc.giveBack(await s.svc.byId(id), 'unassigned', { byRole: 'admin', reason: 'تغییر' });
+    expect(s.jobs.docs[0].mirrorPending).toBe(true);
+    s.jobs.docs[0].status = 'cancelled'; // finished before the next tick
+    expect(String(s.orders.docs[0].centerId)).toBe(String(P)); // stale
+    expect((await s.svc.reconcile()).mirrored).toBe(1);
+    expect(s.orders.docs[0].centerId).toBeUndefined();
+    expect(s.orders.docs[0].providerPricing).toBeUndefined();
+    expect(s.jobs.docs[0]).not.toHaveProperty('mirrorPending');
+    expect((await s.svc.reconcile()).mirrored).toBe(0);
+  });
+  it('I4: a delivered or completed job with a pending mirror is repaired too', async () => {
+    for (const status of ['delivered', 'completed']) {
+      const s = setup();
+      await heldBy(s, 'in_production');
+      Object.assign(s.jobs.docs[0], { status, rev: 3, mirroredRev: 2, mirrorPending: true, providerPricing: { providerId: String(P), payoutBasis: 1 } });
+      expect((await s.svc.reconcile()).mirrored).toBe(1);
+      expect(String(s.orders.docs[0].centerId)).toBe(String(P));
+      expect(s.orders.docs[0]).toMatchObject({ providerRev: 3, providerPricing: { payoutBasis: 1 } });
+    }
+  });
+  it('M1: a move checked on one delivery method loses to a concurrent delivery change (409)', async () => {
+    const s = setup({ status: 'packing', qc: [true] });
+    const id = await heldBy(s, 'ready');
+    const stale = await s.svc.byId(id);
+    Object.assign(s.jobs.docs[0], { deliveryMethod: 'provider', deliveryProviderId: P }); // the admin switched it meanwhile
+    s.svc.byId = vi.fn(async () => stale) as never;
+    await expect(s.svc.move(id, 'out_for_delivery', { actor: 'courier', byRole: 'courier' })).rejects.toMatchObject({ status: 409 });
+    expect(s.jobs.docs[0].status).toBe('ready');
+  });
+  it('M2: a producer that fails or loses the job in production leaves the QC checklist unticked for the next one', async () => {
+    const failed = setup({ status: 'qc', qc: [true] });
+    const id = await heldBy(failed, 'in_production');
+    await failed.svc.move(id, 'failed', { ...asP, reasonCode: 'other', reason: 'خرابی دستگاه' });
+    expect(failed.orders.docs[0].qc).toEqual([false]);
+    const taken = setup({ status: 'binding', qc: [true] });
+    const id2 = await heldBy(taken, 'in_production');
+    await taken.svc.giveBack(await taken.svc.byId(id2), 'unassigned', { byRole: 'admin', reason: 'تغییر' });
+    expect(taken.orders.docs[0].qc).toEqual([false]);
+    const early = setup({ status: 'confirmed', qc: [true] }); // accepted, not in production: nothing to reset
+    const id3 = await heldBy(early, 'accepted');
+    await early.svc.giveBack(await early.svc.byId(id3), 'unassigned', { byRole: 'admin', reason: 'تغییر' });
+    expect(early.orders.docs[0].qc).toEqual([true]);
+  });
+  it('parked: a courier delivers a ready courier job (onOrderDelivered true); collecting a non-courier job is a 400', async () => {
+    const s = setup({ status: 'packing', qc: [true] });
+    await heldBy(s, 'ready');
+    expect(await s.svc.onOrderDelivered(s.order._id, 'courier')).toBe(true);
+    expect(s.jobs.docs[0].status).toBe('delivered');
+    const p = setup({ status: 'packing', qc: [true] });
+    await heldBy(p, 'ready');
+    Object.assign(p.jobs.docs[0], { deliveryMethod: 'provider', deliveryProviderId: P });
+    await expect(p.svc.courierCollected(p.order._id)).rejects.toThrow('این سفارش هنوز آماده تحویل نیست');
+    expect(p.jobs.docs[0].status).toBe('ready');
+  });
+});

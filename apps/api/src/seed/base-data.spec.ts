@@ -1,7 +1,7 @@
 import { defaultPrintAddons } from '../modules/catalog/catalog.defaults.js';
 import type { PricingContext } from '../modules/pricing/pricing.types.js';
 import { priceBwPrint, priceColorPrint } from '../modules/pricing/print-v4.js';
-import { SPIRAL_RANGES, V4_PAPERS, v4PriceSeeds } from './base-data.js';
+import { NOTIFICATIONS, SPIRAL_RANGES, V4_PAPERS, v4PriceSeeds } from './base-data.js';
 
 describe('v4 price seeds', () => {
   const seeds = v4PriceSeeds(['r1', 'r2', 'r3', 'r4', 'r5', 'r6']);
@@ -64,4 +64,12 @@ it('v4.2: every dispatch event has a seeded push template', async () => {
   const { NOTIFICATIONS } = await import('./base-data.js');
   const { DISPATCH_EVENTS } = await import('../common/constants.js');
   for (const e of DISPATCH_EVENTS) expect(NOTIFICATIONS.some((n) => n.event === e && n.channel === 'push')).toBe(true);
+});
+
+describe('notification templates (M7)', () => {
+  it('the default «out_for_delivery» text is neutral: a courier or the provider may deliver', () => {
+    const t = NOTIFICATIONS.find((n) => n.event === 'out_for_delivery')!;
+    expect(t.text).toBe('سفارش شما در مسیر ارسال است.');
+    expect(t.text).not.toContain('پیک');
+  });
 });
