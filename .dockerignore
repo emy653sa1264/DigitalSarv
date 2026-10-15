@@ -44,3 +44,6 @@ docs
 # Compose files are not part of any image (deploy/nginx is copied into the web image)
 docker-compose*.yml
 deploy/caddy
+
+# Local browser-regression logs and failure screenshots
+/apps/web/e2e/.artifacts

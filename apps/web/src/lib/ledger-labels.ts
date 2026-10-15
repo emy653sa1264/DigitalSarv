@@ -1,3 +1,4 @@
+import { uuid } from '@/lib/utils'
 import type { BrandTone } from '@/components/brand'
 import { jalali, money } from '@/lib/format'
 import type { CompCause, LedgerKind } from '@/lib/types'
@@ -24,4 +25,4 @@ export function addDaysYmd(ymd: string, days: number): string {
 /** A `yyyy-mm-dd` shown as a Jalali date. */
 export const jalaliYmd = (ymd: string) => jalali(`${ymd}T12:00:00+03:30`)
 /** One id per opened payout / adjustment form: a double submit returns the same entry (R13). */
-export const newRequestId = () => crypto.randomUUID()
+export const newRequestId = () => uuid()

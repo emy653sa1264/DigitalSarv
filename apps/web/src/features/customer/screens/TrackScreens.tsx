@@ -7,7 +7,7 @@ import { notify } from '@/components/ui/sonner'
 import { ApiError } from '@/lib/api'
 import { fa, jalaliDayTime, money } from '@/lib/format'
 import { ORDER_FLOW, ORDER_STATUS_LABEL, type Order, type OrderSettlement, type OrderStatus } from '@/lib/types'
-import { cn } from '@/lib/utils'
+import { cn, uuid } from '@/lib/utils'
 import { useAuth } from '@/stores/auth'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { Screen } from '../components/Screen'
@@ -87,7 +87,7 @@ function Timeline({ order: o }: { order: Order }) {
   const payDue = usePayDue()
   const walletBalance = useAuth((s) => s.user?.walletBalance)
   // One requestId per banner: a retry or double click is the same payment; only a failed top-up gets a fresh one.
-  const dueRequestId = useRef(crypto.randomUUID())
+  const dueRequestId = useRef(uuid())
   const support = useSupportPhone()
   const [confirming, setConfirming] = useState(false)
 
@@ -197,9 +197,15 @@ function Timeline({ order: o }: { order: Order }) {
               payDue.mutate(
                 { id: o.id, requestId: dueRequestId.current },
                 {
-                  onSuccess: () => notify(`مابه‌التفاوت ${money(o.amountDue!)} از کیف پول پرداخت شد`),
+                  onSuccess: () => {
+                    dueRequestId.current = uuid() // a later difference on this screen is a new payment
+                    notify(`مابه‌التفاوت ${money(o.amountDue!)} از کیف پول پرداخت شد`)
+                  },
                   onError: (e) => {
-                    if (e instanceof ApiError && (e.data as { code?: string } | undefined)?.code === 'WALLET_INSUFFICIENT') dueRequestId.current = crypto.randomUUID()
+                    // a refused attempt (short balance, concurrent change) is settled on the server: the next click is a new attempt;
+                    // a network error or 503 keeps the id so a retry replays the same request
+                    const refused = e instanceof ApiError && (e.status === 409 || (e.data as { code?: string } | undefined)?.code === 'WALLET_INSUFFICIENT')
+                    if (refused) dueRequestId.current = uuid()
                   },
                 },
               )

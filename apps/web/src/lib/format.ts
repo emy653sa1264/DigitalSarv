@@ -79,5 +79,6 @@ export function when(iso: string | Date): string {
  */
 export function faText(value: string | null | undefined): string {
   if (!value) return ''
-  return value.replace(/(?<![A-Za-z0-9#])\d+(?![A-Za-z0-9])/g, (run) => fa(run))
+  // no lookbehind: iOS Safari < 16.4 cannot parse one and the whole shared chunk would fail to load
+  return value.replace(/(^|[^A-Za-z0-9#])(\d+)(?![A-Za-z0-9])/g, (_m, pre: string, run: string) => pre + fa(run))
 }
