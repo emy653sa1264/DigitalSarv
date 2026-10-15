@@ -1542,7 +1542,7 @@ wallet-credit intent as every other automatic credit.
     Only the courier is shown the cash (`CourierTask.collect`); every other handover is guarded (rulings F-I2, F-I2b). **Cash to
     collect** = the unpaid COD total (`payMethod === 'cod' && !paid` → `quote.total`), else `amountDue`; both cases are handled alike:
     - provider (`POST /provider/jobs/:id/status` → `delivered`) while there is cash to collect: **409**
-      `{ code: 'DUE_OUTSTANDING', message: 'برای این سفارش مابه‌التفاوت باقی است؛ تحویل را پشتیبانی ثبت می‌کند' }` — no amount
+      `{ code: 'DUE_OUTSTANDING', message: 'برای این سفارش مبلغی نقدی باقی است؛ تحویل را پشتیبانی ثبت می‌کند' }` — no amount
       (no customer money in the provider app); the job stays where it is. The check is part of the order compare-and-set (the write
       is conditional on the `paid` / `refunded` / `chargedAmount` / `quote.total` it was decided on), so cash that appears or changes
       meanwhile is a 409. A provider delivers only orders with nothing to collect (paid, no difference).

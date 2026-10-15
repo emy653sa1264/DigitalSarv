@@ -345,7 +345,7 @@ marked `<…>` comes from `.env.production` or the provider's panel, never from 
 
 - Cash at the door is taken only by the courier, whose task shows the amount: an **unpaid COD** total or a difference due after a
   recount («مابه‌التفاوت»). A provider cannot mark such an order «تحویل شد» — neither a provider delivery nor a pickup at the
-  provider's shop (409 «برای این سفارش مابه‌التفاوت باقی است؛ تحویل را پشتیبانی ثبت می‌کند»; the provider never sees the amount).
+  provider's shop (409 «برای این سفارش مبلغی نقدی باقی است؛ تحویل را پشتیبانی ثبت می‌کند»; the provider never sees the amount).
   Those handovers are closed by an admin: collect the cash first (or have the customer pay a difference from the wallet), then
   «سفارش‌ها» → the order → «تحویل شد» and confirm «مبلغ … نقدی دریافت شد». If the amount changed meanwhile the sheet reloads and
   asks again with the new amount. (The dispatch center answers the same 409 and has no confirm dialog; use the order sheet.)

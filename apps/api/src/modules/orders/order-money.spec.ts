@@ -42,7 +42,7 @@ describe('handover cash (F-I2, F-I2b, M-a)', () => {
     expect(cashToCollect({ ...cod, status: 'cancelled' })).toBe(0);
   });
   it('the provider is refused without an amount; the admin confirms the amount shown', () => {
-    expect(handoverRefusal(cod, true)).toEqual({ statusCode: 409, code: 'DUE_OUTSTANDING', message: 'برای این سفارش مابه‌التفاوت باقی است؛ تحویل را پشتیبانی ثبت می‌کند' });
+    expect(handoverRefusal(cod, true)).toEqual({ statusCode: 409, code: 'DUE_OUTSTANDING', message: 'برای این سفارش مبلغی نقدی باقی است؛ تحویل را پشتیبانی ثبت می‌کند' });
     expect(handoverRefusal(cod, false)).toMatchObject({ code: 'DUE_OUTSTANDING', cashToCollect: 5000 });
     expect(handoverRefusal(cod, false, { confirmCashCollected: true })).toMatchObject({ code: 'CASH_CHANGED', cashToCollect: 5000 });
     expect(handoverRefusal(cod, false, { confirmCashCollected: true, expectedCash: 4000 })).toMatchObject({ code: 'CASH_CHANGED' });

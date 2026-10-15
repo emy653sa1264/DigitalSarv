@@ -77,7 +77,7 @@ export interface HandoverConfirm { confirmCashCollected?: boolean; expectedCash?
 export function handoverRefusal(o: MoneyOrder, byProvider: boolean, c: HandoverConfirm = {}): Record<string, unknown> | null {
   const cash = cashToCollect(o);
   if (cash <= 0) return null;
-  if (byProvider) return { statusCode: 409, code: 'DUE_OUTSTANDING', message: 'برای این سفارش مابه‌التفاوت باقی است؛ تحویل را پشتیبانی ثبت می‌کند' };
+  if (byProvider) return { statusCode: 409, code: 'DUE_OUTSTANDING', message: 'برای این سفارش مبلغی نقدی باقی است؛ تحویل را پشتیبانی ثبت می‌کند' };
   if (!c.confirmCashCollected) {
     return isUnpaidCod(o)
       ? { statusCode: 409, code: 'DUE_OUTSTANDING', message: `مبلغ ${fa(cash)} تومان (پرداخت در محل) هنوز دریافت نشده است`, cashToCollect: cash }

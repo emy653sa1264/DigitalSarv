@@ -108,7 +108,7 @@ describe('JobsService.move — the one transition path', () => {
     const id = await heldBy(s, 'out_for_delivery');
     Object.assign(s.jobs.docs[0], { deliveryMethod: 'provider', deliveryProviderId: P });
     const err = await s.svc.move(id, 'delivered', { actor: 'delivery', byRole: 'provider', providerId: String(P) }).catch((e: unknown) => e);
-    expect((err as ConflictException).getResponse()).toEqual({ statusCode: 409, code: 'DUE_OUTSTANDING', message: 'برای این سفارش مابه‌التفاوت باقی است؛ تحویل را پشتیبانی ثبت می‌کند' });
+    expect((err as ConflictException).getResponse()).toEqual({ statusCode: 409, code: 'DUE_OUTSTANDING', message: 'برای این سفارش مبلغی نقدی باقی است؛ تحویل را پشتیبانی ثبت می‌کند' });
     expect(s.orders.docs[0]).toMatchObject({ status: 'packing', paid: false });
     expect(s.jobs.docs[0].status).toBe('out_for_delivery');
     await s.svc.move(id, 'delivered', { actor: 'admin', byRole: 'admin', confirmCashCollected: true, expectedCash: 90000 });
@@ -564,7 +564,7 @@ describe('D35: cash at handover through the job mirror', () => {
     const err = await s.svc.move(id, 'delivered', { actor: 'delivery', byRole: 'provider', providerId: String(P) }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(ConflictException);
     const body = (err as ConflictException).getResponse() as Record<string, unknown>;
-    expect(body).toEqual({ statusCode: 409, code: 'DUE_OUTSTANDING', message: 'برای این سفارش مابه‌التفاوت باقی است؛ تحویل را پشتیبانی ثبت می‌کند' });
+    expect(body).toEqual({ statusCode: 409, code: 'DUE_OUTSTANDING', message: 'برای این سفارش مبلغی نقدی باقی است؛ تحویل را پشتیبانی ثبت می‌کند' });
     expect(s.jobs.docs[0].status).toBe('out_for_delivery');
     expect(s.orders.docs[0]).toMatchObject({ status: 'packing', chargedAmount: 60000 });
     expect(s.orders.docs[0].settlements).toBeUndefined();
