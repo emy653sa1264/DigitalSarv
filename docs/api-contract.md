@@ -1539,17 +1539,26 @@ wallet-credit intent as every other automatic credit.
     است؛ چند لحظه دیگر سفارش را بررسی کنید» (the sweep finishes it) · 404 «سفارش یافت نشد» (not the owner - existence never leaks) · 409 «این شناسه درخواست برای پرداخت دیگری استفاده شده است» (the `requestId` was used on another order).
   - in cash at handover: every «تحویل شد» write (courier, provider/admin through the job, admin status) sets
     `chargedAmount = quote.total` and appends `{ kind: 'due_cash', amount }` — like COD, in the same update as `delivered`.
-    Only the courier is shown the amount (`CourierTask.collect`); every other handover is guarded (ruling F-I2):
-    - provider (`POST /provider/jobs/:id/status` → `delivered`) while a difference is due: **409**
+    Only the courier is shown the cash (`CourierTask.collect`); every other handover is guarded (rulings F-I2, F-I2b). **Cash to
+    collect** = the unpaid COD total (`payMethod === 'cod' && !paid` → `quote.total`), else `amountDue`; both cases are handled alike:
+    - provider (`POST /provider/jobs/:id/status` → `delivered`) while there is cash to collect: **409**
       `{ code: 'DUE_OUTSTANDING', message: 'برای این سفارش مابه‌التفاوت باقی است؛ تحویل را پشتیبانی ثبت می‌کند' }` — no amount
       (no customer money in the provider app); the job stays where it is. The check is part of the order compare-and-set (the write
-      is conditional on the `paid` / `refunded` / `chargedAmount` / `quote.total` it was decided on), so a due raised meanwhile is a 409.
-    - admin (`PATCH /admin/orders/:id/status` `{ status: 'delivered', confirmCashCollected?: boolean }` and
-      `POST /admin/dispatch/jobs/:id/status` `{ status: 'delivered', …, confirmCashCollected?: boolean }`) while a difference is due
-      needs `confirmCashCollected: true`, else **409** `{ code: 'DUE_OUTSTANDING', message: 'مابه‌التفاوت <amount, Persian digits> تومان هنوز دریافت نشده است', amountDue: number }`
-      (ASCII `amountDue`). With it the `due_cash` is recorded as above. Unpaid COD (cash for the whole total) is unchanged.
-    - admin order JSON (`GET /admin/orders/:id`, the status/assign responses) carries `amountDue?: number` (only when > 0, same rule as
-      the customer JSON) next to `settlements`; the admin order sheet shows both and asks «مبلغ … نقدی دریافت شد» before «تحویل شد».
+      is conditional on the `paid` / `refunded` / `chargedAmount` / `quote.total` it was decided on), so cash that appears or changes
+      meanwhile is a 409. A provider delivers only orders with nothing to collect (paid, no difference).
+    - admin (`PATCH /admin/orders/:id/status` `{ status: 'delivered', confirmCashCollected?: boolean, expectedCash?: number }` and
+      `POST /admin/dispatch/jobs/:id/status` `{ status: 'delivered', …, confirmCashCollected?: boolean, expectedCash?: number }`) while
+      there is cash to collect needs `confirmCashCollected: true` **and** `expectedCash` = the amount the admin was shown:
+      - without the confirm: **409** `{ code: 'DUE_OUTSTANDING', message, cashToCollect: number, amountDue?: number }` — message
+        «مابه‌التفاوت <amount> تومان هنوز دریافت نشده است» for a difference, «مبلغ <amount> تومان (پرداخت در محل) هنوز دریافت نشده است»
+        for unpaid COD (Persian digits; ASCII numbers in the fields; `amountDue` only for a difference);
+      - confirmed but `expectedCash` missing or ≠ the server's cash to collect: **409**
+        `{ code: 'CASH_CHANGED', message: 'مبلغ نقدی این سفارش تغییر کرده و اکنون <amount> تومان است؛ دوباره بررسی کنید', cashToCollect: number }`;
+      - confirmed with the right amount: the same delivered write as above (COD paid in cash, or `due_cash`), guarded the same way.
+    - admin order JSON (`GET /admin/orders/:id`, the status/assign/qc responses) carries `amountDue?: number` (only when > 0, same
+      rule as the customer JSON) and `cashToCollect?: number` (only when > 0, live orders), next to `settlements`; the admin order
+      sheet shows them, asks «مبلغ … نقدی دریافت شد» before «تحویل شد» and sends `expectedCash`; on `CASH_CHANGED` it reloads the
+      order and shows the new amount.
   A gateway payment of a difference is not offered (S3).
 - `chargedAmount` is always what was actually collected. `Order.settlements?: { kind: 'recount_refund' | 'due_wallet' | 'due_cash'; amount: number; at: string }[]`
   (customer and admin JSON). `CourierTask.collect?: number` on delivery tasks = cash to take at the door (unpaid COD total, or the

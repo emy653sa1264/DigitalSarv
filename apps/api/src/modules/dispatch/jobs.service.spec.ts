@@ -103,11 +103,15 @@ describe('JobsService.move — the one transition path', () => {
     const id = await heldBy(s, 'accepted');
     await expect(s.svc.move(id, 'ready', asP)).rejects.toThrow('تغییر وضعیت از «پذیرفته‌شده» به «آماده» مجاز نیست');
   });
-  it('provider delivery: the order moves first and records the COD payment atomically', async () => {
+  it('F-I2b: an unpaid COD order is never handed over by the provider (409, no amount); the admin delivery moves the order first and records the COD payment atomically', async () => {
     const s = setup({ status: 'packing' });
     const id = await heldBy(s, 'out_for_delivery');
     Object.assign(s.jobs.docs[0], { deliveryMethod: 'provider', deliveryProviderId: P });
-    await s.svc.move(id, 'delivered', { actor: 'delivery', byRole: 'provider', providerId: String(P) });
+    const err = await s.svc.move(id, 'delivered', { actor: 'delivery', byRole: 'provider', providerId: String(P) }).catch((e: unknown) => e);
+    expect((err as ConflictException).getResponse()).toEqual({ statusCode: 409, code: 'DUE_OUTSTANDING', message: 'برای این سفارش مابه‌التفاوت باقی است؛ تحویل را پشتیبانی ثبت می‌کند' });
+    expect(s.orders.docs[0]).toMatchObject({ status: 'packing', paid: false });
+    expect(s.jobs.docs[0].status).toBe('out_for_delivery');
+    await s.svc.move(id, 'delivered', { actor: 'admin', byRole: 'admin', confirmCashCollected: true, expectedCash: 90000 });
     expect(s.orders.docs[0]).toMatchObject({ status: 'delivered', paid: true, chargedAmount: 90000, paidVia: 'cod' });
     expect(s.jobs.docs[0].status).toBe('delivered');
     expect(s.jobs.docs[0].deliveredAt).toBeInstanceOf(Date);
@@ -406,7 +410,7 @@ describe('M3 final review', () => {
     expect(p.jobs.docs[0].status).toBe('ready');
   });
   it('NEW-2: a delivered move that loses the cas to a delivery that already landed returns the delivered job', async () => {
-    const s = setup({ status: 'packing', qc: [true] });
+    const s = setup({ status: 'packing', qc: [true], paid: true });
     const id = await heldBy(s, 'out_for_delivery');
     Object.assign(s.jobs.docs[0], { deliveryMethod: 'provider', deliveryProviderId: P });
     const stale = await s.svc.byId(id);
@@ -415,7 +419,7 @@ describe('M3 final review', () => {
     s.orders.docs[0].status = 'out_for_delivery';
     await expect(s.svc.move(id, 'delivered', { actor: 'delivery', byRole: 'provider', providerId: String(P) })).resolves.toMatchObject({ status: 'delivered' });
     // any other lost race stays a 409
-    const t = setup({ status: 'packing', qc: [true] });
+    const t = setup({ status: 'packing', qc: [true], paid: true });
     const id2 = await heldBy(t, 'out_for_delivery');
     Object.assign(t.jobs.docs[0], { deliveryMethod: 'provider', deliveryProviderId: P });
     const stale2 = await t.svc.byId(id2);
@@ -459,8 +463,8 @@ describe('v4.3 ledger hook (D27, Review Focus 2)', () => {
     return id;
   }
 
-  it('provider delivery credits the producer from its snapshot exactly once, the COD payment included in the same delivery', async () => {
-    const s = withLedger({ status: 'packing' });
+  it('provider delivery credits the producer from its snapshot exactly once', async () => {
+    const s = withLedger({ status: 'packing', paid: true });
     const id = await providerDelivers(s);
     expect(s.orders.docs[0]).toMatchObject({ status: 'delivered', paid: true });
     expect(s.entries.docs).toHaveLength(1);
@@ -472,7 +476,7 @@ describe('v4.3 ledger hook (D27, Review Focus 2)', () => {
     expect(s.entries.docs).toHaveLength(1);
   });
   it('a failed ledger write is retried by the tick: the flag was set by the delivery write itself', async () => {
-    const s = withLedger({ status: 'packing' });
+    const s = withLedger({ status: 'packing', paid: true });
     vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     s.entries.updateOne.mockRejectedValueOnce(new Error('mongo down'));
     await providerDelivers(s); // never throws into the job flow
@@ -583,13 +587,17 @@ describe('D35: cash at handover through the job mirror', () => {
     expect(s.jobs.docs[0].status).toBe('out_for_delivery');
     expect(s.orders.docs[0]).toMatchObject({ status: 'packing', chargedAmount: 90000 });
   });
-  it('F-I2: an admin (dispatch) «تحویل شد» needs confirmCashCollected; with it due_cash is recorded once', async () => {
+  it('F-I2: an admin (dispatch) «تحویل شد» needs confirmCashCollected and the amount shown (M-a); with them due_cash is recorded once', async () => {
     const s = dueSetup();
     const id = await providerDelivery(s);
     const err = await s.svc.move(id, 'delivered', { actor: 'admin', byRole: 'admin' }).catch((e: unknown) => e);
-    expect((err as ConflictException).getResponse()).toMatchObject({ code: 'DUE_OUTSTANDING', amountDue: 30000 });
+    expect((err as ConflictException).getResponse()).toMatchObject({ code: 'DUE_OUTSTANDING', amountDue: 30000, cashToCollect: 30000 });
     expect(s.orders.docs[0].status).toBe('packing');
-    await s.svc.move(id, 'delivered', { actor: 'admin', byRole: 'admin', confirmCashCollected: true });
+    const stale = await s.svc.move(id, 'delivered', { actor: 'admin', byRole: 'admin', confirmCashCollected: true, expectedCash: 20000 }).catch((e: unknown) => e);
+    expect((stale as ConflictException).getResponse()).toEqual({ statusCode: 409, code: 'CASH_CHANGED', message: 'مبلغ نقدی این سفارش تغییر کرده و اکنون ۳۰٬۰۰۰ تومان است؛ دوباره بررسی کنید', cashToCollect: 30000 });
+    expect(s.orders.docs[0].status).toBe('packing');
+    await expect(s.svc.move(id, 'delivered', { actor: 'admin', byRole: 'admin', confirmCashCollected: true })).rejects.toMatchObject({ status: 409 }); // no amount = not confirmed
+    await s.svc.move(id, 'delivered', { actor: 'admin', byRole: 'admin', confirmCashCollected: true, expectedCash: 30000 });
     expect(s.orders.docs[0]).toMatchObject({ status: 'delivered', chargedAmount: 90000, settlements: [expect.objectContaining({ kind: 'due_cash', amount: 30000 })] });
     await s.svc.onOrderDelivered(s.order._id, 'admin');
     expect((s.orders.docs[0].settlements as unknown[]).length).toBe(1);

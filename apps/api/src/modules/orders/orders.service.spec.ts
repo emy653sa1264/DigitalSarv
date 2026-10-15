@@ -189,11 +189,14 @@ describe('OrdersService.setStatus (admin)', () => {
     await expect(setup({ status: 'awaiting_approval' }).svc.setStatus(String(orderId), 'binding')).rejects.toThrow(/مجاز نیست/);
   });
 
-  it('awaiting_approval → confirmed is allowed; delivering an unpaid COD order records the charge', async () => {
+  it('awaiting_approval → confirmed is allowed; delivering an unpaid COD order needs the cash confirmed (F-I2b) and records the charge', async () => {
     const a = setup({ status: 'awaiting_approval' });
     await expect(a.svc.setStatus(String(orderId), 'confirmed')).resolves.toMatchObject({ status: 'confirmed' });
     const b = setup({ status: 'out_for_delivery', payMethod: 'cod', paid: false, chargedAmount: undefined });
-    await b.svc.setStatus(String(orderId), 'delivered');
+    const err = await b.svc.setStatus(String(orderId), 'delivered').catch((e: unknown) => e);
+    expect((err as ConflictException).getResponse()).toEqual({ statusCode: 409, code: 'DUE_OUTSTANDING', message: 'مبلغ ۴۲۰٬۰۰۰ تومان (پرداخت در محل) هنوز دریافت نشده است', cashToCollect: 420000 });
+    expect(b.order).toMatchObject({ status: 'out_for_delivery', paid: false });
+    await b.svc.setStatus(String(orderId), 'delivered', undefined, { confirmCashCollected: true, expectedCash: 420000 });
     expect(b.order).toMatchObject({ status: 'delivered', paid: true, chargedAmount: 420000, paidVia: 'cod' });
   });
 });
@@ -838,7 +841,7 @@ describe('recount after payment (D35)', () => {
   });
   it('F-I2: with confirmCashCollected the admin «تحویل شد» collects the difference in cash, in the same update', async () => {
     const s = setup({ status: 'out_for_delivery', chargedAmount: 420000, quote: { total: 500000 } });
-    await s.svc.setStatus(String(orderId), 'delivered', undefined, { confirmCashCollected: true });
+    await s.svc.setStatus(String(orderId), 'delivered', undefined, { confirmCashCollected: true, expectedCash: 80000 });
     expect(s.order).toMatchObject({ status: 'delivered', chargedAmount: 500000, settlements: [expect.objectContaining({ kind: 'due_cash', amount: 80000 })] });
   });
   it('F-I2: a due raised after the read is a 409 (the CAS keeps the due inputs), never a silent delivery', async () => {
@@ -850,6 +853,24 @@ describe('recount after payment (D35)', () => {
     await expect(s.svc.setStatus(String(orderId), 'delivered')).rejects.toThrow('هم‌زمان');
     expect(s.order).toMatchObject({ status: 'out_for_delivery', chargedAmount: 500000 });
   });
+  it('M-a: a confirm for an amount that is no longer the cash to collect is 409 CASH_CHANGED with the current amount; nothing changes', async () => {
+    const s = setup({ status: 'out_for_delivery', chargedAmount: 420000, quote: { total: 500000 } });
+    const err = await s.svc.setStatus(String(orderId), 'delivered', undefined, { confirmCashCollected: true, expectedCash: 60000 }).catch((e: unknown) => e);
+    expect((err as ConflictException).getResponse()).toEqual({
+      statusCode: 409, code: 'CASH_CHANGED', message: 'مبلغ نقدی این سفارش تغییر کرده و اکنون ۸۰٬۰۰۰ تومان است؛ دوباره بررسی کنید', cashToCollect: 80000,
+    });
+    expect(s.order).toMatchObject({ status: 'out_for_delivery', chargedAmount: 420000 });
+    expect(s.order.settlements).toBeUndefined();
+  });
+  it('F-I2b: an unpaid COD total changed after the read is a 409 from the CAS, never a COD payment of the old amount', async () => {
+    const s = setup({ status: 'out_for_delivery', payMethod: 'cod', paid: false, chargedAmount: undefined, paidVia: undefined, quote: { total: 500000 } });
+    const read = await s.svc.findById(String(orderId));
+    const stale = { ...read, quote: { ...(read.quote as object), total: 500000 } } as typeof read;
+    (s.order.quote as Doc).total = 560000;
+    vi.spyOn(s.svc, 'findById').mockResolvedValueOnce(stale);
+    await expect(s.svc.setStatus(String(orderId), 'delivered', undefined, { confirmCashCollected: true, expectedCash: 500000 })).rejects.toThrow('هم‌زمان');
+    expect(s.order).toMatchObject({ status: 'out_for_delivery', paid: false });
+  });
   it('F-I2: no difference due → «تحویل شد» needs no confirmation', async () => {
     const s = setup({ status: 'out_for_delivery', chargedAmount: 500000, quote: { total: 500000 } });
     await s.svc.setStatus(String(orderId), 'delivered');
@@ -860,7 +881,7 @@ describe('recount after payment (D35)', () => {
     const s = setup(recounted({ payMethod: 'cod', paid: false, chargedAmount: undefined, paidVia: undefined, quote: { total: 600000 } }));
     await s.svc.setStatus(String(orderId), 'picked_up');
     Object.assign(s.order, { status: 'out_for_delivery' });
-    await s.svc.setStatus(String(orderId), 'delivered');
+    await s.svc.setStatus(String(orderId), 'delivered', undefined, { confirmCashCollected: true, expectedCash: 600000 });
     expect(s.order).toMatchObject({ status: 'delivered', paid: true, paidVia: 'cod', chargedAmount: 600000 });
     expect(s.order.settlements).toBeUndefined();
   });

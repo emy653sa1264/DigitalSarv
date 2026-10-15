@@ -14,7 +14,7 @@ import { bookCount, distributeBooks } from '../pricing/pricing.js';
 import { legacyPrintToV4 } from '../pricing/print-v4.js';
 import type { ChildDraft, OrderDraft, PricingContext, ServiceDraft } from '../pricing/pricing.types.js';
 import { deliveryOf } from './delivery-rules.js';
-import { amountDue, DUE_CLOSED } from './order-money.js';
+import { amountDue, cashToCollect, DUE_CLOSED } from './order-money.js';
 import type { Order, OrderChild, OrderService, PlaceSnapshot } from './order.schema.js';
 
 export interface CustomerFulfillment { status: JobStatus; label: string; place?: PlaceSnapshot }
@@ -24,12 +24,13 @@ function customerPlace<T extends PlaceSnapshot | undefined>(p: T): T {
   return (p && p.kind === 'provider' ? { ...p, id: '' } : p) as T;
 }
 
-/** Ruling F-I2: the admin's order JSON = the document plus `amountDue` (only when > 0, the customer rule), next to `settlements`. */
+/** Rulings F-I2/F-I2b: the admin's order JSON = the document plus `amountDue` (customer rule) and `cashToCollect` (live, > 0). */
 export function adminOrderJson(order: unknown): Record<string, unknown> {
   const o = order as { toJSON?: () => Record<string, unknown> };
   const json = typeof o.toJSON === 'function' ? o.toJSON() : { ...(order as Record<string, unknown>) };
   const due = amountDue(json as never);
-  return { ...json, ...(due > 0 && !DUE_CLOSED.includes(json.status as never) ? { amountDue: due } : {}) };
+  const cash = ['cancelled', 'delivered'].includes(json.status as string) ? 0 : cashToCollect(json as never);
+  return { ...json, ...(due > 0 && !DUE_CLOSED.includes(json.status as never) ? { amountDue: due } : {}), ...(cash > 0 ? { cashToCollect: cash } : {}) };
 }
 
 /** The customer's view of an order (contract v4.2): never the provider id, provider prices or the mirror bookkeeping. */

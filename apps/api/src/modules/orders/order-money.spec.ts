@@ -1,4 +1,4 @@
-import { amountDue, paymentOnDelivery, recountRefund, recountSeq } from './order-money.js';
+import { amountDue, cashToCollect, handoverRefusal, paymentOnDelivery, recountRefund, recountSeq } from './order-money.js';
 
 const paid = (o: object = {}) => ({ status: 'picked_up', paid: true, refunded: false, payMethod: 'wallet', paidVia: 'wallet', chargedAmount: 315000, quote: { total: 315000 }, ...o });
 
@@ -30,5 +30,23 @@ describe('order money after checkout (D35)', () => {
       set: { chargedAmount: 5000 }, push: { settlements: { kind: 'due_cash', amount: 1000, at } }, guard: { chargedAmount: 4000 },
     });
     expect(paymentOnDelivery(paid({ status: 'out_for_delivery' }), at)).toEqual({ set: {}, push: {}, guard: {} });
+  });
+});
+
+describe('handover cash (F-I2, F-I2b, M-a)', () => {
+  const cod = { status: 'out_for_delivery', payMethod: 'cod', paid: false, quote: { total: 5000 } };
+  it('cash to collect = the unpaid COD total, else the difference due; nothing for a cancelled order', () => {
+    expect(cashToCollect(cod)).toBe(5000);
+    expect(cashToCollect(paid({ quote: { total: 385000 } }))).toBe(70000);
+    expect(cashToCollect(paid())).toBe(0);
+    expect(cashToCollect({ ...cod, status: 'cancelled' })).toBe(0);
+  });
+  it('the provider is refused without an amount; the admin confirms the amount shown', () => {
+    expect(handoverRefusal(cod, true)).toEqual({ statusCode: 409, code: 'DUE_OUTSTANDING', message: 'برای این سفارش مابه‌التفاوت باقی است؛ تحویل را پشتیبانی ثبت می‌کند' });
+    expect(handoverRefusal(cod, false)).toMatchObject({ code: 'DUE_OUTSTANDING', cashToCollect: 5000 });
+    expect(handoverRefusal(cod, false, { confirmCashCollected: true })).toMatchObject({ code: 'CASH_CHANGED', cashToCollect: 5000 });
+    expect(handoverRefusal(cod, false, { confirmCashCollected: true, expectedCash: 4000 })).toMatchObject({ code: 'CASH_CHANGED' });
+    expect(handoverRefusal(cod, false, { confirmCashCollected: true, expectedCash: 5000 })).toBeNull();
+    expect(handoverRefusal(paid(), true)).toBeNull();
   });
 });

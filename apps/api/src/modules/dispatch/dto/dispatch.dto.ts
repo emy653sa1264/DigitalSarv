@@ -1,4 +1,4 @@
-import { IsBoolean, IsIn, IsISO8601, IsMongoId, IsNotEmpty, IsOptional, IsString, MaxLength, Validate, ValidatorConstraint, type ValidatorConstraintInterface } from 'class-validator';
+import { IsBoolean, IsIn, IsInt, IsISO8601, IsMongoId, Min, IsNotEmpty, IsOptional, IsString, MaxLength, Validate, ValidatorConstraint, type ValidatorConstraintInterface } from 'class-validator';
 import { isYmd } from '../../../common/utils/dates.js';
 import { DELIVERY_METHODS, JOB_PRIORITIES, JOB_STATUSES, PICKUP_AT, REJECT_REASONS, type DeliveryMethod, type JobPriority, type JobStatus, type PickupAt, type RejectReason } from '../../../common/constants.js';
 import { PageQueryDto } from '../../../common/utils/pagination.js';
@@ -78,6 +78,8 @@ export class AdminJobStatusDto {
   @IsOptional() @IsIn(REJECT_REASONS, { message: 'دلیل معتبر نیست' }) reasonCode?: RejectReason;
   /** Ruling F-I2: «تحویل شد» while a difference is due needs the admin to confirm the cash was taken. */
   @IsOptional() @IsBoolean() confirmCashCollected?: boolean;
+  /** M-a: the cash the admin was shown (toman); must equal the server's cash to collect. */
+  @IsOptional() @IsInt({ message: 'مبلغ معتبر نیست' }) @Min(0, { message: 'مبلغ معتبر نیست' }) expectedCash?: number;
 }
 
 export const PROVIDER_JOB_TARGETS = ['in_production', 'ready', 'out_for_delivery', 'ready_for_pickup', 'delivered', 'failed'] as const;

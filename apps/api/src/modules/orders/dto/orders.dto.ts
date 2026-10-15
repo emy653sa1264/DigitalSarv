@@ -135,7 +135,7 @@ export class OrderDraftDto {
   urgent?: boolean;
 
   /** The total the customer saw; a different server total → 409 PRICE_CHANGED. */
-  @IsOptional() @IsInt() @Min(0)
+  @IsOptional() @IsInt({ message: 'مبلغ معتبر نیست' }) @Min(0, { message: 'مبلغ معتبر نیست' })
   expectedTotal?: number;
 
   @IsOptional() @ValidateNested() @Type(() => PickupDto)
@@ -160,6 +160,10 @@ export class SetStatusDto {
   /** Ruling F-I2: «تحویل شد» while a difference is due needs the admin to confirm the cash was taken. */
   @IsOptional() @IsBoolean()
   confirmCashCollected?: boolean;
+
+  /** M-a: the cash the admin was shown (toman); must equal the server's cash to collect. */
+  @IsOptional() @IsInt({ message: 'مبلغ معتبر نیست' }) @Min(0, { message: 'مبلغ معتبر نیست' })
+  expectedCash?: number;
 }
 
 /** `''` is treated like `null` (= unassign); `undefined` leaves the field untouched. */

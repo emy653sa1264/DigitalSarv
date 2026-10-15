@@ -482,7 +482,8 @@ export class DispatchService {
     if (!dto.reason?.trim()) throw new BadRequestException('دلیل را بنویسید');
     const job = await this.jobs.byId(id);
     await this.jobs.move(String(job._id), dto.status, {
-      actor: 'admin', byRole: 'admin', by, reason: dto.reason, reasonCode: dto.reasonCode, ...(dto.confirmCashCollected ? { confirmCashCollected: true } : {}),
+      actor: 'admin', byRole: 'admin', by, reason: dto.reason, reasonCode: dto.reasonCode,
+      ...(dto.confirmCashCollected ? { confirmCashCollected: true } : {}), ...(dto.expectedCash !== undefined ? { expectedCash: dto.expectedCash } : {}),
     });
     return this.result(job._id, by);
   }

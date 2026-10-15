@@ -7,7 +7,7 @@ import { Center } from '../centers/center.schema.js';
 import { CatalogService } from '../catalog/catalog.service.js';
 import { deliveryOf, placeOf } from '../orders/delivery-rules.js';
 import { BEFORE_QC_DONE, needsQcGuard, qcComplete, qcLabelsOf, timelineEntry, type CustomerFulfillment } from '../orders/order-helpers.js';
-import { amountDue, dueGuard, dueOutstandingForAdmin, dueOutstandingForProvider, paymentOnDelivery } from '../orders/order-money.js';
+import { dueGuard, handoverRefusal, paymentOnDelivery } from '../orders/order-money.js';
 import { Order, type OrderDelivery, type OrderDocument } from '../orders/order.schema.js';
 import { DispatchNotifier } from './dispatch-notifier.js';
 import {
@@ -23,6 +23,8 @@ export interface MoveOptions {
   actor: Actor; byRole: ByRole; by?: string; reason?: string; reasonCode?: RejectReason; providerId?: string; assignmentId?: string;
   /** Ruling F-I2: an admin «تحویل شد» while a difference is due needs it (the cash was taken). */
   confirmCashCollected?: boolean;
+  /** M-a: the cash the admin was shown; must equal the server's cash to collect. */
+  expectedCash?: number;
 }
 export interface GiveBackOptions { byRole: ByRole; by?: string; reason?: string; reasonCode?: RejectReason; providerId?: string; assignmentId?: string }
 /** What `cas` needs: who acts (selects the holder guard), extra guards, the field changes and the history entry. */
@@ -273,11 +275,10 @@ export class JobsService {
     if (to === 'ready' && !qcComplete(order)) throw new BadRequestException('کنترل کیفیت کامل نشده است');
     const now = new Date();
     if (to === 'delivered') {
-      // ruling F-I2: only the courier is shown a difference due; a provider never hands it over, an admin confirms the cash.
+      // rulings F-I2/F-I2b: only the courier is shown cash to collect (a due, unpaid COD); a provider never hands it over, an admin confirms it.
       // `mirrorOrder` keeps `dueGuard` in its compare-and-set, so a due raised after this check is a 409, never a silent `due_cash`.
-      const due = amountDue(order);
-      if (due > 0 && o.byRole === 'provider') throw new ConflictException(dueOutstandingForProvider());
-      if (due > 0 && !o.confirmCashCollected) throw new ConflictException(dueOutstandingForAdmin(due));
+      const refusal = handoverRefusal(order, o.byRole === 'provider', o);
+      if (refusal) throw new ConflictException(refusal);
       await this.mirrorOrder(order, 'delivered', true);
     }
     const action: JobAction = to === 'accepted' ? 'accepted' : to === 'completed' ? 'completed' : 'status';

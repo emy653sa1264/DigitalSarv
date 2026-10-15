@@ -409,7 +409,16 @@ describe.skipIf(!servicesUp)('API (e2e)', () => {
     await step('ready');
     expect((await http().get(`/api/orders/${order.id}`).set(authH(cust)).expect(200)).body).toMatchObject({ status: 'packing', fulfillment: { status: 'ready', label: 'آماده شد' } });
     await step('out_for_delivery');
-    await step('delivered');
+    // F-I2b: an unpaid COD order is never handed over by the provider (no amount in the body); the admin confirms the cash shown
+    const refused = (await http().post(`/api/provider/jobs/${job.id}/status`).set(authH(c)).send({ status: 'delivered' }).expect(409)).body;
+    expect(refused).toMatchObject({ code: 'DUE_OUTSTANDING' });
+    expect(refused).not.toHaveProperty('cashToCollect');
+    expect(refused).not.toHaveProperty('amountDue');
+    const cash = (await http().get(`/api/admin/orders/${order.id}`).set(authH(admin)).expect(200)).body.cashToCollect;
+    expect(cash).toBeGreaterThan(0);
+    expect((await http().post(`/api/admin/dispatch/jobs/${job.id}/status`).set(authH(admin)).send({ status: 'delivered', reason: 'e2e', confirmCashCollected: true, expectedCash: cash + 1 }).expect(409)).body)
+      .toMatchObject({ code: 'CASH_CHANGED', cashToCollect: cash });
+    await http().post(`/api/admin/dispatch/jobs/${job.id}/status`).set(authH(admin)).send({ status: 'delivered', reason: 'e2e', confirmCashCollected: true, expectedCash: cash }).expect(200);
     const done = (await http().get(`/api/orders/${order.id}`).set(authH(cust)).expect(200)).body;
     expect(done).toMatchObject({ status: 'delivered', paid: true, paidVia: 'cod' });
     expect(JSON.stringify(done)).not.toMatch(/centerId|providerPricing|providerId|آزمون C/);
@@ -570,7 +579,9 @@ describe.skipIf(!servicesUp)('API (e2e)', () => {
     const detail = (await http().get(`/api/provider/jobs/${job.id}`).set(authH(d)).expect(200)).body;
     for (let i = 0; i < detail.qc.labels.length; i++) await http().patch(`/api/provider/jobs/${job.id}/qc`).set(authH(d)).send({ index: i, done: true }).expect(200);
     await http().post(`/api/provider/jobs/${job.id}/status`).set(authH(d)).send({ status: 'ready' }).expect(200);
-    await http().post(`/api/admin/dispatch/jobs/${job.id}/status`).set(authH(admin)).send({ status: 'delivered', reason: 'e2e ledger' }).expect(200);
+    const cash: number = (await http().get(`/api/admin/orders/${orderId}`).set(authH(admin)).expect(200)).body.cashToCollect ?? 0; // F-I2b: COD is confirmed
+    await http().post(`/api/admin/dispatch/jobs/${job.id}/status`).set(authH(admin))
+      .send({ status: 'delivered', reason: 'e2e ledger', ...(cash ? { confirmCashCollected: true, expectedCash: cash } : {}) }).expect(200);
     return job.id as string;
   }
 

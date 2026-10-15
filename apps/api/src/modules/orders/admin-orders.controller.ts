@@ -24,7 +24,8 @@ export class AdminOrdersController {
 
   @Patch('orders/:id/status')
   setStatus(@Param('id') id: string, @Body() dto: SetStatusDto, @CurrentUser() user: AuthUser) {
-    return this.orders.setStatus(id, dto.status, user.id, { confirmCashCollected: dto.confirmCashCollected === true }).then(adminOrderJson);
+    const confirm = { confirmCashCollected: dto.confirmCashCollected === true, ...(dto.expectedCash !== undefined ? { expectedCash: dto.expectedCash } : {}) };
+    return this.orders.setStatus(id, dto.status, user.id, confirm).then(adminOrderJson);
   }
 
   @Patch('orders/:id/assign')

@@ -59,7 +59,7 @@ import {
 } from './order-helpers.js';
 import { deliveryOf, needsHomePickup, resolveDelivery } from './delivery-rules.js';
 import { Order, OrderDocument, type DeferredEffects } from './order.schema.js';
-import { amountDue, DUE_CLOSED, dueGuard, dueOutstandingForAdmin, paymentOnDelivery, recountRefund, recountSeq } from './order-money.js';
+import { amountDue, DUE_CLOSED, dueGuard, handoverRefusal, paymentOnDelivery, recountRefund, recountSeq, type HandoverConfirm } from './order-money.js';
 import { pickupProblem } from './pickup-rules.js';
 
 /** F10: what a customer is told when a difference cannot be paid in this status (asked before «nothing due»). */
@@ -491,14 +491,16 @@ export class OrdersService {
    * leaving production (`picked_up … qc`) for packing / out_for_delivery / delivered needs every QC item
    * done — checked again atomically in the update, so an item unticked meanwhile makes it a 409.
    */
-  async setStatus(id: string, status: OrderStatus, by?: string, opts: { confirmCashCollected?: boolean } = {}): Promise<OrderDocument> {
+  async setStatus(id: string, status: OrderStatus, by?: string, opts: HandoverConfirm = {}): Promise<OrderDocument> {
     const order = await this.findById(id);
     if (order.status === status) return order;
     if (!canAdminTransition(order.status, status)) {
       throw new BadRequestException(`تغییر وضعیت از «${STATUS_LABELS[order.status]}» به «${STATUS_LABELS[status]}» مجاز نیست`);
     }
-    // ruling F-I2: a difference due is marked collected only when the admin confirms the cash (the CAS below keeps `dueGuard`)
-    if (status === 'delivered' && amountDue(order) > 0 && !opts.confirmCashCollected) throw new ConflictException(dueOutstandingForAdmin(amountDue(order)));
+    // rulings F-I2/F-I2b/M-a: cash to collect (a due, unpaid COD) is marked collected only when the admin confirms the amount shown
+    // (the CAS below keeps `dueGuard`, so the amount cannot change between this check and the write)
+    const refusal = status === 'delivered' ? handoverRefusal(order, false, opts) : null;
+    if (refusal) throw new ConflictException(refusal);
     if (status === 'cancelled') {
       const cancelled = await this.cancelAndRefund(order, { status: order.status }, 'admin', by);
       if (!cancelled) throw OrdersService.raced();

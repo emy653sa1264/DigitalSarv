@@ -46,7 +46,7 @@ export function paymentOnDelivery(o: MoneyOrder, at: Date = new Date()): Deliver
 }
 
 /**
- * Ruling F-I2: the fields `amountDue` is computed from, as an equality filter. A «تحویل شد» write that decided on a due (or on
+ * Ruling F-I2: the fields the cash to collect (`amountDue`, unpaid COD) is computed from, as an equality filter. A «تحویل شد» write that decided on a due (or on
  * none) keeps this in its compare-and-set, so a difference raised meanwhile can never be marked collected (or slip through).
  */
 export function dueGuard(o: MoneyOrder): Record<string, unknown> {
@@ -55,13 +55,36 @@ export function dueGuard(o: MoneyOrder): Record<string, unknown> {
     refunded: o.refunded ? true : { $ne: true },
     chargedAmount: o.chargedAmount ?? null,
     'quote.total': o.quote?.total ?? null,
+    payMethod: o.payMethod ?? null,
   };
 }
 
-/** Ruling F-I2: a non-courier handover while a difference is due (409 `DUE_OUTSTANDING`). The provider never sees the amount. */
-export const dueOutstandingForProvider = () => ({
-  statusCode: 409, code: 'DUE_OUTSTANDING', message: 'برای این سفارش مابه‌التفاوت باقی است؛ تحویل را پشتیبانی ثبت می‌کند',
-});
-export const dueOutstandingForAdmin = (due: number) => ({
-  statusCode: 409, code: 'DUE_OUTSTANDING', message: `مابه‌التفاوت ${fa(due)} تومان هنوز دریافت نشده است`, amountDue: due,
-});
+/** Ruling F-I2b: unpaid COD is cash to collect exactly like a difference due. */
+export const isUnpaidCod = (o: MoneyOrder) => o.payMethod === 'cod' && !o.paid;
+
+/** The cash a «تحویل شد» takes at the door: the unpaid COD total, else the difference due (0 for a cancelled order). */
+export function cashToCollect(o: MoneyOrder): number {
+  if (o.status === 'cancelled') return 0;
+  return isUnpaidCod(o) ? totalOf(o) : amountDue(o);
+}
+
+export interface HandoverConfirm { confirmCashCollected?: boolean; expectedCash?: number }
+
+/**
+ * Rulings F-I2 / F-I2b / M-a: why a non-courier «تحویل شد» may not go ahead (a 409 body), or `null`. The provider never sees an
+ * amount; the admin confirms the cash and the amount shown (`expectedCash`). The caller's CAS keeps `dueGuard`.
+ */
+export function handoverRefusal(o: MoneyOrder, byProvider: boolean, c: HandoverConfirm = {}): Record<string, unknown> | null {
+  const cash = cashToCollect(o);
+  if (cash <= 0) return null;
+  if (byProvider) return { statusCode: 409, code: 'DUE_OUTSTANDING', message: 'برای این سفارش مابه‌التفاوت باقی است؛ تحویل را پشتیبانی ثبت می‌کند' };
+  if (!c.confirmCashCollected) {
+    return isUnpaidCod(o)
+      ? { statusCode: 409, code: 'DUE_OUTSTANDING', message: `مبلغ ${fa(cash)} تومان (پرداخت در محل) هنوز دریافت نشده است`, cashToCollect: cash }
+      : { statusCode: 409, code: 'DUE_OUTSTANDING', message: `مابه‌التفاوت ${fa(cash)} تومان هنوز دریافت نشده است`, cashToCollect: cash, amountDue: cash };
+  }
+  if (c.expectedCash !== cash) {
+    return { statusCode: 409, code: 'CASH_CHANGED', message: `مبلغ نقدی این سفارش تغییر کرده و اکنون ${fa(cash)} تومان است؛ دوباره بررسی کنید`, cashToCollect: cash };
+  }
+  return null;
+}
