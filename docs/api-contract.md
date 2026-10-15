@@ -1241,3 +1241,190 @@ Admin: «مرکز تخصیص سفارش» (`/admin/dispatch`, after «سفارش
 «سفارش‌ها» becomes the home tab (`/provider` → jobs, `/provider/jobs/:id`), «قیمت‌ها» moves to `/provider/prices`,
 new «اعلان‌ها» (`/provider/notifications`, browser push toggle). Customer: «روش و آدرس تحویل» step for orders without
 home pickup; the track screen shows `fulfillment` and the pickup place. Courier: «دریافت از مجری» step.
+
+## v4.3 — ledger and settlement (Master Specification V4, Milestone 4)
+
+Design: `docs/v4-design.md` (D8, D16, D20, D22–D33) and the rulings R1–R14 of
+`docs/superpowers/plans/2026-10-17-v4-m4-ledger.md`. Everything is additive; v1–v4.2 behaviour is unchanged unless stated.
+Customer prices, quotes and catalog customer data are unchanged (D22). All amounts are integer toman.
+
+### Ledger entries (`ledgerEntries`, append-only)
+
+| kind | sign of `amount` | written by | key (unique) |
+|---|---|---|---|
+| `credit` | ≥ 0 (null while pending) | system (job delivered + order paid) | `credit:<jobId>:<providerId>:<production\|delivery>` |
+| `adjustment` | ± (compensation ≥ 0) | admin | `comp:<jobId>:<providerId>` (compensation) · `adj:<requestId>` (manual) |
+| `payout` | < 0 | admin | `payout:<requestId>` |
+| `payout_void` | > 0 (= −payout) | admin | `void:<payoutId>` |
+
+- `state`: `counted` (in the balance) or `pending` («نیازمند تعیین مبلغ», only credits; `amount: null`). A pending credit is
+  resolved once (`pending → counted` with the amount, compare-and-set on `state`); a counted amount is never changed.
+  Corrections are new adjustments; a payout is undone only by a `payout_void`.
+- **Balance** of a provider = Σ `amount` of its counted entries. **Settlement** (D31): `Settings.ledger.settlementWeekday`
+  (JS `getDay()`, default `6` = Saturday). `cutoff` = Tehran 00:00 of the latest settlement day ≤ now; the statement week
+  ending at a cutoff = [cutoff − 7 days, cutoff). `due` = max(0, balance − Σ credits/adjustments counted at or after the
+  cutoff). A payout may not exceed the balance (`available`).
+- **Admin-written entries take the provider's slot** (R1): `ledgerAccounts {_id: providerId, rev}`; the entry stores the
+  unique `slot = "<providerId>:<rev>"` it was computed on, then `rev` is incremented. A concurrent writer on the same slot
+  re-reads the balance and is refused when it no longer fits. A lost race three times in a row answers
+  **409 «حساب مجری هم‌زمان تغییر کرد؛ دوباره تلاش کنید»**.
+
+`LedgerEntryView` (admin):
+```ts
+{ id, kind, state, amount: number | null, title, providerId, providerName?, orderId?, orderCode?, jobId?,
+  role?: 'production' | 'delivery', cause?: 'compensation' | 'manual', compCause?: 'cancelled' | 'reassigned' | 'unassigned',
+  occurredAt, countedAt?, reason?, basis?: CreditBasis, payout?: { paidAt /* yyyy-mm-dd */, bankRef, note?, sheba? /* masked */, holder? },
+  voidOf?, voided: boolean, createdBy?: { id, name }, byRole: 'system' | 'admin',
+  resolution?: { by: { id, name } | null, at, reason }, createdAt }
+CreditBasis = { payoutBasis: number | null, suggested: number | null, missing: string[], snapshotAt?: string, note?: string }
+```
+`title` (Persian): credit «سفارش ۱۰۴۲۱» / delivery credit «ارسال سفارش ۱۰۴۲۱»; compensation «جبران خسارت سفارش ۱۰۴۲۱»;
+manual «اصلاحیه سفارش ۱۰۴۲۱» or «اصلاحیه»; «پرداخت تسویه»; «ابطال پرداخت».
+
+### When a credit is earned (D26–D28)
+
+- A job's move to `delivered` (provider/admin `move`, or the order-level follow-up `onOrderDelivered` by courier/admin/system)
+  sets `Job.ledgerPending: true` **in the same compare-and-set**; right after the write the ledger creates the credits
+  (never throws). The dispatch tick re-runs every job with `ledgerPending` until it is credited (`ledgerPending` unset,
+  `ledgerAt` set). Credits wait while the order is not `paid` (COD is paid in the same update as `delivered`).
+- **Production credit** (the job's `providerId`, role `production`) = `payoutFor(snapshot)`: Σ snapshot line subtotals,
+  where school child lines are recomputed with the snapshot unit price × the order's final book counts (R5), + the
+  provider's delivery fee when that provider delivered. Counted when the snapshot belongs to that provider and its
+  `payoutBasis` is not null and the child lines still match; otherwise **pending** with
+  `basis.suggested` (Σ priced lines + own delivery fee, or the recomputed amount) and `basis.missing` (the missing labels, or
+  «قیمت مجری برای این سفارش ثبت نشده است» without a snapshot) and `basis.note` («تعداد کتاب‌ها پس از تخصیص تغییر کرده است»).
+- **Delivery credit** (a separate delivery provider, `deliveryMethod = 'provider'`, role `delivery`) = the snapshot's
+  `delivery.fee` when it names that provider (a fee of 0 creates nothing); unknown fee → pending.
+- A job delivered without a provider creates nothing. `occurredAt` = `Job.deliveredAt`; `countedAt` = when counted.
+- `seed:base` flags delivered/completed jobs without `ledgerAt` once (jobs delivered before v4.3 are credited once, R11).
+
+### Compensation («جبران خسارت مجری», D30, R6)
+
+Candidates (one per job + provider): a `cancelled` job whose `cancel.stage` is `in_production` / `after_production` (the
+holder, `cause: 'cancelled'`); a provider that lost the job by `reassigned` (its `previousProviderId`) or `unassigned` (its
+`providerId`) with `stage` `in_production` / `after_production`. Not listed once decided (`comp:` key exists) or when the
+same provider delivered the job (production credit exists). `payoutBasis` = that provider's latest snapshot `payoutBasis`
+(`Job.providerPricing` or `Job.pricingHistory`), null when unpriced. The decision is an adjustment
+`cause: 'compensation'`, `0 ≤ amount ≤ payoutBasis` (any amount ≥ 0 when null), with a reason. A refund after delivery never
+touches credits; an admin may add a negative manual adjustment.
+
+### Admin endpoints (`/admin/ledger`, role admin)
+
+| Method + path | Permission | Body / query → response |
+|---|---|---|
+| `GET /admin/ledger/balances` | `ledger_view` | `?page&limit&q` → `Paged<ProviderBalanceRow>` |
+| `GET /admin/ledger/providers/:id` | `ledger_view` | → `ProviderLedgerAdmin` |
+| `GET /admin/ledger/providers/:id/entries` | `ledger_view` | `?page&limit&kind&from&to` (yyyy-mm-dd, Tehran, by `createdAt`) → `Paged<LedgerEntryView>` (newest first) |
+| `GET /admin/ledger/providers/:id/statement` | `ledger_view` | `?cutoff=yyyy-mm-dd` (default the current cutoff) → `WeeklyStatement` |
+| `PUT /admin/ledger/providers/:id/bank` | `payout_record` | `{ sheba, holder, bankName? }` → `BankAccountView` |
+| `GET /admin/ledger/pending` | `ledger_view` | `?page&limit` → `Paged<LedgerEntryView>` (pending credits, oldest first) |
+| `POST /admin/ledger/entries/:id/resolve` | `ledger_adjust` | `{ amount ≥ 0, reason }` → `LedgerEntryView` |
+| `GET /admin/ledger/compensation` | `ledger_view` | `?page&limit` → `Paged<CompensationItem>` |
+| `POST /admin/ledger/compensation` | `ledger_adjust` | `{ jobId, providerId, amount ≥ 0, reason }` → `LedgerEntryView` (201) |
+| `POST /admin/ledger/adjustments` | `ledger_adjust` | `{ providerId, amount ≠ 0, reason, orderCode?, requestId }` → `LedgerEntryView` (201) |
+| `POST /admin/ledger/payouts` | `payout_record` | `{ providerId, amount ≥ 1, paidAt, bankRef, note?, requestId }` → `LedgerEntryView` (201) |
+| `POST /admin/ledger/payouts/:id/void` | `payout_record` | `{ reason }` → `LedgerEntryView` (the void entry) |
+| `GET /admin/ledger/wallet` | `ledger_view` | `?from&to` (yyyy-mm-dd inclusive, ≤ 366 days) → `WalletReport` |
+| `GET /admin/ledger/wallet/export` | `ledger_view` | same query → `text/csv; charset=utf-8` (BOM), `Content-Disposition: attachment; filename="sarv-wallet-<from>-<to>.csv"` |
+
+**Idempotency (`requestId`, R2/P3):** the same `requestId` with the same provider, kind and amount returns the stored entry
+(no second write). The same `requestId` with a different body returns 409 «این درخواست قبلاً با مقادیر دیگری ثبت شده است».
+«Different» means, besides provider, kind and amount, a different `reason`/`orderCode` for adjustments, or a different
+`paidAt`/`bankRef`/`note` for payouts.
+
+**Date query params (P6):** `from`, `to` (entries, wallet) and `cutoff` (statement) are `yyyy-mm-dd` and are validated as real
+calendar dates (`2026-02-30` is invalid). An invalid date returns 400 «تاریخ باید به‌صورت yyyy-mm-dd باشد».
+
+```ts
+LedgerBalance       { available, due, earnedSinceCutoff, pendingCount }
+SettlementInfo      { weekday, cutoff /* yyyy-mm-dd of the cutoff day */, next /* yyyy-mm-dd */ }
+BankAccountView     { sheba, holder, bankName, updatedAt }
+ProviderBalanceRow  { providerId, name, businessName, status, balance: LedgerBalance, lastPayoutAt: string | null, hasBank }
+ProviderLedgerAdmin { provider: { id, name, businessName, status }, balance: LedgerBalance, bank: BankAccountView | null, settlement: SettlementInfo }
+WeeklyStatement     { providerId, from, to /* yyyy-mm-dd, inclusive */, opening, earned, paid, closing, lines: LedgerEntryView[] }
+CompensationItem    { jobId, orderId, orderCode, providerId, providerName, cause, stage: 'in_production' | 'after_production', at, payoutBasis: number | null }
+WalletRow           { from, to, orders, charged, providerCost, courierTasks, courierCost, share }
+WalletReport        { from, to, perTaskFee, rows: WalletRow[], total: WalletRow }
+```
+`WeeklyStatement`: `opening` = balance counted before `from`, `earned` = Σ credits/adjustments counted in the week,
+`paid` = −Σ payouts/voids counted in the week, `closing` = opening + earned − paid; `lines` = the week's counted entries.
+CSV columns: «از تاریخ, تا تاریخ, سفارش‌های تحویل‌شده, دریافتی از مشتریان, سهم مجریان, کارهای پیک, دستمزد پیک (برآورد), سهم دیجیتال سرو», one row per
+week and «جمع»; ASCII digits and Gregorian dates.
+
+**Wallet formula (D32, R9):** `charged` = Σ `chargedAmount` (fallback `quote.total`) of paid orders whose last `delivered`
+timeline entry is in the row; `providerCost` = Σ counted credits + adjustments by `countedAt`; `courierTasks` = home
+pickups (`picked_up` / `awaiting_approval` timeline) + courier deliveries (`delivery.method = 'courier'`, `delivered`
+timeline) in the row; `courierCost` = `courierTasks × courier.perTaskFee` (current setting, an estimate); `share` =
+`charged − providerCost − courierCost`. Rows are the settlement weeks intersecting [from, to] (first/last clipped).
+
+### Provider endpoints (`/provider/ledger`, role provider, `ProviderScopeGuard`)
+
+| Method + path | Response |
+|---|---|
+| `GET /provider/ledger` | `{ balance: { available, due, pendingCount }, settlement: { weekday, next }, bank: { sheba /* masked IR••…••0001 */, holder } \| null }` |
+| `GET /provider/ledger/entries?page&limit` | `Paged<{ id, kind, state, title, orderCode?, at, amount: number \| null, bankRef?, voided? }>` (newest first) |
+
+Only the caller's entries; never reasons, notes, bases, `createdBy`, other providers or customer prices (D32, R8).
+There is no provider write endpoint for the bank account (R7).
+
+### Bank account (D31, R7)
+
+`Center.bankAccount { sheba, holder, bankName, updatedAt, updatedBy }`. Sheba: Persian/Arabic digits, spaces and dashes are
+accepted and normalized to `IR` + 24 ASCII digits (24 digits without `IR` get the prefix); the ISO 7064 mod-97 check must
+pass. Messages: «شماره شبا باید با IR شروع شود و ۲۴ رقم داشته باشد», «شماره شبا معتبر نیست؛ رقم‌های آن را بررسی کنید»,
+holder 2–80 characters «نام صاحب حساب را وارد کنید». Provider admin/self JSON (v4.1) do not include it.
+
+### Non-print provider prices (D29, R3)
+
+New price-book combos, **provider layer only** (a customer-layer create is 400 «این ترکیب فقط قیمت مجری دارد»; a customer-layer preview returns 200 `{ unitPrice: null, error }`):
+`school|book`, `school|lined`, `docs|<bw|color|mixed>|<single|double>`, `docs|hardcover`,
+`flyer|<A4|A5|A6>|<color|mono>|<glossy|plain>|<single|double>`, `flyer|design`, `cart|<laserBw|laserColor|inkjet>`,
+`repair|<laser|inkjet|mfp|copier|other>`, `extra|<extraKey>`. `service` values of `GET /admin/price-book`,
+`GET /provider/prices` and the bulk filter accept `school`, `docs`, `flyer`, `cart`, `repair`, `extra` (compare stays
+print-only). Submission → approval exactly as in v4.1. Quantities at assignment: school = books, lined sheets
+(books × lined count), extras (books per extra); docs = printed pages × copies + hardcover copies (spiral docs use the
+order's `spiral|<rangeId>` lines); flyer = quantity (+ design once when «طراحی توسط ما»); cartridge = count; repair = 1
+(`device` missing → `other`); print services' `extra|<key>` lines are priced like any combo; `spiral_color|…` lines are
+customer-only and have no provider line. «قیمت مجری تنظیم نشده» + `confirmMissingPrice` remain for lines still unpriced
+(the v3 «چاپ اسناد» kind, combos without a provider price). Snapshot lines of school children carry `childIndex` +
+`childName`; the snapshot carries `childCount`.
+
+### Permissions (D33)
+
+`ledger_view` (balances, statements, entries, pending, compensation queue, wallet report and CSV), `ledger_adjust`
+(resolve pending, compensation, manual adjustments), `payout_record` (record/void payouts, set the bank account).
+Super-admins have all; shown in «کارکنان و دسترسی‌ها» as «مالی و تسویه».
+
+### Settings («تنظیمات»)
+
+`ledger: { settlementWeekday: 0–6 }` (default 6) in `GET/PUT /admin/settings` (per-field save, «روز هفته معتبر نیست (۰ یکشنبه … ۶ شنبه)»).
+
+### Notifications (D19, R12)
+
+Provider events `payout_recorded` («پرداخت تسویه برای شما ثبت شد.» + « — ۱٬۲۰۰٬۰۰۰ تومان») and `payout_voided`
+(«یک پرداخت تسویه باطل شد.» + amount), inbox + web push, url `/provider/settlement`. Inbox rows of these events have no
+order: `orderId: ''`, `orderCode: ''` in `UserNotification`.
+
+### Errors
+
+400 «مبلغ باید عدد صحیح (تومان) باشد» · «مبلغ پرداخت از مانده حساب مجری بیشتر است» · «ابتدا شماره شبای مجری را ثبت کنید» ·
+«تاریخ پرداخت نمی‌تواند در آینده باشد» · «شماره پیگیری بانکی را وارد کنید» · «تاریخ باید به‌صورت yyyy-mm-dd باشد» · «مبلغ جبران خسارت نمی‌تواند از سهم قابل پرداخت به مجری بیشتر باشد» ·
+«مبلغ اصلاحیه نمی‌تواند صفر باشد» · «دلیل را بنویسید» · «بازه گزارش حداکثر ۳۶۶ روز است» · «تاریخ پایان نباید قبل از تاریخ شروع باشد» ·
+«این ترکیب فقط قیمت مجری دارد». 404 «مجری یافت نشد» · «ردیف حساب یافت نشد» · «پرداخت یافت نشد» · «مورد جبران خسارت یافت نشد» ·
+«سفارش یافت نشد». 409 «این مبلغ قبلاً تعیین شده است» · «برای این مورد قبلاً تصمیم گرفته شده است» · «این پرداخت قبلاً باطل شده است» ·
+«این درخواست قبلاً با مقادیر دیگری ثبت شده است» · «حساب مجری هم‌زمان تغییر کرد؛ دوباره تلاش کنید» ·
+`DELETE /admin/providers/:id` «این مجری در حساب تسویه سابقه دارد؛ به‌جای حذف آن را غیرفعال کنید».
+
+### Seed (dev)
+
+Demo `seed`: «چاپ نگین» gets non-print provider prices (`school|book` 9,000, `school|lined` 300, `docs|bw|single` 600,
+`docs|hardcover` 60,000, `cart|laserBw` 250,000, `flyer|A5|color|glossy|single` 120; `repair|laser` 400,000 pending
+approval), the bank account `IR062960000000100324200001` «علی نگینی», two counted credits, one pending credit and one
+payout. `seed:base` inserts the two payout templates and flags delivered jobs for crediting (R11).
+
+### Admin menu and apps
+
+Admin: «تسویه مجریان» (`/admin/ledger`, after «مدیریت مجریان», `ledger_view`; tabs «مانده مجریان», «نیازمند تعیین مبلغ»,
+«جبران خسارت مجری», «کیف پول دیجیتال سرو»; a provider sheet with statement, entries, bank account, payout and
+adjustment). «تنظیمات» gets «تسویه مجریان» (settlement weekday). Pricing center «قیمت مجریان» lists the new services.
+Provider app: new «تسویه» tab (`/provider/settlement`); «قیمت‌های من» lists the new services.
