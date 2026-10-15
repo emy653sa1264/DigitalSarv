@@ -31,6 +31,7 @@ export function DeliveryMethodPicker({ homePickup }: { homePickup?: boolean }) {
     if (delivery.method === 'customer_pickup' && catalog.data && !points.some((p) => p.id === delivery.pickupPointId)) {
       setDelivery({ pickupPointId: points[0]?.id, ...(points.length ? {} : { method: 'courier' as const }) })
       if (!points.length) notify('محل تحویل انتخابی دیگر فعال نیست؛ ارسال با پیک انتخاب شد')
+      else if (delivery.pickupPointId) notify(`محل تحویل انتخابی دیگر فعال نیست؛ «${points[0].name}» انتخاب شد`)
     }
   }, [catalog.data, points, delivery.method, delivery.pickupPointId, setDelivery])
 

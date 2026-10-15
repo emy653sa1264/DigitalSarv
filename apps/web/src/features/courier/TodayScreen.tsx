@@ -79,13 +79,13 @@ function TaskCard({ task }: { task: CourierTask }) {
       <div className="mt-2.5 text-[15px] font-extrabold">{task.customer}</div>
       <div className="mt-[3px] text-[12.5px] leading-[1.6] text-muted-2">{task.address}</div>
       {task.from && <div className="mt-1 text-[12.5px] font-bold text-accent">دریافت از: {task.from.name}</div>}
-      {task.dropoff && <div className="mt-1 text-[12.5px] font-bold text-cyan-dark">تحویل به مجری: {task.dropoff.name}</div>}
+      {task.dropoff && !done && <div className="mt-1 text-[12.5px] font-bold text-cyan-dark">تحویل به مجری: {task.dropoff.name}</div>}
       <div className="mt-2 text-[12.5px] font-extrabold text-green-dark">{task.detail}</div>
       <div className="mt-3 flex gap-2">
         <Button variant="secondary" size="sm" className="h-10 flex-1" onClick={open}>
           جزئیات
         </Button>
-        <Button variant="night" size="sm" className="h-10 flex-1" onClick={() => openMap((task.status === 'packing' && task.from?.address) || task.address)}>
+        <Button variant="night" size="sm" className="h-10 flex-1" onClick={() => openMap((task.status === 'packing' && task.from && (task.from.address || task.from.name)) || task.address)}>
           مسیریابی
         </Button>
       </div>

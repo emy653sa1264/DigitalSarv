@@ -92,7 +92,9 @@ function TaskDetail({ order, kind, task }: { order: Order; kind: TaskKind; task?
   const address = order.pickup?.address || task?.address || ''
   const collected = useMarkCollected(order.id)
   const collecting = kind === 'delivery' && order.status === 'packing' && !!task?.from
-  const mapTarget = collecting ? task!.from!.address : address
+  const shop = collecting ? task!.from! : undefined
+  // a provider without a saved address is still found on the map by its name
+  const mapTarget = shop ? shop.address || shop.name : address
   const phone = order.pickup?.phone || order.customerPhone || task?.phone || ''
   const slot = task?.slot || order.pickup?.slot
   const done = isTaskDone(kind, order.status)
@@ -121,6 +123,23 @@ function TaskDetail({ order, kind, task }: { order: Order; kind: TaskKind; task?
         />
       </div>
 
+      {/* collecting: the shop comes first — that is where the courier goes now */}
+      {shop && (
+        <Panel className="mt-[11px]">
+          <div className="text-[13px] font-extrabold text-accent">دریافت از مجری</div>
+          <div className="mt-1 text-[15px] font-black">{shop.name}</div>
+          <div className="mt-1 text-[13px] leading-[1.7] text-muted-2">
+            {shop.address || 'آدرس مجری ثبت نشده است'}
+            {shop.phone && (
+              <>
+                {' · '}
+                <a href={`tel:${shop.phone}`} dir="ltr">{fa(shop.phone)}</a>
+              </>
+            )}
+          </div>
+        </Panel>
+      )}
+
       <Panel className="mt-[11px]">
         <div className="flex items-center justify-between gap-2.5">
           <div className="flex items-center gap-1.5">
@@ -138,16 +157,7 @@ function TaskDetail({ order, kind, task }: { order: Order; kind: TaskKind; task?
         </div>
       </Panel>
 
-      {collecting && (
-        <Panel className="mt-[11px]">
-          <div className="text-[13px] font-extrabold text-accent">دریافت از مجری</div>
-          <div className="mt-1 text-[15px] font-black">{task!.from!.name}</div>
-          <div className="mt-1 text-[13px] leading-[1.7] text-muted-2">
-            {task!.from!.address} · <a href={`tel:${task!.from!.phone}`} dir="ltr">{fa(task!.from!.phone)}</a>
-          </div>
-        </Panel>
-      )}
-      {kind === 'pickup' && task?.dropoff && (
+      {kind === 'pickup' && !done && task?.dropoff && (
         <InfoBanner tone="cyan" className="mt-[11px]">
           پس از تحویل‌گیری، اقلام را به «{task.dropoff.name}» — {task.dropoff.address} برسانید.
         </InfoBanner>
