@@ -8,6 +8,8 @@ import { AdminCard, CardNote, CardTitle } from '../../components/kit'
 export function pointsProblem(list: PickupPoint[]): string | null {
   if (list.length > 30) return 'حداکثر ۳۰ محل تحویل حضوری مجاز است'
   for (const p of list) {
+    if (p.name.length > 60 || p.hours.length > 60) return 'نام و ساعت کاری هر محل حداکثر ۶۰ نویسه است'
+    if (p.address.length > 300) return 'آدرس هر محل حداکثر ۳۰۰ نویسه است'
     if (!p.name.trim()) return 'نام محل تحویل را وارد کنید'
     if (!p.address.trim()) return 'آدرس محل تحویل را وارد کنید'
     if (!/^\d{5,15}$/.test(toEnDigits(p.phone))) return 'شماره تماس محل تحویل معتبر نیست'
@@ -28,9 +30,9 @@ export function PickupPointsCard({ value, onChange, problem }: { value: PickupPo
         {value.length === 0 && <div className="text-[12.5px] text-muted-2">هنوز محلی ثبت نشده؛ تا آن زمان مشتری گزینه «تحویل حضوری» ندارد.</div>}
         {value.map((p, i) => (
           <div key={p.id || `new-${i}`} className="grid gap-2 rounded-[18px] border border-line p-3 sm:grid-cols-2">
-            <Input placeholder="نام محل" value={p.name} onChange={(e) => set(i, { name: e.target.value })} />
-            <Input placeholder="ساعت کاری، مثلاً ۹ تا ۱۸" value={p.hours} onChange={(e) => set(i, { hours: e.target.value })} />
-            <Input placeholder="آدرس" value={p.address} onChange={(e) => set(i, { address: e.target.value })} className="sm:col-span-2" />
+            <Input maxLength={60} placeholder="نام محل" value={p.name} onChange={(e) => set(i, { name: e.target.value })} />
+            <Input maxLength={60} placeholder="ساعت کاری، مثلاً ۹ تا ۱۸" value={p.hours} onChange={(e) => set(i, { hours: e.target.value })} />
+            <Input maxLength={300} placeholder="آدرس" value={p.address} onChange={(e) => set(i, { address: e.target.value })} className="sm:col-span-2" />
             <Input placeholder="تلفن" dir="ltr" inputMode="tel" value={p.phone} onChange={(e) => set(i, { phone: toEnDigits(e.target.value) })} className="text-start" />
             <div className="flex items-center justify-end gap-2.5">
               <span className="text-[12.5px] font-bold">{p.on ? 'فعال' : 'غیرفعال'}</span>

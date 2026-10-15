@@ -6,6 +6,7 @@ import { AdminCard, CardNote, CardTitle } from '../../components/kit'
 export function dispatchProblem(d: DispatchSettings): string | null {
   if (d.responseTimeoutMinutes < 10 || d.responseTimeoutMinutes > 1440) return 'مهلت پاسخ مجری باید بین ۱۰ تا ۱۴۴۰ دقیقه باشد'
   if (d.leadHours < 1 || d.leadHours > 720 || d.urgentLeadHours < 1 || d.urgentLeadHours > 720) return 'مهلت انجام سفارش باید بین ۱ تا ۷۲۰ ساعت باشد'
+  if (d.urgentLeadHours > d.leadHours) return 'مهلت سفارش فوری نباید بیشتر از مهلت سفارش عادی باشد'
   if (d.deadlineReminderMinutes < 0 || d.deadlineReminderMinutes > 1440) return 'یادآوری مهلت باید بین ۰ تا ۱۴۴۰ دقیقه باشد'
   if (d.autoCompleteHours < 0 || d.autoCompleteHours > 720) return 'تکمیل خودکار باید بین ۰ تا ۷۲۰ ساعت باشد'
   return null

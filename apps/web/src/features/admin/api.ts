@@ -181,6 +181,7 @@ export function useOrderMutations() {
     mutationFn: ({ id, ...body }: { id: string; courierId?: string | null; centerId?: string | null; override?: boolean; reason?: string; confirmMissingPrice?: boolean }) =>
       api.patch<Order>(`/admin/orders/${id}/assign`, body),
     onSuccess: (_d, { id }) => settle(id),
+    meta: { quietCodes: ['NOT_CAPABLE', 'PROVIDER_NOT_ELIGIBLE', 'PROVIDER_PRICE_MISSING'] },
   })
 
   const setQc = useMutation({

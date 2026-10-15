@@ -26,7 +26,7 @@ export const useDispatchJob = (id: string | undefined) =>
 export const useEligibility = (id: string | undefined, deliveryMethod?: DeliveryMethod, enabled = true) =>
   useQuery({ queryKey: dk.eligibility(id ?? '', deliveryMethod), enabled: !!id && enabled, queryFn: () => api.get<Eligibility>(`/admin/dispatch/jobs/${id}/eligibility`, { deliveryMethod }) })
 export const useDispatchPerformance = (from?: string, to?: string, enabled = true) =>
-  useQuery({ queryKey: dk.performance(from, to), enabled, queryFn: () => api.get<ProviderPerformance[]>('/admin/dispatch/performance', { from, to }) })
+  useQuery({ queryKey: dk.performance(from, to), enabled, placeholderData: keepPreviousData, queryFn: () => api.get<ProviderPerformance[]>('/admin/dispatch/performance', { from, to }) })
 
 /** Every write refreshes the dispatch center and the order views it mirrors into. */
 export function useDispatchMutations(id: string) {

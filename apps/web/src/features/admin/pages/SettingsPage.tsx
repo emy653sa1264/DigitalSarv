@@ -99,7 +99,14 @@ function SettingsForm({ initial }: { initial: AdminSettings }) {
     if (!Object.keys(patch).length) return
     setState('saving')
     save.mutate(patch, {
-      onSuccess: () => {
+      onSuccess: (data) => {
+        // adopt the ids the server minted for new points (same order), so later saves keep them
+        const saved = data.pickupPoints
+        if (patch.pickupPoints) {
+          const adopt = <T extends { id?: string }>(list: T[]): T[] => (list.length === saved.length ? list.map((p, i) => (p.id ? p : { ...p, id: saved[i].id })) : list)
+          setPoints((prev) => adopt(prev))
+          if (pending.current.pickupPoints) pending.current = { ...pending.current, pickupPoints: adopt(pending.current.pickupPoints) }
+        }
         if (!Object.keys(pending.current).length) setState('saved')
         notify('تنظیمات ذخیره شد')
       },

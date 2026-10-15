@@ -16,6 +16,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '
 import { notify, toast } from '@/components/ui/sonner'
 import { ApiError } from '@/lib/api'
 import { DELIVERY_METHOD_LABEL } from '@/lib/dispatch-labels'
+import { useCan } from '@/lib/permissions'
 import { fa, jalali, jalaliDayTime, money } from '@/lib/format'
 import type { Order, OrderStatus } from '@/lib/types'
 import { ORDER_STATUS_LABEL } from '@/lib/types'
@@ -122,6 +123,8 @@ function ControlsCard({ order }: { order: Order }) {
   const centers = useCenters()
   const [confirming, setConfirming] = useState<OrderStatus>()
   const [retry, setRetry] = useState<CenterRetry | null>(null)
+  const [retryReason, setRetryReason] = useState('')
+  const canDispatch = useCan('dispatch_view')
   const navigate = useNavigate()
 
   const unpaid = order.status === 'pending_payment'
@@ -147,6 +150,7 @@ function ControlsCard({ order }: { order: Order }) {
       {
         onSuccess: () => {
           setRetry(null)
+          setRetryReason('')
           notify('مجری سفارش تعیین شد')
         },
         onError: (e) => {
@@ -160,6 +164,7 @@ function ControlsCard({ order }: { order: Order }) {
     )
   const changeCenter = (v: string) => {
     setRetry(null)
+    setRetryReason('')
     sendCenter(v === NONE ? null : v)
   }
 
@@ -200,16 +205,18 @@ function ControlsCard({ order }: { order: Order }) {
               placeholder="انتخاب مجری"
               options={[{ value: NONE, label: 'تخصیص‌نیافته' }, ...(centers.data ?? []).map((c) => ({ value: c.id, label: c.name }))]}
             />
-            <a
-              href={`/admin/dispatch?job=${order.id}`}
-              onClick={(e) => {
-                e.preventDefault()
-                navigate(`/admin/dispatch?job=${order.id}`)
-              }}
-              className="text-[12px] font-extrabold text-accent"
-            >
-              باز کردن در مرکز تخصیص
-            </a>
+            {canDispatch && (
+              <a
+                href={`/admin/dispatch?job=${order.id}`}
+                onClick={(e) => {
+                  e.preventDefault()
+                  navigate(`/admin/dispatch?job=${order.id}`)
+                }}
+                className="text-[12px] font-extrabold text-accent"
+              >
+                باز کردن در مرکز تخصیص
+              </a>
+            )}
           </label>
         </div>
       </div>
@@ -218,6 +225,8 @@ function ControlsCard({ order }: { order: Order }) {
         <CenterRetryDialog
           key={`${retry.centerId}-${retry.kind}`}
           retry={retry}
+          reason={retryReason}
+          onReason={setRetryReason}
           pending={assign.isPending}
           onClose={() => setRetry(null)}
           onSubmit={(reason) =>
@@ -262,8 +271,7 @@ interface CenterRetry {
 }
 
 /** Same rules as the dispatch center's assign dialog: hard blockers are shown, eligibility needs a reason, a missing provider price needs confirmation. */
-function CenterRetryDialog({ retry, pending, onClose, onSubmit }: { retry: CenterRetry; pending: boolean; onClose: () => void; onSubmit: (reason: string) => void }) {
-  const [reason, setReason] = useState('')
+function CenterRetryDialog({ retry, reason, onReason, pending, onClose, onSubmit }: { retry: CenterRetry; reason: string; onReason: (r: string) => void; pending: boolean; onClose: () => void; onSubmit: (reason: string) => void }) {
   const [confirmed, setConfirmed] = useState(false)
   const submit = () => {
     if (retry.kind === 'hard') return onClose()
@@ -301,7 +309,7 @@ function CenterRetryDialog({ retry, pending, onClose, onSubmit }: { retry: Cente
       )}
       {retry.kind !== 'hard' && retry.override && (
         <Field label="دلیل نادیده‌گرفتن شرایط">
-          <Textarea rows={3} value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300} />
+          <Textarea rows={3} value={reason} onChange={(e) => onReason(e.target.value)} maxLength={300} />
         </Field>
       )}
     </FormDialog>
