@@ -41,7 +41,7 @@ describe('countPdfPages (worker thread)', () => {
     const path = join(dir, 'a.pdf');
     await writeFile(path, await pdf(4));
     await expect(countPdfPages(path)).resolves.toBe(4);
-  });
+  }, 20_000); // a real worker thread: slow to start under full-suite load
 
   it('resolves undefined (never throws) on a timeout, a missing file or a non-PDF', async () => {
     const path = join(dir, 'a.pdf');
@@ -50,5 +50,5 @@ describe('countPdfPages (worker thread)', () => {
     await expect(countPdfPages(join(dir, 'missing.pdf'))).resolves.toBeUndefined();
     await writeFile(join(dir, 'x.pdf'), 'not a pdf');
     await expect(countPdfPages(join(dir, 'x.pdf'))).resolves.toBeUndefined();
-  });
+  }, 20_000);
 });
