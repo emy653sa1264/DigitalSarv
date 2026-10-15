@@ -4,6 +4,7 @@ import { AdminLayout } from './layout/AdminLayout'
 import { CampaignsPage } from './pages/CampaignsPage'
 import { CatalogPage } from './pages/CatalogPage'
 import { ProvidersPage } from './pages/providers/ProvidersPage'
+import { LedgerPage } from './pages/ledger/LedgerPage'
 import { CmsPage } from './pages/CmsPage'
 import { CouriersPage } from './pages/CouriersPage'
 import { CustomersPage } from './pages/CustomersPage'
@@ -43,6 +44,7 @@ export const adminRoutes: RouteObject[] = [
           { path: 'customers', element: <CustomersPage /> },
           { path: 'couriers', element: <CouriersPage /> },
           { path: 'providers', element: <ProvidersPage /> },
+          { path: 'ledger', element: <LedgerPage /> },
           { path: 'centers', element: <Navigate to="/admin/providers" replace /> },
           { path: 'cms', element: <CmsPage /> },
           { path: 'notifications', element: <NotificationsPage /> },

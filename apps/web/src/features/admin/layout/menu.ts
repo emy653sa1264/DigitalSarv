@@ -12,6 +12,7 @@ import {
   useRules,
 } from '../api'
 import { useDispatchJobs } from '../dispatch-api'
+import { usePendingCredits } from '../ledger-api'
 
 export interface AdminMenuItem {
   key: string
@@ -44,6 +45,7 @@ export const ADMIN_MENU: AdminMenuItem[] = [
   { key: 'customers', to: '/admin/customers', label: 'مشتریان' },
   { key: 'agents', to: '/admin/couriers', label: 'پیک‌ها و مناطق' },
   { key: 'centers', to: '/admin/providers', label: 'مدیریت مجریان', anyOf: ['provider_view'] },
+  { key: 'ledger', to: '/admin/ledger', label: 'تسویه مجریان', anyOf: ['ledger_view'] },
   { key: 'cms', to: '/admin/cms', label: 'لندینگ و محتوا' },
   { key: 'notif', to: '/admin/notifications', label: 'اعلان‌ها' },
   { key: 'staff', to: '/admin/staff', label: 'کارکنان و دسترسی‌ها', superOnly: true },
@@ -62,6 +64,7 @@ export function useMenuCounts(): Record<string, string> {
   const centers = useCenters()
   const notifications = useNotificationTemplates()
   const dispatch = useDispatchJobs({ tab: 'unassigned', page: 1, limit: 1 }, useCan('dispatch_view'))
+  const pending = usePendingCredits(1, useCan('ledger_view'))
 
   return {
     orders: count(orders.data?.total),
@@ -72,6 +75,7 @@ export function useMenuCounts(): Record<string, string> {
     customers: count(stats.data?.active),
     agents: count(couriers.data?.length),
     centers: count(centers.data?.length),
+    ledger: count(pending.data?.total),
     notif: count(notifications.data?.length),
   }
 }
