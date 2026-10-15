@@ -135,7 +135,10 @@ export function comboWithinCapabilities(o: ComboOptions, caps: Capability[]): bo
       return o.addon === 'lam_sheet'
         ? prints.some((c) => c.addons.includes('lam_sheet') && c.sizes.includes(o.size))
         : prints.some((c) => c.addons.includes(o.addon));
-    default: return false;
+    case 'school': case 'docs': case 'flyer': case 'cart': case 'repair':
+      return caps.some((c) => c.service === o.service);
+    case 'extra':
+      return caps.some((c) => c.service === 'black_white_printing' || c.service === 'color_printing' || c.service === 'school');
   }
 }
 

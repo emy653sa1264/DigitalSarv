@@ -1,7 +1,7 @@
 import { Type } from 'class-transformer';
 import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsISO8601, IsMongoId, IsOptional, IsString, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
 import { BULK_OPS, type BulkOp } from '../bulk.js';
-import { COLOR_TYPES, PRINT_SIZES, SIDES } from '../combo.js';
+import { COLOR_TYPES, COMBO_SERVICES, PRINT_SIZES, SIDES, type ComboService } from '../combo.js';
 import { PRICE_LAYERS, PRICE_MODES, ROUNDINGS, type PriceLayer, type PriceMode } from '../price-book.constants.js';
 
 /** The value fields of a version (shared by preview and create). */
@@ -39,7 +39,7 @@ export class CompareQueryDto {
   @IsOptional() @IsMongoId() providerId?: string;
 }
 export class BulkFilterDto {
-  @IsOptional() @IsIn(['bw', 'color', 'spiral', 'addon']) service?: 'bw' | 'color' | 'spiral' | 'addon';
+  @IsOptional() @IsIn(COMBO_SERVICES) service?: ComboService;
   @IsOptional() @IsIn(PRINT_SIZES) size?: string;
   @IsOptional() @IsIn(COLOR_TYPES) colorType?: string;
   @IsOptional() @IsString() @MaxLength(40) paper?: string;
@@ -72,7 +72,7 @@ export class UpdateRangeDto {
 export class MatrixQueryDto {
   @IsIn(PRICE_LAYERS) layer: PriceLayer;
   @IsOptional() @IsMongoId() providerId?: string;
-  @IsOptional() @IsIn(['bw', 'color', 'spiral', 'addon']) service?: 'bw' | 'color' | 'spiral' | 'addon';
+  @IsOptional() @IsIn(COMBO_SERVICES) service?: ComboService;
 }
 export class HistoryQueryDto {
   @IsIn(PRICE_LAYERS) layer: PriceLayer;
@@ -87,7 +87,7 @@ export class SubmitProviderPriceDto {
   @IsString() @MinLength(1, { message: 'دلیل تغییر قیمت را بنویسید' }) @MaxLength(300) reason: string;
 }
 export class ProviderPricesQueryDto {
-  @IsOptional() @IsIn(['bw', 'color', 'spiral', 'addon']) service?: 'bw' | 'color' | 'spiral' | 'addon';
+  @IsOptional() @IsIn(COMBO_SERVICES) service?: ComboService;
 }
 export class ProviderHistoryQueryDto {
   @IsString() @MaxLength(120) comboKey: string;

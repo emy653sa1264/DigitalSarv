@@ -16,9 +16,10 @@ export interface PricedOrder {
 
 /** Persian label of a snapshot line key (price-book combos via `comboLabel`). */
 export function providerLineLabel(key: string, names: LabelNames): string {
+  // order-snapshot `extra|<key>` lines keep their short label (the provider-only `extra|` combo is not priced here)
+  if (key.startsWith('extra|')) return 'خدمات اضافی';
   const o = parseCombo(key);
   if (o) return comboLabel(o, names);
-  if (key.startsWith('extra|')) return 'خدمات اضافی';
   if (key.startsWith('spiral_color|')) return 'هزینه رنگ فنری';
   if (key === 'docs_print') return 'چاپ صفحات';
   return key;

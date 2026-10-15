@@ -1,12 +1,13 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { randomUUID } from 'node:crypto';
 import { Model, Types } from 'mongoose';
 import { canViewProviderPrices, type Permission } from '../../common/permissions.js';
 import { CatalogService } from '../catalog/catalog.service.js';
+import { Extra } from '../catalog/schemas/extra.schema.js';
 import { Paper } from '../catalog/schemas/paper.schema.js';
 import { User } from '../users/user.schema.js';
-import { COLOR_TYPES, comboKey, parseCombo, PRINT_ADDONS, PRINT_SIZES, SIDES, singleSideKey, type ComboOptions, type ComboService } from './combo.js';
+import { CART_TYPE_KEYS, COLOR_TYPES, comboKey, DOC_INKS, FLYER_INKS, FLYER_PAPERS, FLYER_SIZES, isProviderOnly, parseCombo, PRINT_ADDONS, PRINT_SIZES, REPAIR_DEVICE_KEYS, SIDES, singleSideKey, type ComboOptions, type ComboService } from './combo.js';
 import { bulkValue, type BulkOp } from './bulk.js';
 import { Center } from '../centers/center.schema.js';
 import { comboWithinCapabilities, type Capability, type ProviderStatus } from '../centers/provider-model.js';
@@ -99,6 +100,7 @@ type Row = PriceVersion & { _id: Types.ObjectId };
 const MAX_PRICE = 1_000_000_000;
 const PAST_GRACE_MS = 60_000;
 const PAST_MSG = 'زمان اعمال نمی‌تواند در گذشته باشد';
+const PROVIDER_ONLY_MSG = 'این ترکیب فقط قیمت مجری دارد';
 const NEGATIVE_MSG = 'قیمت مشتری کمتر از قیمت مجری است';
 const DENIED = 'به این بخش دسترسی ندارید';
 type ProviderPrices = Record<string, Record<string, number>>;
@@ -113,6 +115,7 @@ export class PriceBookService {
     @InjectModel(User.name) private readonly users: Model<User>,
     private readonly catalog: CatalogService,
     @InjectModel(Center.name) private readonly centers: Model<Center>,
+    @Optional() @InjectModel(Extra.name) private readonly extras?: Model<Extra>,
   ) {}
 
   /** Throws unless the admin holds `permission` (absent `User.permissions` = every permission). */
@@ -136,16 +139,17 @@ export class PriceBookService {
 
   async matrix(layer: PriceLayer, service?: ComboService, at = new Date(), providerId: string | null = null): Promise<MatrixRow[]> {
     const scope = this.scope(layer, providerId);
-    const [papers, ranges, rows] = await Promise.all([
+    const [papers, ranges, rows, extras] = await Promise.all([
       this.papers.find().sort({ sort: 1, _id: 1 }).lean(),
       this.ranges.find().sort({ minPages: 1 }).lean(),
       this.versions.find(scope).lean() as Promise<Row[]>,
+      this.extraList(layer),
     ]);
-    const names = this.names(papers, ranges);
+    const names = this.names(papers, ranges, extras);
     const users = await this.userNames(rows);
     const vars = await this.varsLoader(rows, papers, at);
     const out: MatrixRow[] = [];
-    for (const key of this.knownKeys(papers, ranges, rows)) {
+    for (const key of this.knownKeys(papers, ranges, rows, layer, extras)) {
       const options = parseCombo(key);
       if (!options || (service && options.service !== service)) continue;
       const list = rows.filter((r) => r.comboKey === key);
@@ -182,6 +186,8 @@ export class PriceBookService {
 
   async preview(input: PreviewInput): Promise<{ unitPrice: number | null; error?: string }> {
     const layer = input.layer ?? 'customer';
+    const combo = parseCombo(input.comboKey);
+    if (layer === 'customer' && combo && isProviderOnly(combo.service)) return { unitPrice: null, error: PROVIDER_ONLY_MSG };
     const problem = this.valueProblem(input, layer);
     if (problem) return { unitPrice: null, error: problem };
     const at = new Date();
@@ -203,7 +209,10 @@ export class PriceBookService {
     if (input.publish) await this.assertCan(by, layerPermission(layer, 'publish'));
     const scope = this.scope(layer, input.providerId);
     if (scope.providerId) await this.assertProvider(scope.providerId);
-    if (!parseCombo(input.comboKey)) throw new BadRequestException('ترکیب قیمت معتبر نیست');
+    const combo = parseCombo(input.comboKey);
+    if (!combo) throw new BadRequestException('ترکیب قیمت معتبر نیست');
+    if (layer === 'customer' && isProviderOnly(combo.service)) throw new BadRequestException(PROVIDER_ONLY_MSG);
+    await this.assertExtraExists(combo);
     const problem = this.valueProblem(input, layer);
     if (problem) throw new BadRequestException(problem);
     const base = input.baseProviderId && input.mode !== 'manual' ? this.oid(input.baseProviderId) : null;
@@ -291,7 +300,9 @@ export class PriceBookService {
   /** A provider submits its own price → `pending_approval` (never effective until an admin approves it). */
   async submit(providerId: string, input: SubmitInput, userId: string): Promise<ProviderPriceView> {
     const scope = this.scope('provider', providerId);
-    if (!parseCombo(input.comboKey)) throw new BadRequestException('ترکیب قیمت معتبر نیست');
+    const combo = parseCombo(input.comboKey);
+    if (!combo) throw new BadRequestException('ترکیب قیمت معتبر نیست');
+    await this.assertExtraExists(combo);
     const problem = this.valueProblem({ comboKey: input.comboKey, mode: 'manual', price: input.price }, 'provider');
     if (problem) throw new BadRequestException(problem);
     const reason = this.reason(input.reason);
@@ -365,11 +376,12 @@ export class PriceBookService {
     const filter = { layer: 'provider' as const, state: 'pending_approval' as const };
     const skip = (Math.max(1, page) - 1) * limit;
     const at = new Date();
-    const [rows, total, papers, ranges] = await Promise.all([
+    const [rows, total, papers, ranges, extras] = await Promise.all([
       this.versions.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean() as Promise<Row[]>,
       this.versions.countDocuments(filter),
       this.papers.find().lean(),
       this.ranges.find().lean(),
+      this.extraList('provider'),
     ]);
     if (!rows.length) return { items: [] as PendingItem[], total, page, limit };
     const keys = [...new Set(rows.flatMap((r) => [r.comboKey, singleSideKey(r.comboKey)].filter((k): k is string => !!k)))];
@@ -378,7 +390,7 @@ export class PriceBookService {
       this.versions.find({ comboKey: { $in: keys }, state: { $in: ['published', 'disabled'] } }).lean() as Promise<Row[]>,
       this.centers.find({ _id: { $in: providerIds.map((id) => new Types.ObjectId(id)) } }, { name: 1 }).lean(),
     ]);
-    const names = this.names(papers, ranges);
+    const names = this.names(papers, ranges, extras);
     const users = await this.userNames(rows);
     const providerName = new Map(centers.map((c) => [String(c._id), c.name]));
     const providerPrices = effectiveProviderPrices(live, at);
@@ -644,7 +656,7 @@ export class PriceBookService {
       if (!pending.has(k) || pending.get(k)!.version < r.version) pending.set(k, r);
     }
     const out: CompareRow[] = [];
-    for (const key of this.knownKeys(papers, ranges, rows)) {
+    for (const key of this.knownKeys(papers, ranges, rows, 'customer')) {
       const options = parseCombo(key);
       if (!options || options.service !== service) continue;
       const eff = pickEffective(customerRows.filter((r) => r.comboKey === key).map(toVersionLike), at);
@@ -667,8 +679,8 @@ export class PriceBookService {
     if (!(await this.centers.exists({ _id: id }))) throw new NotFoundException('مجری یافت نشد');
   }
 
-  /** Every known combination (sizes x sides; x colour types x colorPrint papers; ranges; add-ons) + any combo with versions. */
-  private knownKeys(papers: { key: string; colorPrint?: boolean }[], ranges: { _id: unknown }[], rows: { comboKey: string }[]): string[] {
+  /** Every known combination of the layer (+ any combo with versions). Provider-only combos exist on the provider layer only. */
+  private knownKeys(papers: { key: string; colorPrint?: boolean }[], ranges: { _id: unknown }[], rows: { comboKey: string }[], layer: PriceLayer, extras: { key: string }[] = []): string[] {
     const keys: string[] = [];
     for (const size of PRINT_SIZES) for (const side of SIDES) keys.push(comboKey({ service: 'bw', size, side }));
     for (const size of PRINT_SIZES) for (const colorType of COLOR_TYPES) for (const p of papers.filter((x) => x.colorPrint)) for (const side of SIDES) {
@@ -679,7 +691,20 @@ export class PriceBookService {
       if (addon === 'lam_sheet') for (const size of PRINT_SIZES) keys.push(comboKey({ service: 'addon', addon, size }));
       else keys.push(comboKey({ service: 'addon', addon }));
     }
-    for (const r of rows) if (!keys.includes(r.comboKey)) keys.push(r.comboKey);
+    if (layer === 'provider') {
+      keys.push('school|book', 'school|lined');
+      for (const ink of DOC_INKS) for (const side of SIDES) keys.push(comboKey({ service: 'docs', ink, side }));
+      keys.push('docs|hardcover');
+      for (const size of FLYER_SIZES) for (const ink of FLYER_INKS) for (const paper of FLYER_PAPERS) for (const side of SIDES) keys.push(comboKey({ service: 'flyer', size, ink, paper, side }));
+      keys.push('flyer|design');
+      for (const cartType of CART_TYPE_KEYS) keys.push(comboKey({ service: 'cart', cartType }));
+      for (const device of REPAIR_DEVICE_KEYS) keys.push(comboKey({ service: 'repair', device }));
+      for (const x of extras) keys.push(comboKey({ service: 'extra', key: x.key }));
+    }
+    for (const r of rows) {
+      const o = parseCombo(r.comboKey);
+      if (!keys.includes(r.comboKey) && o && (layer === 'provider' || !isProviderOnly(o.service))) keys.push(r.comboKey);
+    }
     return keys;
   }
 
@@ -777,10 +802,23 @@ export class PriceBookService {
     return (await this.ranges.find().lean()).map((r) => ({ id: String(r._id), minPages: r.minPages, maxPages: r.maxPages, on: r.on }));
   }
 
-  private names(papers: { key: string; name: string }[], ranges: { _id: unknown; minPages: number; maxPages: number }[]): LabelNames {
+  /** Catalog extras (`extra|<key>` provider combos) — only the provider layer has them. */
+  private async extraList(layer: PriceLayer): Promise<{ key: string; label: string }[]> {
+    if (layer !== 'provider' || !this.extras) return [];
+    return (await this.extras.find({}, { key: 1, label: 1 }).sort({ sort: 1, _id: 1 }).lean()) as { key: string; label: string }[];
+  }
+
+  /** `extra|<key>` must name a catalog extra (the other new services are closed enumerations checked by `parseCombo`). */
+  private async assertExtraExists(combo: ComboOptions): Promise<void> {
+    if (combo.service !== 'extra' || !this.extras) return;
+    if (!(await this.extras.exists({ key: combo.key }))) throw new BadRequestException('خدمت اضافی انتخاب‌شده یافت نشد');
+  }
+
+  private names(papers: { key: string; name: string }[], ranges: { _id: unknown; minPages: number; maxPages: number }[], extras: { key: string; label: string }[] = []): LabelNames {
     return {
       papers: new Map(papers.map((p) => [p.key, p.name])),
       ranges: new Map(ranges.map((r) => [String(r._id), { minPages: r.minPages, maxPages: r.maxPages }])),
+      extras: new Map(extras.map((x) => [x.key, x.label])),
     };
   }
 
