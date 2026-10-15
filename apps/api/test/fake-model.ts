@@ -66,6 +66,7 @@ export function matches(doc: Doc, filter: Doc = {}): boolean {
   return Object.entries(filter).every(([k, cond]) => {
     if (k === '$or') return (cond as Doc[]).some((f) => matches(doc, f));
     if (k === '$and') return (cond as Doc[]).every((f) => matches(doc, f));
+    if (k === '$nor') return !(cond as Doc[]).some((f) => matches(doc, f));
     if (k === '$expr') return exprMatches(doc, cond as Doc);
     return matchCond(get(doc, k), cond);
   });

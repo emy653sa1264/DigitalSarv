@@ -9,6 +9,8 @@ export class WalletCredit {
   @Prop({ type: MongooseSchema.Types.ObjectId, required: true }) userId: Types.ObjectId;
   @Prop({ type: MongooseSchema.Types.ObjectId }) orderId?: Types.ObjectId;
   @Prop({ type: String }) orderCode?: string;
+  /** Gateway intents: the provider authority (the sweep re-runs the deciding compare-and-set with it). */
+  @Prop({ type: String }) authority?: string;
   /** Integer toman; > 0 credit, < 0 debit (D35 difference paid from the wallet). */
   @Prop({ type: Number, required: true }) amount: number;
   @Prop({ type: String, enum: WALLET_CREDIT_CAUSES, required: true }) cause: WalletCreditCause;

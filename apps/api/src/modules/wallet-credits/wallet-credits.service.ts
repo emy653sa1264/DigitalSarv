@@ -7,13 +7,13 @@ import { Order } from '../orders/order.schema.js';
 import { User } from '../users/user.schema.js';
 import { WalletCredit } from './wallet-credit.schema.js';
 import {
-  backoffMs, causeOfKey, INSUFFICIENT_NOTE, KEY_KEEP_MS, MARKER_WAIT_MS, MAX_ATTEMPTS, needsOrderMarker, orderIdOfKey, SWEEP_AFTER_MS, voidedKey, walletKey,
+  backoffMs, causeOfKey, GATEWAY_REPAIR_AFTER_MS, INSUFFICIENT_NOTE, KEY_KEEP_MS, MARKER_WAIT_MS, MAX_ATTEMPTS, needsOrderMarker, orderIdOfKey, SWEEP_AFTER_MS, voidedKey, walletKey,
   type WalletCreditCause,
 } from './wallet-credit-model.js';
 
 export interface PrepareInput {
   key: string; userId: Types.ObjectId | string; orderId: Types.ObjectId | string; orderCode: string;
-  amount: number; cause: WalletCreditCause; base?: number; note?: string;
+  amount: number; cause: WalletCreditCause; base?: number; note?: string; authority?: string;
 }
 export type ApplyResult = 'done' | 'waiting' | 'retry' | 'void' | 'insufficient' | 'missing';
 export interface SweepResult { applied: number; voided: number; pulled: number }
@@ -55,6 +55,7 @@ export class WalletCreditsService {
   private async upsert(i: PrepareInput): Promise<WalletCreditRow> {
     const fields = {
       userId: oid(i.userId), orderId: oid(i.orderId), orderCode: i.orderCode, amount: i.amount, cause: i.cause,
+      ...(i.authority ? { authority: i.authority } : {}),
       ...(i.base !== undefined ? { base: i.base } : {}), ...(i.note ? { note: i.note.slice(0, 300) } : {}), state: 'pending', attempts: 0,
     };
     let doc: WalletCreditRow | null;
@@ -138,6 +139,27 @@ export class WalletCreditsService {
       return res;
     };
 
+    await pass('E', async () => {
+      // a gateway intent whose deciding compare-and-set never ran (crash, error): run it here, exclusive with paying the order
+      const stuck = (await this.intents
+        .find({ ...eligible, key: /^gw:/, createdAt: { $lt: new Date(t - GATEWAY_REPAIR_AFTER_MS) } })
+        .sort({ createdAt: 1 })
+        .limit(BATCH)
+        .lean()) as WalletCreditRow[];
+      for (const r of stuck) {
+        const orderId = r.orderId ? String(r.orderId) : orderIdOfKey(r.key);
+        if (!orderId || (await this.markerOf(orderId, r.key))) continue;
+        const authority = r.authority ?? r.key.slice(`gw:${orderId}:`.length);
+        const took = await this.orders.findOneAndUpdate(
+          { _id: new Types.ObjectId(orderId), refundedAuthorities: { $ne: authority }, $nor: [{ paid: true, 'payment.authority': authority }] },
+          { $push: { refundedAuthorities: authority, creditKeys: { key: r.key, amount: r.amount } }, $inc: { __v: 1 } },
+          { returnDocument: 'after' },
+        );
+        if (!took) continue; // the order was paid by this authority (or the marker landed): nothing to credit
+        this.logger.warn(`wallet credit ${r.key}: the sweep ran the deciding write the request never finished`);
+        await applyCounting(r.key);
+      }
+    });
     await pass('A', async () => {
       const young = (await this.intents
         .find({ ...eligible, createdAt: { $lt: new Date(t - SWEEP_AFTER_MS), $gte: new Date(t - MARKER_WAIT_MS) } })
@@ -157,6 +179,7 @@ export class WalletCreditsService {
       for (const r of old) {
         if ((await applyCounting(r.key)) === 'waiting' && (await this.voidIntent(r, 'no order took this credit'))) {
           out.voided++;
+          if (r.key.startsWith('gw:')) this.logger.error(`wallet credit ${r.key} (${r.amount} toman, order ${r.orderCode}) was voided without a marker - a gateway intent should always be finished by the sweep (fine only if the order was paid by this authority)`);
           // the deciding write may have landed between the check and the void: the marker revives the credit
           if (r.orderId && (await this.markerOf(String(r.orderId), r.key)) && (await applyCounting(r.key)) === 'done') {
             await this.intents.updateOne({ _id: r._id, state: 'void' }, { $set: { revivedAt: now } });

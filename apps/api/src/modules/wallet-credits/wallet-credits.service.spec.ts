@@ -155,9 +155,11 @@ describe('wallet credit intents (D34)', () => {
     const key = walletKey.cancel(String(s.orderId));
     await credit(s, key);
     mark(s, key);
+    const real = s.intents.find.getMockImplementation() as (...a: unknown[]) => unknown;
+    s.intents.find.mockImplementationOnce(real as never); // pass E (gateway repair)
     s.intents.find.mockImplementationOnce(() => { throw new Error('pass A broke'); });
     expect(await s.svc.sweep(later(2 * MIN))).toMatchObject({ applied: 0 });
-    expect(s.intents.find).toHaveBeenCalledTimes(4);
+    expect(s.intents.find).toHaveBeenCalledTimes(5);
   });
   it('a marker revives a voided or lost intent and the user key prevents a double (C2, M6)', async () => {
     const s = setup();

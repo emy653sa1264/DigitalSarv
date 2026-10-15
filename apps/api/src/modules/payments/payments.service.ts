@@ -152,6 +152,8 @@ export class PaymentsService {
    * paid; definitively unpaid → `failed`; provider unreachable → `verifying` (re-verified by `expireStale`).
    */
   private async verifyAttempt(order: OrderDocument, authority: string): Promise<Outcome> {
+    // one authority yields EITHER a wallet credit OR an order payment (D34): a credited one never pays the order
+    if (order.payment?.status === 'mismatch' || (order.refundedAuthorities ?? []).includes(authority)) return 'mismatch';
     const amount = order.payment?.amount ?? order.quote?.total ?? 0;
     const attempt: QueryFilter<Order> = { _id: order._id, status: 'pending_payment', 'payment.authority': authority };
     const lock = verifyLockKey(authority);
@@ -190,7 +192,7 @@ export class PaymentsService {
     };
     const push = { timeline: timelineEntry('registered', paidAt) };
     let updated = await this.orders.findOneAndUpdate(
-      { _id: order._id, status: 'pending_payment', 'payment.authority': authority },
+      { _id: order._id, status: 'pending_payment', 'payment.authority': authority, refundedAuthorities: { $ne: authority } },
       { $set: paid, $push: push, $inc: { __v: 1 } },
       { returnDocument: 'after' },
     );
@@ -198,7 +200,7 @@ export class PaymentsService {
       // a newer `/pay` replaced the authority while this attempt was verified: the money was captured,
       // so this attempt pays the order (the newer, unpaid authority then no longer matches its callback)
       updated = await this.orders.findOneAndUpdate(
-        { _id: order._id, status: 'pending_payment' },
+        { _id: order._id, status: 'pending_payment', refundedAuthorities: { $ne: authority } },
         { $set: { ...paid, 'payment.authority': authority, 'payment.amount': amount }, $push: push, $inc: { __v: 1 } },
         { returnDocument: 'after' },
       );
@@ -232,22 +234,30 @@ export class PaymentsService {
    */
   private async creditMismatch(order: OrderDocument, authority: string, paidRial: number, message: string): Promise<Outcome> {
     const credit = Number.isFinite(paidRial) && paidRial > 0 ? Math.floor(paidRial / 10) : 0;
+    if (!(credit > 0)) this.logger.error(`order ${order.code}: payment ${authority} amount mismatch but the provider reported no usable captured amount (${paidRial} rial) - nothing credited, check the provider panel (${message})`);
     const key = walletKey.gateway(String(order._id), authority);
     // D34: the intent first, then the marker (+ the {key, amount} credit marker) in one compare-and-set, then the guarded $inc
     if (credit > 0) {
-      await this.credits.prepare({ key, userId: order.customerId, orderId: order._id, orderCode: order.code, amount: credit, cause: 'gateway_mismatch', note: message });
+      await this.credits.prepare({ key, userId: order.customerId, orderId: order._id, orderCode: order.code, amount: credit, cause: 'gateway_mismatch', note: message, authority });
     }
-    const credited = await this.orders.findOneAndUpdate(
-      { _id: order._id, refundedAuthorities: { $ne: authority } },
-      { $push: { refundedAuthorities: authority, ...(credit > 0 ? { creditKeys: { key, amount: credit } } : {}) }, $inc: { __v: 1 } },
-      { returnDocument: 'after' },
-    );
+    let credited: OrderDocument | null;
+    try {
+      credited = await this.orders.findOneAndUpdate(
+        { _id: order._id, refundedAuthorities: { $ne: authority } },
+        { $push: { refundedAuthorities: authority, ...(credit > 0 ? { creditKeys: { key, amount: credit } } : {}) }, $inc: { __v: 1 } },
+        { returnDocument: 'after' },
+      );
+    } catch (err) {
+      // the money is captured: never throw it away - the wallet-credit sweep runs this compare-and-set from the intent
+      this.logger.error(`order ${order.code}: payment ${authority} mismatch marker failed (${credit} toman captured, intent ${key}) - the sweep finishes it: ${(err as Error).message}`);
+      return 'mismatch';
+    }
     if (!credited) {
       this.logger.warn(`order ${order.code}: payment ${authority} amount mismatch was already handled`);
       return 'mismatch';
     }
-    if (credit > 0) await this.credits.apply(key); // never throws; a failure leaves the intent for the sweep
-    this.logger.warn(`order ${order.code}: payment ${authority} captured ${credit} toman instead of the requested amount (${message}) — credited to the wallet`);
+    const applied = credit > 0 ? await this.credits.apply(key) : null; // never throws; a failure leaves the intent for the sweep
+    this.logger.error(`order ${order.code}: payment ${authority} captured ${credit} toman instead of the requested amount (${message}) — ${applied === 'done' ? 'credited to the wallet' : 'queued for the wallet-credit sweep'}`);
     try {
       const note = { status: 'pending_payment' as const, label: `مغایرت مبلغ پرداخت (${credit} تومان به کیف پول اعتبار شد)`, at: new Date() };
       await this.orders.updateOne(
@@ -289,9 +299,11 @@ export class PaymentsService {
     const ownAttempt = current.status === 'cancelled' && current.payment?.authority === authority;
     const key = walletKey.gateway(String(current._id), authority);
     if (amount > 0) {
-      await this.credits.prepare({ key, userId: current.customerId, orderId: current._id, orderCode: current.code, amount, cause: 'gateway_capture', note: `refId ${refId}` });
+      await this.credits.prepare({ key, userId: current.customerId, orderId: current._id, orderCode: current.code, amount, cause: 'gateway_capture', note: `refId ${refId}`, authority });
     }
-    const credited = await this.orders.findOneAndUpdate(
+    let credited: OrderDocument | null;
+    try {
+      credited = await this.orders.findOneAndUpdate(
       {
         _id: current._id,
         status: { $ne: 'pending_payment' },
@@ -317,13 +329,18 @@ export class PaymentsService {
       },
       { returnDocument: 'after' },
     );
+    } catch (err) {
+      // never throw a verified payment away: the wallet-credit sweep runs this compare-and-set from the intent
+      this.logger.error(`order ${current.code}: payment ${authority} (refId ${refId}, ${amount} toman) capture marker failed - the sweep finishes it: ${(err as Error).message}`);
+      return;
+    }
     if (!credited) {
       this.logger.log(`order ${current.code}: payment ${authority} was already credited to the wallet`);
       return;
     }
-    if (amount > 0) await this.credits.apply(key);
+    const applied = amount > 0 ? await this.credits.apply(key) : null;
     const why = ownAttempt ? 'the order was cancelled while it was verified' : 'the order no longer accepted it';
-    this.logger.warn(`order ${credited.code}: payment ${authority} (refId ${refId}) captured but ${why} — ${amount} toman credited to the wallet`);
+    this.logger.warn(`order ${credited.code}: payment ${authority} (refId ${refId}) captured but ${why} — ${amount} toman ${applied === 'done' || applied === null ? 'credited to the wallet' : 'queued for the wallet-credit sweep'}`);
   }
 
   // ------------------------------------------------------------ expiry

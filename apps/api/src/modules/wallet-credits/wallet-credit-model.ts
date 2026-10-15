@@ -7,6 +7,8 @@ export type WalletCreditState = (typeof WALLET_CREDIT_STATES)[number];
 
 /** The sweep leaves fresh intents to the request that wrote them. */
 export const SWEEP_AFTER_MS = 60_000;
+/** A gateway intent with no marker this old is finished by the sweep (it runs the deciding compare-and-set itself). */
+export const GATEWAY_REPAIR_AFTER_MS = 5 * 60_000;
 /** An intent whose order never took it (the deciding write lost or never ran) is void after this. */
 export const MARKER_WAIT_MS = 24 * 3_600_000;
 /** User keys of settled intents are kept this long (a stalled applier can never double-credit meanwhile). */

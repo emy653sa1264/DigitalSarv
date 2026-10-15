@@ -436,15 +436,62 @@ describe('PaymentsService: provider amount mismatch', () => {
     expect(ctx.user.walletBalance).toBe(315000);
     expect(ctx.intents.docs[0].state).toBe('done');
   });
-  it('D34: a crash between the intent and the marker credits nothing; the replayed callback finishes it once', async () => {
+  it('D34: a crash between the intent and the marker keeps the capture: the callback answers, the sweep credits once, a replay never pays the order', async () => {
     const ctx = setup([zibalOrder()], mismatchDriver());
+    const key = `gw:${String(ctx.order._id)}:159`;
     vi.spyOn(ctx.orders, 'findOneAndUpdate').mockRejectedValueOnce(new Error('connection reset'));
-    await expect(ctx.svc.handleCallback('zibal', '159', 'OK')).rejects.toThrow('connection reset');
-    expect(ctx.user.walletBalance).toBe(0);
-    expect(ctx.intents.docs[0].state).toBe('pending');
     await expect(ctx.svc.handleCallback('zibal', '159', 'OK')).resolves.toBe(mismatchUrl(ctx.order));
+    expect(ctx.user.walletBalance).toBe(0);
+    expect(ctx.intents.docs[0]).toMatchObject({ state: 'pending', authority: '159' });
+    expect(await ctx.credits.sweep(new Date(Date.now() + 6 * MINUTE))).toMatchObject({ applied: 1 });
+    expect(ctx.user.walletBalance).toBe(315000);
+    expect(ctx.order.creditKeys).toEqual([{ key, amount: 315000 }]);
+    expect(ctx.order.refundedAuthorities).toEqual(['159']);
+    await ctx.svc.handleCallback('zibal', '159', 'OK');
     expect(ctx.user.walletBalance).toBe(315000);
     expect(ctx.intents.docs).toHaveLength(1);
+  });
+  it('D34: the same crash with the order cancelled meanwhile: the sweep still credits once', async () => {
+    let ctx!: ReturnType<typeof setup>;
+    ctx = setup([zibalOrder()], mismatchDriver(() => { ctx.order.status = 'cancelled'; }));
+    vi.spyOn(ctx.orders, 'findOneAndUpdate').mockRejectedValueOnce(new Error('connection reset'));
+    await ctx.svc.handleCallback('zibal', '159', 'OK');
+    expect(ctx.user.walletBalance).toBe(0);
+    expect(await ctx.credits.sweep(new Date(Date.now() + 6 * MINUTE))).toMatchObject({ applied: 1 });
+    expect(ctx.user.walletBalance).toBe(315000);
+    await ctx.credits.sweep(new Date(Date.now() + 8 * MINUTE));
+    expect(ctx.user.walletBalance).toBe(315000);
+  });
+  it('I2: after a mismatch credit, an OK replay (verify without an amount) never pays the order', async () => {
+    const o = zibalOrder();
+    let amountOk = false;
+    const driver: PaymentDriver = {
+      name: 'zibal',
+      request: vi.fn(),
+      verify: vi.fn(async () => (amountOk ? { ok: true as const, refId: '77' } : { ok: false as const, message: 'amount mismatch', retryable: false, mismatch: { paidRial: 3_150_005 } })),
+    };
+    const ctx = setup([o], driver);
+    await ctx.svc.handleCallback('zibal', '159', 'OK');
+    amountOk = true;
+    await expect(ctx.svc.handleCallback('zibal', '159', 'OK')).resolves.toBe(mismatchUrl(o));
+    expect(o).toMatchObject({ status: 'pending_payment', paid: false });
+    expect(ctx.user.walletBalance).toBe(315000);
+    // even when the early check is bypassed, the settle compare-and-set refuses an already credited authority
+    o.payment.status = 'pending';
+    o.refundedAuthorities = ['159'];
+    const out = await (ctx.svc as never as { settleVerified: (...a: unknown[]) => Promise<string> }).settleVerified(o, '159', 500000, '77');
+    expect(out).not.toBe('ok');
+    expect(o.paid).toBe(false);
+    expect(ctx.user.walletBalance).toBe(315000);
+  });
+  it('I1: the sweep never credits an authority the order was paid by', async () => {
+    const o = zibalOrder({ status: 'registered', paid: true, payment: { driver: 'zibal', authority: '159', status: 'paid', amount: 500000, refId: '1' } });
+    const ctx = setup([o], mismatchDriver());
+    await ctx.credits.prepare({ key: `gw:${String(o._id)}:159`, userId: o.customerId, orderId: o._id, orderCode: o.code, amount: 315000, cause: 'gateway_mismatch', authority: '159' });
+    expect(await ctx.credits.sweep(new Date(Date.now() + 6 * MINUTE))).toMatchObject({ applied: 0 });
+    expect(ctx.user.walletBalance).toBe(0);
+    expect(o.creditKeys ?? []).toHaveLength(0);
+    expect(o.refundedAuthorities ?? []).toHaveLength(0);
   });
   describe('captures the order could not take', () => {
     const OTHER = 'MOCK' + 'B'.repeat(32);
@@ -466,6 +513,22 @@ describe('PaymentsService: provider amount mismatch', () => {
       expect(user.walletBalance).toBe(500000);
       expect(intents.docs).toEqual([expect.objectContaining({ key: `gw:${String(doc._id)}:${AUTH}`, cause: 'gateway_capture', amount: 500000, state: 'done' })]);
       expect(doc.creditKeys).toEqual([{ key: `gw:${String(doc._id)}:${AUTH}`, amount: 500000 }]);
+    });
+    it('D34: a crash between the intent and the marker: the sweep runs the deciding write and credits once', async () => {
+      const { svc, user, orders, credits, intents, doc } = taken();
+      const real = orders.findOneAndUpdate.getMockImplementation() as (...a: unknown[]) => unknown;
+      vi.spyOn(orders, 'findOneAndUpdate').mockImplementation(((filter: Doc, ...rest: unknown[]) => {
+        if (filter.refundedAuthorities && filter.$or) return Promise.reject(new Error('connection reset'));
+        return real(filter, ...rest);
+      }) as never);
+      await expect(svc.handleCallback('mock', AUTH, 'OK')).resolves.toBe(ok(doc));
+      expect(user.walletBalance).toBe(0);
+      expect(intents.docs[0].state).toBe('pending');
+      expect(await credits.sweep(new Date(Date.now() + 6 * MINUTE))).toMatchObject({ applied: 1 });
+      expect(user.walletBalance).toBe(500000);
+      expect(doc.creditKeys).toHaveLength(1);
+      await credits.sweep(new Date(Date.now() + 8 * MINUTE));
+      expect(user.walletBalance).toBe(500000);
     });
     it('D34: a crash after the marker before apply: the sweep credits it once', async () => {
       const { svc, user, users, credits, intents } = taken();
