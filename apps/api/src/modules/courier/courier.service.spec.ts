@@ -336,6 +336,31 @@ describe('courier logins (S7)', () => {
     expect(u.docs[0]).toMatchObject({ role: 'customer' });
     expect(sessions.revokeUser).toHaveBeenCalledWith(String(login._id));
   });
+  it('M3: a failing revoke (Redis down) fails the removal with the courier and its login intact — never a dangling courierId', async () => {
+    const courierId = new Types.ObjectId();
+    const login = { _id: new Types.ObjectId(), phone: '09127770011', role: 'courier', courierId };
+    const { svc, c, u, sessions } = setup([{ _id: courierId, code: '11', name: 'پیک', phone: '09127770011', userId: login._id }], [], [login]);
+    sessions.revokeUser.mockRejectedValueOnce(new Error('redis down'));
+    await expect(svc.remove(String(courierId))).rejects.toThrow('redis down');
+    expect(c.docs).toHaveLength(1);
+    expect(u.docs[0]).toMatchObject({ role: 'courier', courierId });
+    // the retry finishes: demoted first, then deleted
+    expect(await svc.remove(String(courierId))).toEqual({ ok: true });
+    expect(c.docs).toHaveLength(0);
+    expect(u.docs[0]).toMatchObject({ role: 'customer' });
+    expect(u.docs[0]).not.toHaveProperty('courierId');
+  });
+  it('M3: the second revoke failing after the demotion leaves no courier-role login; the retry deletes the courier', async () => {
+    const courierId = new Types.ObjectId();
+    const login = { _id: new Types.ObjectId(), phone: '09127770012', role: 'courier', courierId };
+    const { svc, c, u, sessions } = setup([{ _id: courierId, code: '12', name: 'پیک', phone: '09127770012', userId: login._id }], [], [login]);
+    sessions.revokeUser.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('redis down'));
+    await expect(svc.remove(String(courierId))).rejects.toThrow('redis down');
+    expect(u.docs[0]).toMatchObject({ role: 'customer' });
+    expect(c.docs).toHaveLength(1);
+    expect(await svc.remove(String(courierId))).toEqual({ ok: true });
+    expect(c.docs).toHaveLength(0);
+  });
   it('removing a courier with open orders is 409 and changes nothing', async () => {
     const courierId = new Types.ObjectId();
     const login = { _id: new Types.ObjectId(), phone: '09127770010', role: 'courier', courierId };

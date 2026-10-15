@@ -405,9 +405,14 @@ export class CourierService {
     if (!(await this.couriers.exists({ _id: id }))) throw new NotFoundException('پیک یافت نشد');
     const open = await this.orders.countDocuments({ courierId: new Types.ObjectId(id), status: { $nin: TERMINAL_STATUSES } });
     if (open) throw new ConflictException(`این پیک ${fa(open)} سفارش باز دارد؛ ابتدا سفارش‌ها را به پیک دیگری بدهید`);
-    const courier = await this.couriers.findByIdAndDelete(id);
-    if (!courier) throw new NotFoundException('پیک یافت نشد');
-    if (courier.userId) await this.demote(courier.userId, courier._id);
+    // M3: the login is demoted before the courier is deleted — a failing revoke (Redis) then fails the request with the courier
+    // still there (the admin retries), and never leaves a role-courier account pointing at a deleted courier
+    const current = await this.couriers.findById(id, { userId: 1 }).lean();
+    if (!current) throw new NotFoundException('پیک یافت نشد');
+    if (current.userId) await this.demote(current.userId as Types.ObjectId, current._id as Types.ObjectId);
+    // only the courier whose login was just demoted (a phone change meanwhile is a 409, nothing deleted)
+    const res = await this.couriers.deleteOne({ _id: current._id, userId: current.userId ?? null });
+    if (!res.deletedCount) throw new ConflictException('اطلاعات این پیک هم‌زمان تغییر کرد؛ دوباره تلاش کنید');
     return { ok: true };
   }
 }
