@@ -151,12 +151,38 @@ instances left behind, so it must run when no older instance can still deliver j
 - **Ledger backfill (R11):** delivered / completed jobs without `ledgerAt` are flagged once, and the dispatch tick credits
   them. (The tick also flags jobs of the last 7 days that an older instance delivered, but older ones need the seed.)
 - **Compensation backfill (P10):** jobs that lost work mid-production before v4.3 get their open «جبران خسارت مجری» cases.
-  Since v4.4 (S11) a delivery provider no longer «holds» a delivered job, so the next `seed:base` may newly flag lost producers who later delivered the job as a separate delivery provider.
+  Since v4.4 (S11) only the producer «holds» a delivered job: a provider that lost production and then delivered the job as
+  the separate delivery provider keeps its production case. The first `seed:base` after the M5 deploy can therefore open
+  such cases for older jobs that no backfill had tracked yet; they appear in «جبران خسارت مجری» and are decided as usual.
+- **Credits still waiting (S12):** «نیازمند تعیین مبلغ» lists jobs delivered more than a day ago whose credit still waits
+  (unpaid order, or a failing write the tick retries). Only orders that have a job are tracked: orders delivered before
+  provider dispatch (v4.2) existed have no provider credit and never appear there.
 - **Templates:** `payout_recorded`, `payout_voided` and `bank_account_changed` (the provider's security notice when a
   bank account changes). Without them these notices are not sent, and the API logs
   `notification template "…" is missing — run seed:base` once per event.
 
 Re-run the same command if an older instance served traffic after the first run (for example, in a rolling deploy).
+
+### Upgrade to M5 (v4.4, hardening)
+
+```bash
+dc up -d --build                                  # wait until /api/health/ready answers
+dc run --rm api node dist/seed/seed-base.js       # idempotent; creates the new indexes (walletCredits, base_provider)
+```
+
+- **Wallet credits (D34):** every automatic wallet credit (gateway mismatch, a capture the order could not take, cancellation
+  refunds, recount refunds) and the wallet payment of a difference now go through `walletCredits`. Every API instance sweeps
+  pending ones each minute. Nothing to configure. To check for stuck money:
+  `db.walletCredits.find({ state: 'pending', createdAt: { $lt: new Date(Date.now() - 10*60*1000) } })` should be empty; an
+  `attempts` count above a few means the `$inc` keeps failing (see the API ERROR log line `wallet credit … failed`).
+  The old log line «settle manually» now only appears when a customer account was deleted.
+- **Recounts (D35):** approving a recount («در انتظار تأیید») of a wallet / gateway paid order refunds a lower total to the wallet
+  at once; a higher total is shown to the customer as «مابه‌التفاوت» (pay from the wallet in the app, or in cash to the courier —
+  the courier app shows «دریافت نقدی»). Courier pay is unchanged: a recount is not an extra task.
+- **Sessions (D36):** after the deploy each app keeps its own login. Users stay signed in (the old session moves into the app of
+  its role); someone signed in to two apps before will need to sign in once more to the second one.
+- **Browser regression (D37):** `pnpm --filter web e2e` on a developer machine with Edge (see `apps/web/e2e/global-setup.ts`);
+  not part of CI.
 
 ## 7. Zarinpal
 
@@ -255,6 +281,60 @@ Every API instance runs the dispatch tick at boot and then once a minute: assign
 - [ ] `/admin/` and `/courier/` send `X-Robots-Tag: noindex`: `curl -sI https://<domain>/admin/ | grep -i robots`.
 - [ ] Images are rebuilt monthly (`dc build --pull && dc up -d`) to pick up base-image security fixes.
 - [ ] Optional hardening: create a least-privilege Mongo user for `digital_sarv` (`readWrite`) instead of using the root account in `MONGO_URI`.
+- [ ] After every deploy: `db.walletCredits.countDocuments({ state: 'pending', createdAt: { $lt: new Date(Date.now() - 600000) } })` is 0.
+
+## 12. Launch checklist (v4)
+
+Go through this once before the first public launch of v4, and again after any re-install. It holds no secrets: every value
+marked `<…>` comes from `.env.production` or the provider's panel, never from this file.
+
+**Environment (`.env.production`, section 2)**
+
+- [ ] `NODE_ENV=production` and a fresh `JWT_SECRET` (`openssl rand -hex 48`). Outside development/test the API refuses to boot
+  without it; changing it later signs everyone out.
+- [ ] `OTP_DEV_CODE` is **unset** (it is ignored in production anyway, but must never be set on a public server), and
+  `PAYMENT_ALLOW_MOCK` is unset.
+- [ ] Payments: `PAYMENT_DRIVER=zibal` and `ZIBAL_MERCHANT=<the merchant code from the Zibal panel>` (the value `zibal` is the
+  sandbox, staging only) — or `PAYMENT_DRIVER=zarinpal` with `ZARINPAL_MERCHANT_ID` and `ZARINPAL_SANDBOX=0` (sections 7, 7b).
+  `API_PUBLIC_URL` matches the domain registered at the gateway.
+- [ ] `TRUST_PROXY` matches the proxy hops in front of the API (section 5): `1` with the bundled nginx only, `2` with Caddy, a
+  host nginx or a CDN in front of it. A wrong value puts every visitor in one rate-limit bucket (or lets clients spoof IPs).
+- [ ] `WEB_PUBLIC_URL` is the public `https://` origin. It is passed to the web build as `VITE_PUBLIC_URL`, so canonical, OG
+  and sitemap URLs are absolute; set it **before** `dc up -d --build` (after a change: `dc build web && dc up -d web`).
+- [ ] `API_HOST` stays **unset** in Docker (the API must listen on every interface of its container for nginx to reach it).
+  Set it only for a bare-metal API behind a host proxy on the same machine (`API_HOST=127.0.0.1`), as the D37 suite does.
+- [ ] `ADMIN_PHONES` lists only the owner's numbers; SMS (`SMS_DRIVER=kavenegar`, key, sender, OTP template) is approved.
+
+**Deploy (section 6)**
+
+- [ ] Back up first (`./deploy/backup.sh`) and copy the backup off the server.
+- [ ] `dc up -d --build`, then wait for `curl -fsS https://<domain>/api/health/ready` (200; 503 means Mongo or Redis is down).
+- [ ] Run `dc run --rm api node dist/seed/seed-base.js` **after** the new API answers (sections 4 and 6, «Upgrade to M4» and
+  «Upgrade to M5»). A second run must change nothing. Never run the demo `seed` on the server.
+- [ ] `dc ps` shows every service healthy and no published Mongo / Redis port.
+
+**Data the owner enters in `/admin/`**
+
+- [ ] «تنظیمات» → pickup points («تحویل حضوری»): replace the placeholder address of «دفتر مرکزی دیجیتال سرو» with the real
+  address, phone and opening hours, and add every other Digital Sarv point.
+- [ ] «مدیریت مجریان»: every real provider with its login phone, capabilities, working hours and zones.
+- [ ] «تسویه مجریان» → each provider → bank account: Sheba (IR + 24 digits) and account holder. Only staff with `payout_record`
+  can do this; the provider gets a security notice and sees the account masked.
+- [ ] Providers enter their prices in «سرو مجری» → «قیمت‌های من»; approve them in «مرکز مدیریت قیمت» → «در انتظار تأیید».
+
+**Backups (section 9)**
+
+- [ ] The nightly `deploy/backup.sh` cron is installed, copies leave the server every day, and one restore has been tested.
+
+**After the launch**
+
+- [ ] `curl -fsS https://<domain>/api/health/ready` answers, and an external uptime check points at it (section 10).
+- [ ] Sign in once to each app (`/app/`, `/courier/`, `/provider/`, `/admin/`). Sessions are per app since v4.4 (D36): an
+  existing login moves into the app of its role on the first visit; someone who was signed in to two apps before signs in
+  once more to the second one. This is expected, not a fault.
+- [ ] Place a small real payment and cancel the order: the amount returns to the wallet, and the `walletCredits` check above
+  is 0.
+- [ ] Go through section 11 «Security checklist».
 
 ## Reference: what nginx does (`deploy/nginx/default.conf`)
 
