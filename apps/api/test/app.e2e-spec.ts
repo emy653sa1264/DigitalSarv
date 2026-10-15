@@ -7,6 +7,7 @@ import { createConnection } from 'node:net';
 import { INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
+import { tehranYmd } from '../src/common/utils/dates.js';
 
 function loadEnv() {
   try {
@@ -549,6 +550,158 @@ describe.skipIf(!servicesUp)('API (e2e)', () => {
     await new Promise((r) => setTimeout(r, 1100));
     await http().delete(`/api/admin/staff/${member.id}`).set(authH(admin)).expect(200);
     tokens.delete(phone);
+  });
+
+  // ---- v4.3 ledger and settlement (D26–D33) ---------------------------------------------------------------
+  const docsSvc = (ink: 'bw' | 'color') => ({ kind: 'docs', spec: { pages: 20, scope: 'all', ink, sides: 'single', copies: 1 } });
+  const tehranToday = () => tehranYmd();
+  const ymdDaysAgo = (n: number) => tehranYmd(new Date(Date.now() - n * 86_400_000));
+  const balanceOf = async (admin: string, providerId: string) => (await http().get(`/api/admin/ledger/providers/${providerId}`).set(authH(admin)).expect(200)).body.balance;
+  const setProviderPrice = (admin: string, providerId: string, comboKey: string, price: number) =>
+    http().post('/api/admin/price-book/versions').set(authH(admin))
+      .send({ layer: 'provider', providerId, comboKey, mode: 'manual', price, publish: true, reason: 'e2e ledger', confirmNegativeMargin: true }).expect(201);
+  /** D produces the order's job (accept → production → QC → ready); the admin hands it over (COD becomes paid, the job is delivered). */
+  async function produceAndDeliver(admin: string, P: Record<string, { id: string; phone: string }>, orderId: string, confirmMissingPrice = false) {
+    const job = await jobOf(admin, orderId);
+    await http().post(`/api/admin/dispatch/jobs/${job.id}/assign`).set(authH(admin)).send({ providerId: P.D.id, ...(confirmMissingPrice ? { confirmMissingPrice: true } : {}) }).expect(200);
+    const d = await login(P.D.phone);
+    await http().post(`/api/provider/jobs/${job.id}/accept`).set(authH(d)).expect(200);
+    await http().post(`/api/provider/jobs/${job.id}/status`).set(authH(d)).send({ status: 'in_production' }).expect(200);
+    const detail = (await http().get(`/api/provider/jobs/${job.id}`).set(authH(d)).expect(200)).body;
+    for (let i = 0; i < detail.qc.labels.length; i++) await http().patch(`/api/provider/jobs/${job.id}/qc`).set(authH(d)).send({ index: i, done: true }).expect(200);
+    await http().post(`/api/provider/jobs/${job.id}/status`).set(authH(d)).send({ status: 'ready' }).expect(200);
+    await http().post(`/api/admin/dispatch/jobs/${job.id}/status`).set(authH(admin)).send({ status: 'delivered', reason: 'e2e ledger' }).expect(200);
+    return job.id as string;
+  }
+
+  it('D29 + D27: a thesis is priced from the provider’s non-print prices and credited once on delivery; the quote is unchanged (D22)', async () => {
+    const admin = await login('09120000000');
+    const cust = await login('09123456789');
+    const P = await testProviders(admin);
+    const draft = { children: [], services: [docsSvc('bw')], planId: 'bronze' };
+    const before = (await http().post('/api/orders/quote').send(draft).expect(200)).body;
+    await setProviderPrice(admin, P.D.id, 'docs|bw|single', 600);
+    await setProviderPrice(admin, P.D.id, 'docs|hardcover', 60000);
+    expect((await http().post('/api/orders/quote').send(draft).expect(200)).body).toEqual(before); // D22
+    await http().post('/api/admin/price-book/versions').set(authH(admin))
+      .send({ layer: 'customer', comboKey: 'docs|bw|single', mode: 'manual', price: 1, publish: true, reason: 'e2e' }).expect(400);
+    const start = await balanceOf(admin, P.D.id);
+    const order = await placeCod(cust, [docsSvc('bw')]);
+    const job = await jobOf(admin, order.id);
+    const e = (await http().get(`/api/admin/dispatch/jobs/${job.id}/eligibility`).set(authH(admin)).expect(200)).body;
+    expect([...e.eligible, ...e.others].find((r: any) => r.providerId === P.D.id).price.subtotal).toBe(20 * 600 + 60000);
+    const jobId = await produceAndDeliver(admin, P, order.id);
+    // a replayed delivered event must not credit twice
+    const replay = await http().post(`/api/admin/dispatch/jobs/${jobId}/status`).set(authH(admin)).send({ status: 'delivered', reason: 'e2e replay' });
+    expect(replay.status).toBeLessThan(500);
+    expect((await balanceOf(admin, P.D.id)).available).toBe(start.available + 72000);
+    const credits = (await http().get(`/api/admin/ledger/providers/${P.D.id}/entries?kind=credit&limit=100`).set(authH(admin)).expect(200)).body.items;
+    expect(credits.filter((x: any) => x.jobId === jobId)).toEqual([expect.objectContaining({ state: 'counted', amount: 72000, role: 'production', orderCode: order.code })]);
+    const d = await login(P.D.phone);
+    expect((await http().get('/api/provider/ledger/entries').set(authH(d)).expect(200)).body.items[0]).toMatchObject({ kind: 'credit', amount: 72000, state: 'counted' });
+    expect(JSON.stringify((await http().get(`/api/orders/${order.id}`).set(authH(cust)).expect(200)).body)).not.toMatch(/ledger|payoutBasis|providerPricing/);
+  });
+
+  it('D28: an unpriced line is assigned with confirmation and credited «نیازمند تعیین مبلغ» until an admin sets the amount, once', async () => {
+    const admin = await login('09120000000');
+    const cust = await login('09123456789');
+    const P = await testProviders(admin);
+    const start = await balanceOf(admin, P.D.id);
+    const order = await placeCod(cust, [docsSvc('color')]); // D has no `docs|color|single` price
+    const job = await jobOf(admin, order.id);
+    const missing = await http().post(`/api/admin/dispatch/jobs/${job.id}/assign`).set(authH(admin)).send({ providerId: P.D.id }).expect(409);
+    expect(missing.body.code).toBe('PROVIDER_PRICE_MISSING');
+    const jobId = await produceAndDeliver(admin, P, order.id, true);
+    const credit = (await http().get(`/api/admin/ledger/providers/${P.D.id}/entries?kind=credit&limit=100`).set(authH(admin)).expect(200)).body.items.find((x: any) => x.jobId === jobId);
+    expect(credit).toMatchObject({ state: 'pending', amount: null });
+    expect(await balanceOf(admin, P.D.id)).toMatchObject({ available: start.available, pendingCount: start.pendingCount + 1 });
+    await http().post(`/api/admin/ledger/entries/${credit.id}/resolve`).set(authH(admin)).send({ amount: 50000, reason: 'e2e توافق' }).expect(200);
+    await http().post(`/api/admin/ledger/entries/${credit.id}/resolve`).set(authH(admin)).send({ amount: 1, reason: 'دوباره' }).expect(409);
+    expect(await balanceOf(admin, P.D.id)).toMatchObject({ available: start.available + 50000, pendingCount: start.pendingCount });
+  });
+
+  it('D31: Sheba checksum, payouts never above the balance (also concurrently), a void once; the provider is told and sees a masked account (D19)', async () => {
+    const admin = await login('09120000000');
+    const P = await testProviders(admin);
+    await http().put(`/api/admin/ledger/providers/${P.D.id}/bank`).set(authH(admin)).send({ sheba: 'IR062960000000100324200002', holder: 'آزمون دی' }).expect(400);
+    const bankRes = await http().put(`/api/admin/ledger/providers/${P.D.id}/bank`).set(authH(admin)).send({ sheba: '۰۶۲۹۶۰۰۰۰۰۰۰۱۰۰۳۲۴۲۰۰۰۰۱', holder: 'آزمون دی' }).expect(200);
+    expect(JSON.stringify(bankRes.body)).not.toContain('062960000000100324200001'); // P12: masked response
+    await http().post('/api/admin/ledger/adjustments').set(authH(admin)).send({ providerId: P.D.id, amount: 100000, reason: 'e2e پایه پرداخت', requestId: crypto.randomUUID() }).expect(201);
+    const { available } = await balanceOf(admin, P.D.id);
+    const pay = (amount: number, requestId = crypto.randomUUID()) =>
+      http().post('/api/admin/ledger/payouts').set(authH(admin)).send({ providerId: P.D.id, amount, paidAt: tehranToday(), bankRef: 'E2E-TRX', requestId });
+    expect((await pay(available + 1)).status).toBe(400);
+    const share = Math.floor(available * 0.6);
+    const results = await Promise.all([pay(share), pay(share)]);
+    expect(results.map((r) => r.status).sort()).toEqual([201, 400]);
+    expect((await balanceOf(admin, P.D.id)).available).toBe(available - share);
+    const payout = results.find((r) => r.status === 201)!.body;
+    const same = crypto.randomUUID();
+    const twice = await Promise.all([pay(1, same), pay(1, same)]);
+    expect(twice.map((r) => r.status)).toEqual([201, 201]);
+    expect(twice[0].body.id).toBe(twice[1].body.id); // R13
+    await http().post(`/api/admin/ledger/payouts/${payout.id}/void`).set(authH(admin)).send({ reason: 'e2e ابطال' }).expect(200);
+    await http().post(`/api/admin/ledger/payouts/${payout.id}/void`).set(authH(admin)).send({ reason: 'دوباره' }).expect(409);
+    expect((await balanceOf(admin, P.D.id)).available).toBe(available - 1);
+    const d = await login(P.D.phone);
+    const inbox = (await http().get('/api/notifications/mine').set(authH(d)).expect(200)).body.items;
+    expect(inbox.some((n: any) => n.event === 'payout_recorded' && n.audience === 'provider' && n.orderId === '' && n.url === '/provider/settlement')).toBe(true);
+    expect(inbox.some((n: any) => n.event === 'payout_voided')).toBe(true);
+    const own = (await http().get('/api/provider/ledger').set(authH(d)).expect(200)).body;
+    expect(own.bank).toEqual({ sheba: `IR${'•'.repeat(20)}0001`, holder: 'آزمون دی' });
+    expect(JSON.stringify(own)).not.toMatch(/bankAccountHistory|bankHistory/);
+  });
+
+  it('D33 + §64: finance permissions per route; a provider sees only its own ledger and no admin route', async () => {
+    const admin = await login('09120000000');
+    const P = await testProviders(admin);
+    const phone = '09127777779';
+    const list = (await http().get('/api/admin/staff').set(authH(admin)).expect(200)).body as any[];
+    const existing = list.find((s) => s.phone === phone);
+    const member = existing
+      ? (await http().patch(`/api/admin/staff/${existing.id}`).set(authH(admin)).send({ permissions: ['dispatch_view'] }).expect(200)).body
+      : (await http().post('/api/admin/staff').set(authH(admin)).send({ phone, name: 'e2e finance', permissions: ['dispatch_view'] }).expect(201)).body;
+    await new Promise((r) => setTimeout(r, 1100));
+    tokens.delete(phone);
+    let staff = await login(phone);
+    await http().get('/api/admin/ledger/balances').set(authH(staff)).expect(403); // dispatch_view alone is no finance access
+    await http().get(`/api/admin/ledger/providers/${P.D.id}`).set(authH(staff)).expect(403);
+    await http().get('/api/admin/ledger/wallet/export?from=2026-01-01&to=2026-01-02').set(authH(staff)).expect(403);
+    await http().patch(`/api/admin/staff/${member.id}`).set(authH(admin)).send({ permissions: ['ledger_view'] }).expect(200);
+    await new Promise((r) => setTimeout(r, 1100));
+    tokens.delete(phone);
+    staff = await login(phone);
+    await http().get('/api/admin/ledger/balances').set(authH(staff)).expect(200);
+    await http().get(`/api/admin/ledger/wallet?from=${ymdDaysAgo(6)}&to=${tehranToday()}`).set(authH(staff)).expect(200);
+    await http().post('/api/admin/ledger/payouts').set(authH(staff)).send({}).expect(403);
+    await http().post('/api/admin/ledger/adjustments').set(authH(staff)).send({}).expect(403);
+    await http().post('/api/admin/ledger/entries/000000000000000000000000/resolve').set(authH(staff)).send({}).expect(403);
+    await http().put(`/api/admin/ledger/providers/${P.D.id}/bank`).set(authH(staff)).send({}).expect(403);
+    const c = await login(P.C.phone);
+    await http().get('/api/admin/ledger/balances').set(authH(c)).expect(403);
+    const cLines = (await http().get('/api/provider/ledger/entries?limit=100').set(authH(c)).expect(200)).body.items as any[];
+    const dIds = new Set(((await http().get(`/api/admin/ledger/providers/${P.D.id}/entries?limit=100`).set(authH(admin)).expect(200)).body.items as any[]).map((x) => x.id));
+    expect(cLines.some((l) => dIds.has(l.id))).toBe(false);
+    expect(JSON.stringify(cLines)).not.toMatch(/"reason"|"basis"|"createdBy"|"providerId"|"slot"/);
+    await new Promise((r) => setTimeout(r, 1100));
+    await http().delete(`/api/admin/staff/${member.id}`).set(authH(admin)).expect(200);
+    tokens.delete(phone);
+  });
+
+  it('D32: «کیف پول دیجیتال سرو» report and its CSV export', async () => {
+    const admin = await login('09120000000');
+    const from = ymdDaysAgo(27);
+    const to = tehranToday();
+    const r = (await http().get(`/api/admin/ledger/wallet?from=${from}&to=${to}`).set(authH(admin)).expect(200)).body;
+    expect(r.total.share).toBe(r.total.charged - r.total.providerCost - r.total.courierCost);
+    expect(r.total.providerCost).toBeGreaterThan(0); // the credits / adjustments above were counted today
+    expect(r.rows.at(-1).to).toBe(to);
+    expect(typeof r.pendingCredits).toBe('number');
+    const csv = await http().get(`/api/admin/ledger/wallet/export?from=${from}&to=${to}`).set(authH(admin)).expect(200);
+    expect(csv.headers['content-type']).toMatch(/text\/csv/);
+    expect(csv.headers['content-disposition']).toContain(`sarv-wallet-${from}-${to}.csv`);
+    expect(csv.text.startsWith('﻿')).toBe(true);
+    await http().get('/api/admin/ledger/wallet?from=2025-01-01&to=2026-06-01').set(authH(admin)).expect(400);
   });
 
   it('protects admin routes', async () => {

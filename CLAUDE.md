@@ -1,7 +1,7 @@
 # Digital Sarv (دیجیتال سرو)
 
 Printing, school-book spiral binding and home pickup/delivery platform. Persian, right-to-left UI throughout.
-Five independently installable apps (four from the Claude Design files in `design/v2/`: `landing`, `customer`, `delivery`, `admin` `.dc.html`; shared prototype script; the provider app follows the same design system): **landing** `/`, **customer app** `/app/` (mobile PWA), **courier app «سرو پیک»** `/courier/` (mobile PWA), **admin panel** `/admin/` (incl. «مرکز تخصیص سفارش», `/admin/dispatch`), **provider app «سرو مجری»** `/provider/` (mobile PWA; «سفارش‌ها» = its job list). `design/digital-sarv.dc.html` is the superseded v1 single file.
+Five independently installable apps (four from the Claude Design files in `design/v2/`: `landing`, `customer`, `delivery`, `admin` `.dc.html`; shared prototype script; the provider app follows the same design system): **landing** `/`, **customer app** `/app/` (mobile PWA), **courier app «سرو پیک»** `/courier/` (mobile PWA), **admin panel** `/admin/` (incl. «مرکز تخصیص سفارش», `/admin/dispatch`, and «تسویه مجریان», `/admin/ledger`), **provider app «سرو مجری»** `/provider/` (mobile PWA; «سفارش‌ها» = its job list, «تسویه» = its ledger). `design/digital-sarv.dc.html` is the superseded v1 single file.
 
 ## Layout
 
@@ -27,7 +27,7 @@ pnpm --filter web build       # tsc -b && vite build
 ```
 
 Dev logins are OTP-by-phone; the OTP request response includes `devCode` only when `OTP_DEV_CODE=1` and `NODE_ENV !== 'production'` (set in `apps/api/.env`). Outside `development`/`test`, `JWT_SECRET` is required at boot.
-Admin `09120000000`, courier `09121111111`, provider `09122222222` (چاپ نگین), customer `09123456789`. `seed` also adds the pickup point «دفتر مرکزی دیجیتال سرو» (its address is a placeholder; the owner edits it in «تنظیمات»).
+Admin `09120000000`, courier `09121111111`, provider `09122222222` (چاپ نگین; نگین has a demo bank account and ledger), customer `09123456789`. `seed` also adds the pickup point «دفتر مرکزی دیجیتال سرو» (its address is a placeholder; the owner edits it in «تنظیمات»).
 
 ## Rules that matter
 
@@ -43,6 +43,8 @@ Admin `09120000000`, courier `09121111111`, provider `09122222222` (چاپ نگ�
 
 - **Jobs.** Every job status change goes through `JobsService.move` / `giveBack` (compare-and-set + forward-only order mirror); never write `jobs.status` or mirror order statuses by hand. A provider never receives a job it is not capable of.
 - Print/docs/flyer orders have no home pickup slot; only school books, cartridges and repairs do (`needsHomePickup`). Fees never depend on the delivery method (D22) — never change `computeQuote` for delivery.
+- **v4.3 ledger** (`modules/ledger`, contract «v4.3»): provider money lives only in `ledgerEntries` — append-only, every write a keyed upsert (`LedgerService.insertOnce`); a counted amount is never edited (corrections are adjustments, a payout is undone by a `payout_void`); only a pending credit's amount is set once. Admin entries go through `LedgerService.withSlot` (per-provider `rev` + unique `slot`) so a payout never exceeds the balance; balances are always derived from the entries. A job's move to `delivered` sets `ledgerPending` in the same `cas` and the ledger credits it afterwards (the dispatch tick retries); never credit by hand. Provider credit = the assignment snapshot (D26); discounts and fees are Digital Sarv's share. Finance permissions `ledger_view` / `ledger_adjust` / `payout_record`; the bank account (Sheba) is admin-only (`payout_record`), `select:false`, changes are kept in `bankAccountHistory`, and it is shown masked to the provider and in responses.
+- Provider-only price-book combos (`school|…`, `docs|…`, `flyer|…`, `cart|…`, `repair|…`, `extra|…`, D29) never get a customer version; the customer quote never reads them.
 
 ## Gotchas
 

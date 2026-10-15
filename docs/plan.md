@@ -39,8 +39,8 @@ The four v2 files share one prototype script (logic/pricing unchanged from v1); 
 - [x] V4-M1 Pricing core — `docs/superpowers/plans/2026-10-14-v4-m1-pricing-core.md` (design `docs/v4-design.md`)
 - [x] V4-M2 Providers, provider prices, staff permissions, Zibal — `docs/superpowers/plans/2026-10-15-v4-m2-providers.md`
 - [x] V4-M3 Dispatch center, provider panel, fulfillment and delivery — `docs/superpowers/plans/2026-10-16-v4-m3-dispatch.md`
-- [ ] V4-M4 Provider ledger and settlement — `docs/superpowers/plans/2026-10-17-v4-m4-ledger.md` (contract «v4.3»)
-- [ ] V4-M5 Security and regression verification (incl. a recoverable pending-wallet-credit record: the wallet credit is currently marker-then-`$inc`, logged at ERROR before the `$inc`)
+- [x] V4-M4 Provider ledger and settlement — `docs/superpowers/plans/2026-10-17-v4-m4-ledger.md` (contract «v4.3»)
+- [ ] V4-M5 Security and regression verification — see «Handoff to M5» in `docs/superpowers/plans/2026-10-17-v4-m4-ledger.md` (ledger permission matrix and IDOR, Playwright on all apps incl. «تسویه مجریان» / «تسویه», the recoverable pending-wallet-credit record, the R11 backfill on a production copy)
 
 ## Needs from the owner before going live
 
@@ -48,4 +48,4 @@ Zarinpal merchant ID, Kavenegar API key + OTP template, production domain + TLS,
 - Zibal merchant ID (`ZIBAL_MERCHANT`) for production; until then `zibal` (sandbox) on staging only.
 - Confirmation of the 5 assumptions in `docs/v4-design.md`.
 - The Digital Sarv pickup points (name, address, phone, hours) for «تحویل حضوری», and the provider response timeout if not 2 hours.
-- The providers' bank accounts (شبا + account holder) and the weekly settlement weekday if not Saturday.
+- The providers' real bank accounts (شبا + account holder; the seed only has a demo one for نگین) and the weekly settlement weekday if not Saturday («تنظیمات» → «تسویه مجریان»).
