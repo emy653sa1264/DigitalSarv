@@ -174,10 +174,10 @@ export function useOrderMutations() {
     ])
 
   const setStatus = useMutation({
-    mutationFn: ({ id, status, confirmCashCollected }: { id: string; status: OrderStatus; confirmCashCollected?: boolean }) =>
-      api.patch<Order>(`/admin/orders/${id}/status`, { status, ...(confirmCashCollected ? { confirmCashCollected: true } : {}) }),
+    mutationFn: ({ id, status, confirmCashCollected, expectedCash }: { id: string; status: OrderStatus; confirmCashCollected?: boolean; expectedCash?: number }) =>
+      api.patch<Order>(`/admin/orders/${id}/status`, { status, ...(confirmCashCollected ? { confirmCashCollected: true, expectedCash } : {}) }),
     onSuccess: (_d, { id }) => settle(id),
-    // ruling F-I2: a difference due the sheet had not seen yet (409 DUE_OUTSTANDING) — reload so the sheet shows it and asks
+    // rulings F-I2/M-a: cash the sheet had not seen, or a changed amount (409 DUE_OUTSTANDING / CASH_CHANGED) — reload so it shows it
     onError: (_e, { id }) => settle(id),
   })
 

@@ -435,6 +435,8 @@ export interface Order {
   chargedAmount?: number
   /** v4.4 (D35): what is still owed after a recount raised the total (only when > 0). */
   amountDue?: number
+  /** v4.4 (F-I2b, admin JSON only): cash to take at the handover — the unpaid COD total or the difference due (only when > 0). */
+  cashToCollect?: number
   settlements?: OrderSettlement[]
   paidVia?: PayMethod
   refunded?: boolean

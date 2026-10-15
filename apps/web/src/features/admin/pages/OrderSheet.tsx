@@ -106,15 +106,15 @@ function Row({ label, value, strong, accent }: { label: ReactNode; value: ReactN
 }
 
 /** What a final transition does to the money, shown before it is confirmed. */
-function finalEffect(order: Order, target: OrderStatus): string {
+function finalEffect(order: Order, target: OrderStatus, cash: number): string {
   if (target === 'cancelled') {
     const refund = refundableAmount(order)
     if (refund > 0) return `مبلغ ${money(refund)} به کیف پول مشتری برگردانده می‌شود.`
     if (order.refunded) return 'مبلغ این سفارش قبلاً به کیف پول مشتری برگردانده شده است.'
     return 'مبلغی از مشتری دریافت نشده است؛ بازگشت وجهی انجام نمی‌شود.'
   }
-  if (order.payMethod === 'cod' && !order.paid) return `پرداخت در محل ثبت می‌شود (${money(order.quote?.total ?? 0)}).`
-  if (order.amountDue) return `مابه‌التفاوت ${money(order.amountDue)} هنوز دریافت نشده است؛ فقط اگر این مبلغ را نقدی از مشتری گرفته‌اید تحویل را ثبت کنید.`
+  if (cash > 0 && order.payMethod === 'cod' && !order.paid) return `پرداخت در محل: مبلغ ${money(cash)} هنوز دریافت نشده است؛ فقط اگر این مبلغ را نقدی از مشتری گرفته‌اید تحویل را ثبت کنید.`
+  if (cash > 0) return `مابه‌التفاوت ${money(cash)} هنوز دریافت نشده است؛ فقط اگر این مبلغ را نقدی از مشتری گرفته‌اید تحویل را ثبت کنید.`
   return 'سفارش به‌عنوان تحویل‌شده بسته می‌شود.'
 }
 
@@ -131,11 +131,30 @@ function ControlsCard({ order }: { order: Order }) {
   const unpaid = order.status === 'pending_payment'
   const final = isTerminal(order.status)
   const options = adminStatusOptions(order.status)
-  // ruling F-I2: «تحویل شد» while a difference is due = the admin confirms the cash was taken (server value only)
-  const cashDue = confirming === 'delivered' && (order.amountDue ?? 0) > 0
+  // rulings F-I2/F-I2b/M-a: «تحویل شد» with cash to collect (a difference due, unpaid COD) = the admin confirms the amount shown.
+  // Server values only: the order's `cashToCollect`, or the current amount a 409 answered with (until the order reloads).
+  const [cashSeen, setCashSeen] = useState<number>()
+  const cash = cashSeen ?? order.cashToCollect ?? 0
+  const cashDue = confirming === 'delivered' && cash > 0
 
-  const applyStatus = (status: OrderStatus, confirmCashCollected?: boolean) =>
-    setStatus.mutate({ id: order.id, status, ...(confirmCashCollected ? { confirmCashCollected: true } : {}) }, { onSuccess: () => notify(`وضعیت سفارش: ${ORDER_STATUS_LABEL[status]}`) })
+  const applyStatus = (status: OrderStatus, expectedCash?: number) =>
+    setStatus.mutate(
+      { id: order.id, status, ...(expectedCash ? { confirmCashCollected: true, expectedCash } : {}) },
+      {
+        onSuccess: () => {
+          setCashSeen(undefined)
+          notify(`وضعیت سفارش: ${ORDER_STATUS_LABEL[status]}`)
+        },
+        onError: (e) => {
+          // the amount changed (or appeared) since the sheet was loaded: ask again with the server's current amount
+          const d = (e instanceof ApiError ? e.data ?? {} : {}) as ServerProblem
+          if (status === 'delivered' && (d.code === 'CASH_CHANGED' || d.code === 'DUE_OUTSTANDING') && d.cashToCollect) {
+            setCashSeen(d.cashToCollect)
+            setConfirming('delivered')
+          }
+        },
+      },
+    )
 
   const changeStatus = (v: string) => {
     const status = v as OrderStatus
@@ -238,20 +257,27 @@ function ControlsCard({ order }: { order: Order }) {
         />
       )}
 
-      <AlertDialog open={!!confirming} onOpenChange={(open) => !open && setConfirming(undefined)}>
+      <AlertDialog
+        open={!!confirming}
+        onOpenChange={(open) => {
+          if (open) return
+          setConfirming(undefined)
+          setCashSeen(undefined)
+        }}
+      >
         <AlertDialogContent className="rounded-[26px] border-line bg-white">
           <AlertDialogHeader>
             <AlertDialogTitle className="text-lg font-black">
               {confirming === 'cancelled' ? `لغو سفارش ${fa(order.code)}؟` : `ثبت تحویل سفارش ${fa(order.code)}؟`}
             </AlertDialogTitle>
             <AlertDialogDescription className="text-[13.5px] leading-7 text-muted-1">
-              {confirming && finalEffect(order, confirming)} این کار قابل بازگشت نیست.
+              {confirming && finalEffect(order, confirming, cash)} این کار قابل بازگشت نیست.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>انصراف</AlertDialogCancel>
-            <AlertDialogAction variant={confirming === 'cancelled' ? 'destructive' : 'default'} onClick={() => confirming && applyStatus(confirming, cashDue)}>
-              {confirming === 'cancelled' ? 'لغو سفارش' : cashDue ? `مبلغ ${money(order.amountDue ?? 0)} نقدی دریافت شد` : 'ثبت تحویل'}
+            <AlertDialogAction variant={confirming === 'cancelled' ? 'destructive' : 'default'} onClick={() => confirming && applyStatus(confirming, cashDue ? cash : undefined)}>
+              {confirming === 'cancelled' ? 'لغو سفارش' : cashDue ? `مبلغ ${money(cash)} نقدی دریافت شد` : 'ثبت تحویل'}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -264,6 +290,7 @@ interface ServerProblem {
   code?: string
   problems?: string[]
   missing?: string[]
+  cashToCollect?: number
 }
 interface CenterRetry {
   centerId: string
@@ -435,6 +462,7 @@ function QuoteCard({ order }: { order: Order }) {
         <Row key={`${s.kind}-${s.at}-${i}`} label={`${SETTLEMENT_LABEL[s.kind]} · ${jalali(s.at, { day: 'numeric', month: 'long' })}`} value={money(s.amount)} />
       ))}
       {!!order.amountDue && <Row label="مابه‌التفاوت دریافت‌نشده" value={money(order.amountDue)} strong />}
+      {!!order.cashToCollect && <Row label="نقدی هنگام تحویل" value={money(order.cashToCollect)} strong />}
       {payment?.refId && <Row label="کد پیگیری درگاه" value={<span dir="ltr">{payment.refId}</span>} />}
       {payment?.cardPan && <Row label="کارت" value={<span dir="ltr">{payment.cardPan}</span>} />}
       {payment?.paidAt && <Row label="زمان پرداخت" value={`${jalaliDayTime(payment.paidAt)} · ${jalali(payment.paidAt, { day: 'numeric', month: 'long' })}`} />}
