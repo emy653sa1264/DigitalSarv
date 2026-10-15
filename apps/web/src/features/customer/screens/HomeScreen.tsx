@@ -41,8 +41,10 @@ function etaOf(o: Order): string {
     if (o.fulfillment?.label) return `${o.fulfillment.label}${where}`
     return `به‌روزرسانی ${jalali(o.updatedAt, { day: 'numeric', month: 'long' })}`
   }
+  const finalAt = o.delivery?.method === 'customer_pickup' ? (o.fulfillment?.place?.name ?? o.delivery.pickupPoint?.name) : undefined
+  const final = finalAt ? ` · تحویل نهایی: حضوری از ${finalAt}` : ''
   return flowIndex(o.status) < flowIndex('picked_up')
-    ? `تحویل‌گیری ${jalaliWeekdayLabel(o.pickup.date)}`
+    ? `تحویل‌گیری ${jalaliWeekdayLabel(o.pickup.date)}${final}`
     : `به‌روزرسانی ${jalali(o.updatedAt, { day: 'numeric', month: 'long' })}`
 }
 

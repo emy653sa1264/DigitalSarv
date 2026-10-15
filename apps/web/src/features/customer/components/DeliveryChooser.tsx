@@ -28,19 +28,34 @@ export function DeliveryMethodPicker({ homePickup }: { homePickup?: boolean }) {
   const setPickup = useDraft((s) => s.setPickup)
   // a switched-off point disappears from the catalog: fall back to another point or to delivery
   useEffect(() => {
-    if (delivery.method === 'customer_pickup' && catalog.data && !points.some((p) => p.id === delivery.pickupPointId))
+    if (delivery.method === 'customer_pickup' && catalog.data && !points.some((p) => p.id === delivery.pickupPointId)) {
       setDelivery({ pickupPointId: points[0]?.id, ...(points.length ? {} : { method: 'courier' as const }) })
+      if (!points.length) notify('محل تحویل انتخابی دیگر فعال نیست؛ ارسال با پیک انتخاب شد')
+    }
   }, [catalog.data, points, delivery.method, delivery.pickupPointId, setDelivery])
+
+  // roving tabindex + arrow keys between the method radios (RTL: the visual next/previous is handled by either arrow)
+  const methods: ('courier' | 'customer_pickup')[] = points.length > 0 ? ['courier', 'customer_pickup'] : ['courier']
+  const onKeys = (e: React.KeyboardEvent) => {
+    const step = e.key === 'ArrowLeft' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowRight' || e.key === 'ArrowUp' ? -1 : 0
+    if (!step || methods.length < 2) return
+    e.preventDefault()
+    const next = methods[(methods.indexOf(delivery.method) + step + methods.length) % methods.length]
+    setDelivery(next === 'customer_pickup' ? { method: next, pickupPointId: delivery.pickupPointId ?? points[0].id } : { method: next })
+    requestAnimationFrame(() => e.currentTarget.querySelector<HTMLElement>('[aria-checked="true"]')?.focus())
+  }
 
   return (
     <>
-      <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="روش تحویل">
-        <Chip role="radio" aria-checked={delivery.method === 'courier'} selected={delivery.method === 'courier'} onClick={() => setDelivery({ method: 'courier' })}>
+      {catalog.isPending && <div className="text-[11.5px] text-muted-2">در حال بارگذاری محل‌های تحویل…</div>}
+      <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="روش تحویل" onKeyDown={onKeys}>
+        <Chip role="radio" tabIndex={delivery.method === 'courier' ? 0 : -1} aria-checked={delivery.method === 'courier'} selected={delivery.method === 'courier'} onClick={() => setDelivery({ method: 'courier' })}>
           <Truck className="me-1.5 inline size-4" strokeWidth={2.4} />ارسال به آدرس
         </Chip>
         {points.length > 0 && (
           <Chip
             role="radio"
+            tabIndex={delivery.method === 'customer_pickup' ? 0 : -1}
             aria-checked={delivery.method === 'customer_pickup'}
             selected={delivery.method === 'customer_pickup'}
             onClick={() => setDelivery({ method: 'customer_pickup', pickupPointId: delivery.pickupPointId ?? points[0].id })}
@@ -51,7 +66,9 @@ export function DeliveryMethodPicker({ homePickup }: { homePickup?: boolean }) {
       </div>
 
       {delivery.method === 'courier' ? (
-        !homePickup && (
+        homePickup ? (
+          <div className="text-[11.5px] text-muted-2">آدرس بالا برای ارسال سفارش هم استفاده می‌شود</div>
+        ) : (
           <div>
             <FieldLabel htmlFor="delivery-address" className="mb-[7px]">آدرس ارسال</FieldLabel>
             <Textarea id="delivery-address" rows={3} value={pickup.address} onChange={(e) => setPickup({ address: e.target.value })} />

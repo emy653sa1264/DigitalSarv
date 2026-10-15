@@ -50,7 +50,15 @@ export function DoneScreen() {
                     : 'وقتی آماده شد برای شما ارسال می‌شود.'}
                 </>
               ) : (
-                <>پیک {jalaliWeekdayLabel(o.pickup.date)} بین {o.pickup.slot} در محل شما است.</>
+                <>
+                  پیک {jalaliWeekdayLabel(o.pickup.date)} بین {o.pickup.slot} در محل شما است.
+                  {atPoint && place && (
+                    <>
+                      <br />
+                      تحویل نهایی: حضوری از {place.name}
+                    </>
+                  )}
+                </>
               )}
             </div>
           </div>

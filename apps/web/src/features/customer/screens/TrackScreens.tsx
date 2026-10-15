@@ -156,7 +156,7 @@ function Timeline({ order: o }: { order: Order }) {
       )}
       {o.status === 'pending_payment' && (
         <InfoBanner tone="amber" className="mt-3">
-          <div>این سفارش هنوز پرداخت نشده است؛ پس از پرداخت، ثبت نهایی و پیک تعیین می‌شود.</div>
+          <div>{homePickup ? 'این سفارش هنوز پرداخت نشده است؛ پس از پرداخت، ثبت نهایی و پیک تعیین می‌شود.' : 'این سفارش هنوز پرداخت نشده است؛ پس از پرداخت، ثبت نهایی و تولید آغاز می‌شود.'}</div>
           <button
             type="button"
             disabled={payment.busyId === o.id}
