@@ -2,6 +2,7 @@ import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
+import { TokenVerifier } from '../../common/auth/token-verifier.service.js';
 import type { AppConfig } from '../../config/configuration.js';
 import { User } from './user.schema.js';
 import { makeReferralCode } from './users.service.js';
@@ -14,6 +15,7 @@ export class AdminBootstrapService implements OnApplicationBootstrap {
   constructor(
     @InjectModel(User.name) private readonly users: Model<User>,
     private readonly config: ConfigService,
+    private readonly sessions: TokenVerifier,
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
@@ -23,6 +25,7 @@ export class AdminBootstrapService implements OnApplicationBootstrap {
   async ensureAdmins(phones: string[]): Promise<number> {
     let changed = 0;
     for (const phone of phones) {
+      const before = await this.users.findOne({ phone }, { role: 1, permissions: 1, providerId: 1, courierId: 1 }).lean();
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
           const res = await this.users.updateOne(
@@ -43,6 +46,14 @@ export class AdminBootstrapService implements OnApplicationBootstrap {
             this.logger.error(`could not ensure admin ${phone}: ${(err as Error).message}`);
             break;
           }
+        }
+      }
+      // the boot changed what this account may do: its older tokens carry a stale role claim (v4.4)
+      if (before && (before.role !== 'admin' || before.permissions || before.providerId || before.courierId)) {
+        try {
+          await this.sessions.revokeUser(String(before._id));
+        } catch (err) {
+          this.logger.error(`could not revoke sessions of ${phone}: ${(err as Error).message}`);
         }
       }
     }

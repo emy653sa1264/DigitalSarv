@@ -15,9 +15,10 @@ function setup(couriers: Doc[], orders: Doc[] = [], users: Doc[] = [], jobDocs: 
   const jobs = fakeModel(jobDocs);
   const centers = fakeModel(centerDocs);
   const jobsSvc = { courierCollected: vi.fn(async () => undefined), onOrderDelivered: vi.fn(async () => undefined) };
+  const sessions = { revokeUser: vi.fn(async () => undefined) };
   const svc = new CourierService(c as never, o as never, u as never, fakeModel([zone]) as never, {} as never, { dispatch: vi.fn(async () => undefined) } as never, {} as never,
-    { getSettings: async () => ({ courier: { perTaskFee: 75000, settlementWeekday: 4 } }) } as never, jobs as never, centers as never, jobsSvc as never);
-  return { svc, c, o, u, jobs, centers, jobsSvc };
+    { getSettings: async () => ({ courier: { perTaskFee: 75000, settlementWeekday: 4 } }) } as never, jobs as never, centers as never, jobsSvc as never, sessions as never);
+  return { svc, c, o, u, jobs, centers, jobsSvc, sessions };
 }
 
 describe('CourierService.verify recount', () => {
@@ -37,7 +38,7 @@ describe('CourierService.verify recount', () => {
     };
     const svc = new CourierService(
       fakeModel([{ _id: courierId, userId }]) as never, fakeModel([order]) as never, fakeModel([]) as never, fakeModel([]) as never,
-      pricing as never, { dispatch: vi.fn(async () => undefined) } as never, { attach: vi.fn(async () => undefined) } as never, {} as never, fakeModel([]) as never, fakeModel([]) as never, {} as never,
+      pricing as never, { dispatch: vi.fn(async () => undefined) } as never, { attach: vi.fn(async () => undefined) } as never, {} as never, fakeModel([]) as never, fakeModel([]) as never, {} as never, { revokeUser: vi.fn(async () => undefined) } as never,
     );
     const res = await svc.verify({ id: String(userId), role: 'courier' } as never, String(order._id), { collectedCount: 3, checks: [true] });
     const drafted = pricing.quote.mock.calls[0][0] as { services: { kind: string }[] };
@@ -230,5 +231,40 @@ describe('v4.2 courier tasks', () => {
       expect(cod).toMatchObject({ paid: true, paidVia: 'cod', chargedAmount: 7000 });
       expect(cod.settlements).toBeUndefined();
     });
+  });
+});
+
+describe('courier logins (S7)', () => {
+  /** `create` builds a Mongoose document (not available on the fake model), so the private link step is called directly. */
+  const link = (svc: unknown, courierId: Types.ObjectId, phone: string) =>
+    (svc as { linkUser: (c: Types.ObjectId, p: string, n: string) => Promise<Types.ObjectId> }).linkUser(courierId, phone, 'پیک تازه');
+  it('linking an existing customer account claims it, links it and revokes its tokens', async () => {
+    const cust = { _id: new Types.ObjectId(), phone: '09127770001', role: 'customer', name: 'مشتری' };
+    const { svc, u, sessions } = setup([], [], [cust]);
+    const courier = new Types.ObjectId();
+    expect(String(await link(svc, courier, '09127770001'))).toBe(String(cust._id));
+    expect(u.docs[0]).toMatchObject({ role: 'courier', courierId: courier });
+    expect(sessions.revokeUser).toHaveBeenCalledWith(String(cust._id));
+    sessions.revokeUser.mockClear();
+    await link(svc, courier, '09127770001'); // already this courier's login: nothing changes, nothing revoked
+    expect(sessions.revokeUser).not.toHaveBeenCalled();
+  });
+  it('a phone linked to another courier is 409, and nothing changes', async () => {
+    const other = new Types.ObjectId();
+    const taken = { _id: new Types.ObjectId(), phone: '09127770002', role: 'courier', courierId: other };
+    const { svc, u, sessions } = setup([{ _id: other, code: 'x', name: 'دیگری', phone: '09127770002', userId: taken._id }], [], [taken]);
+    await expect(link(svc, new Types.ObjectId(), '09127770002')).rejects.toThrow('این شماره به پیک دیگری متصل است');
+    expect(u.docs[0].courierId).toEqual(other);
+    expect(sessions.revokeUser).not.toHaveBeenCalled();
+  });
+  it('changing the phone demotes only the old login of this courier and revokes it', async () => {
+    const id = new Types.ObjectId();
+    const oldUser = { _id: new Types.ObjectId(), phone: '09127770003', role: 'courier', courierId: id };
+    const doc: Doc = { _id: id, code: '1', name: 'a', phone: '09127770003', userId: oldUser._id };
+    const { svc, c, u, sessions } = setup([doc], [], [oldUser]);
+    c.findById.mockImplementation((() => Object.assign(doc, { save: vi.fn(async () => doc), set: vi.fn(), toJSON: () => ({ id: String(id) }) })) as never);
+    await svc.update(String(id), { phone: '09127770004' } as never);
+    expect(u.docs.find((x) => x.phone === '09127770003')).toMatchObject({ role: 'customer' });
+    expect(sessions.revokeUser).toHaveBeenCalledWith(String(oldUser._id));
   });
 });

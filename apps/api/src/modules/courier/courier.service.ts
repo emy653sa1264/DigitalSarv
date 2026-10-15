@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { TokenVerifier } from '../../common/auth/token-verifier.service.js';
 import type { AuthUser } from '../../common/auth/auth-user.js';
 import type { DeliveryMethod, JobStatus, OrderStatus } from '../../common/constants.js';
 import { addDays, tehranDayStart, tehranYmd } from '../../common/utils/dates.js';
@@ -86,6 +87,7 @@ export class CourierService {
     @InjectModel(Job.name) private readonly jobs: Model<Job>,
     @InjectModel(Center.name) private readonly centers: Model<Center>,
     private readonly fulfilment: JobsService,
+    private readonly sessions: TokenVerifier,
   ) {}
 
   async forUser(user: AuthUser): Promise<CourierDocument> {
@@ -315,18 +317,41 @@ export class CourierService {
     return (await this.withZoneNames(couriers)).map((c, i) => ({ ...c, todayCount: counts[i] }));
   }
 
-  /** Links (or creates) the courier's login user so the phone can sign in to the courier app. */
+  /**
+   * Links (or creates) the courier's login (S7): the account is claimed by a compare-and-set on what was read (role and link),
+   * a phone of another courier is 409, and any role / link change revokes that account's tokens (their role claim is stale).
+   */
   private async linkUser(courierId: Types.ObjectId, phone: string, name: string): Promise<Types.ObjectId> {
-    const user =
-      (await this.users.findOne({ phone })) ??
-      (await this.users.create({ phone, name, role: 'courier', planId: 'bronze', referralCode: makeReferralCode() }));
-    if (user.role === 'admin') throw new ConflictException('این شماره متعلق به مدیر سیستم است');
-    if (user.role === 'provider') throw new ConflictException('این شماره متعلق به یک مجری است');
-    user.role = 'courier';
-    user.courierId = courierId;
-    if (!user.name) user.name = name;
-    await user.save();
-    return user._id;
+    const existing = await this.users.findOne({ phone }, { role: 1, courierId: 1, name: 1 }).lean();
+    if (!existing) {
+      try {
+        const created = await this.users.create({ phone, name, role: 'courier', courierId, planId: 'bronze', referralCode: makeReferralCode() });
+        return created._id;
+      } catch (err) {
+        if ((err as { code?: number }).code === 11000) throw new ConflictException('حساب این شماره هم‌زمان تغییر کرد؛ دوباره تلاش کنید');
+        throw err;
+      }
+    }
+    if (existing.role === 'admin') throw new ConflictException('این شماره متعلق به مدیر سیستم است');
+    if (existing.role === 'provider') throw new ConflictException('این شماره متعلق به یک مجری است');
+    if (existing.role === 'courier' && existing.courierId && String(existing.courierId) !== String(courierId)) {
+      throw new ConflictException('این شماره به پیک دیگری متصل است');
+    }
+    if (existing.role === 'courier' && String(existing.courierId) === String(courierId)) return existing._id as Types.ObjectId;
+    const res = await this.users.updateOne(
+      { _id: existing._id, role: existing.role, courierId: existing.courierId ?? null },
+      { $set: { role: 'courier', courierId, ...(existing.name ? {} : { name }) } },
+    );
+    if (!res.matchedCount) throw new ConflictException('حساب این شماره هم‌زمان تغییر کرد؛ دوباره تلاش کنید');
+    await this.sessions.revokeUser(String(existing._id));
+    return existing._id as Types.ObjectId;
+  }
+
+  /** The courier's old login goes back to a plain customer — only if it is still this courier's — and its tokens stop working (revoked before and after, like staff demotion). */
+  private async demote(userId: Types.ObjectId, courierId: Types.ObjectId) {
+    await this.sessions.revokeUser(String(userId));
+    const res = await this.users.updateOne({ _id: userId, role: 'courier', courierId }, { $set: { role: 'customer' }, $unset: { courierId: 1 } });
+    if (res.matchedCount) await this.sessions.revokeUser(String(userId));
   }
 
   async create(dto: CreateCourierDto) {
@@ -362,7 +387,7 @@ export class CourierService {
         const oldUserId = courier.userId;
         // validate/claim the new login first: a refused phone must not lock the current one out
         const newUserId = await this.linkUser(courier._id, phone, courier.name);
-        if (oldUserId) await this.users.updateOne({ _id: oldUserId }, { $set: { role: 'customer' }, $unset: { courierId: 1 } });
+        if (oldUserId) await this.demote(oldUserId, courier._id);
         courier.phone = phone;
         courier.userId = newUserId;
       }
@@ -379,9 +404,7 @@ export class CourierService {
     if (open) throw new ConflictException(`این پیک ${fa(open)} سفارش باز دارد؛ ابتدا سفارش‌ها را به پیک دیگری بدهید`);
     const courier = await this.couriers.findByIdAndDelete(id);
     if (!courier) throw new NotFoundException('پیک یافت نشد');
-    if (courier.userId) {
-      await this.users.updateOne({ _id: courier.userId }, { $set: { role: 'customer' }, $unset: { courierId: 1 } });
-    }
+    if (courier.userId) await this.demote(courier.userId, courier._id);
     return { ok: true };
   }
 }
