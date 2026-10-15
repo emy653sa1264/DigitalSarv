@@ -22,6 +22,7 @@ export class LedgerEntry {
   @Prop({ type: String, enum: LEDGER_KINDS, required: true }) kind: LedgerKind;
   @Prop({ type: String, enum: LEDGER_STATES, default: 'counted' }) state: LedgerState;
   /** Signed integer toman (credit ≥ 0, payout < 0, void > 0); null while pending. */
+  /** Null while pending (the service always sets it explicitly on creation). */
   @Prop({ type: Number, default: null }) amount: number | null;
   @Prop({ type: String, enum: CREDIT_ROLES }) role?: CreditRole;
   @Prop({ type: String, enum: ADJUSTMENT_CAUSES }) cause?: AdjustmentCause;

@@ -68,8 +68,8 @@ export class Center {
   @Prop({ type: [EquipmentSchema], default: [] }) equipment: Equipment[];
   @Prop({ type: [CapabilitySchema], default: [] }) capabilities: Capability[];
 
-  // ---- v4.3 settlement (D31, R7): written only by PUT /admin/ledger/providers/:id/bank
-  @Prop({ type: MongooseSchema.Types.Mixed }) bankAccount?: BankAccount;
+  // ---- v4.3 settlement (D31, R7): written only by PUT /admin/ledger/providers/:id/bank; never selected by default (read with .select("+bankAccount"))
+  @Prop({ type: MongooseSchema.Types.Mixed, select: false }) bankAccount?: BankAccount;
 
   createdAt: Date;
   updatedAt: Date;

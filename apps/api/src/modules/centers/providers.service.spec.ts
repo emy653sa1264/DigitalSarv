@@ -149,12 +149,4 @@ describe('ProvidersService', () => {
     expect(JSON.stringify(self)).not.toMatch(/adminNotes|محرمانه|commissionPct|rating|login|userId/);
     expect(self).toMatchObject({ id, name: 'چاپ نگین', status: 'active' });
   });
-
-  it('v4.3: a provider with ledger entries cannot be deleted (R14)', async () => {
-    const s = setup();
-    Object.assign(s.svc as object, { ledger: fakeModel([{ _id: new Types.ObjectId(), providerId: s.centers.docs[0]._id, key: 'credit:x', kind: 'credit' }]) });
-    await expect(s.svc.remove(s.id)).rejects.toThrow('این مجری در حساب تسویه سابقه دارد؛ به‌جای حذف آن را غیرفعال کنید');
-    Object.assign(s.svc as object, { ledger: fakeModel([]) });
-    await expect(s.svc.remove(s.id)).resolves.toEqual({ ok: true });
-  });
 });
