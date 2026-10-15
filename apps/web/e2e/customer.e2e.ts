@@ -1,4 +1,4 @@
-import { apiCall, checkPage, closeBrowser, openPage, PHONES, session, visit, VIEWPORTS, type Session } from './kit'
+import { apiCall, captureApi, checkPage, closeBrowser, openPage, PHONES, session, visit, VIEWPORTS, type Session } from './kit'
 
 afterAll(closeBrowser)
 
@@ -15,6 +15,10 @@ const draft = (payMethod: 'gateway' | 'cod') => JSON.stringify({
   version: 3,
 })
 const myOrders = async (s: Session) => (await apiCall<{ id: string; code: string; status: string }[]>(s.token, 'GET', '/orders/mine')).body
+/** UI logins use a second seeded customer (Mehdi) so Maryam's OTP budget (5 per 600 s) keeps headroom (see kit.session). */
+const MEHDI = '09121112233'
+/** §91: keys that hold provider data or margins — none may reach a customer page (customerOrderJson strips centerId, providerPricing, providerRev). */
+const PROVIDER_KEYS = /"(?:providerId|provider|providerPricing|providerRev|centerId|deliveryProviderId|baseProviderId|providerPrice|margin\w*|markup\w*|profit\w*)"\s*:/
 
 describe.each(VIEWPORTS)('customer app at $name', (vp) => {
   let cust: Session
@@ -29,7 +33,7 @@ describe.each(VIEWPORTS)('customer app at $name', (vp) => {
   it('§92 login by OTP in the UI keeps the session under the customer app’s own key (D36)', async () => {
     const o = await openPage(vp)
     await visit(o, '/app/login', `customer-login-${vp.name}`)
-    await o.page.fill('#login-phone', PHONES.customer)
+    await o.page.fill('#login-phone', MEHDI)
     await o.page.getByRole('checkbox').click() // the terms must be accepted before a code is sent
     const requested = o.page.waitForResponse((r) => r.url().endsWith('/api/auth/otp/request'))
     await o.page.locator('button[type=submit]').first().click()
@@ -50,6 +54,22 @@ describe.each(VIEWPORTS)('customer app at $name', (vp) => {
     const existing = (await myOrders(cust))[0]
     expect(existing, 'the demo seed has orders for this customer').toBeTruthy()
     await visit(o, `/app/track/${existing.id}`, `customer-track-${vp.name}`)
+    await o.context.close()
+  })
+
+  it('§91 no customer page receives provider data or margins (catalog, quote, orders, an order, fulfillment)', async () => {
+    const o = await openPage(vp, { sessions: { app: cust }, storage: { 'sarv-draft': draft('cod') } })
+    const seen = captureApi(o)
+    for (const p of ['/app/print', '/app/pay', '/app/orders', '/app/track']) await visit(o, p, `customer-s91${p.replaceAll('/', '-')}-${vp.name}`)
+    const existing = (await myOrders(cust))[0]
+    await visit(o, `/app/track/${existing.id}`, `customer-s91-track-${vp.name}`)
+    await new Promise((r) => setTimeout(r, 500)) // bodies are read asynchronously
+    const urls = seen.map((s) => s.url)
+    for (const part of ['/api/catalog', '/api/orders/quote', '/api/orders/mine', `/api/orders/${existing.id}`]) expect(urls.some((u) => u.includes(part)), `captured ${part}`).toBe(true)
+    for (const s of seen) {
+      const hit = PROVIDER_KEYS.exec(s.text)
+      expect(hit && `${s.url}: ${s.text.slice(Math.max(0, hit.index - 60), hit.index + 80)}`, 'provider data in a customer response').toBeNull()
+    }
     await o.context.close()
   })
 

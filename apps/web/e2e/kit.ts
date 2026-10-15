@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core'
 import { expect, inject } from 'vitest'
@@ -37,16 +37,35 @@ export async function apiCall<T = any>(token: string | null, method: string, p: 
 }
 
 const sessions = new Map<string, Session>()
-/** OTP login through the API (`devCode`), once per phone per run. */
+const SESSION_FILE = path.join(ARTIFACTS, 'sessions.json')
+const readSessions = (): Record<string, Session> => { try { return JSON.parse(readFileSync(SESSION_FILE, 'utf8')) } catch { return {} } }
+/**
+ * OTP login through the API (`devCode`), once per phone per RUN (cached in memory and in `.artifacts/sessions.json`, which
+ * global setup deletes). OTP budget: 5 requests per phone per 600 s; every phone stays at <= 3 per run — one API login each
+ * (admin, provider, courier, customer Maryam) plus at most 2 UI logins (customer UI logins use Mehdi's phone; the courier UI
+ * login runs once at desktop width and once more in the sessions spec).
+ */
 export async function session(phone: string): Promise<Session> {
-  const hit = sessions.get(phone)
-  if (hit) return hit
+  const hit = sessions.get(phone) ?? readSessions()[phone]
+  if (hit) { sessions.set(phone, hit); return hit }
   const req = await apiCall<{ devCode?: string }>(null, 'POST', '/auth/otp/request', { phone })
   if (!req.body?.devCode) throw new Error('OTP_DEV_CODE=1 is required for the browser suite')
   const v = await apiCall<{ accessToken: string; user: Session['user'] }>(null, 'POST', '/auth/otp/verify', { phone, code: req.body.devCode })
   const s = { token: v.body.accessToken, user: v.body.user }
   sessions.set(phone, s)
+  mkdirSync(ARTIFACTS, { recursive: true })
+  writeFileSync(SESSION_FILE, JSON.stringify({ ...readSessions(), [phone]: s }))
   return s
+}
+
+/** Collects every `/api/` JSON response body the page receives (for the §91 response scans). */
+export function captureApi(o: Opened): { url: string; text: string }[] {
+  const seen: { url: string; text: string }[] = []
+  o.page.on('response', (r) => {
+    if (!r.url().includes('/api/') || !(r.headers()['content-type'] ?? '').includes('json')) return
+    void r.text().then((text) => { seen.push({ url: r.url().replace(/^https?:\/\/[^/]+/, ''), text }) }).catch(() => undefined)
+  })
+  return seen
 }
 
 export interface Opened { page: Page; context: BrowserContext; problems: string[] }

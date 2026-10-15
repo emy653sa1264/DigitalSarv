@@ -91,6 +91,7 @@ export default async function setup(project: TestProject) {
   await redisCommand(redis, ['EVAL', "for _,k in ipairs(redis.call('keys','otp:rl:*')) do redis.call('del',k) end return 1", '0'])
 
   mkdirSync(ARTIFACTS, { recursive: true })
+  rmSync(path.join(ARTIFACTS, 'sessions.json'), { force: true }) // tokens are cached per run (OTP budget), never across runs
   const origin = `http://127.0.0.1:${WEB_PORT}`
   const apiLog = path.join(ARTIFACTS, 'api.log')
   const webLog = path.join(ARTIFACTS, 'static.log')
@@ -145,7 +146,7 @@ export default async function setup(project: TestProject) {
 
   try {
     const api = start('api', apiLog, ['dist/main.js'], API_ROOT, {
-      NODE_ENV: 'development', HOST: '127.0.0.1', PORT: String(API_PORT), DISPATCH_SCHEDULER: '0', OTP_DEV_CODE: '1', PAYMENT_DRIVER: 'mock',
+      NODE_ENV: 'development', API_HOST: '127.0.0.1', PORT: String(API_PORT), DISPATCH_SCHEDULER: '0', OTP_DEV_CODE: '1', PAYMENT_DRIVER: 'mock',
       WEB_PUBLIC_URL: origin, API_PUBLIC_URL: origin, CORS_ORIGIN: origin,
     })
     await waitReady(`http://127.0.0.1:${API_PORT}/api/health/ready`, 60_000, () => api.exitCode !== null)

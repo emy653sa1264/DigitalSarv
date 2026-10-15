@@ -39,7 +39,7 @@ describe.each(VIEWPORTS)('admin panel at $name', (vp) => {
     await visit(o, '/admin/pricing', `admin-pricing-${vp.name}`)
     for (const view of ['provider', 'compare', 'pending']) await visit(o, `/admin/pricing?view=${view}`, `admin-pricing-${view}-${vp.name}`)
     for (const name of ['قیمت مجریان', 'مقایسه و حاشیه سود']) {
-      await o.page.getByRole('tab', { name }).first().click()
+      await o.page.getByRole('tab', { name, exact: true }).click()
       await checkPage(o, `admin-pricing-click-${name}-${vp.name}`)
     }
     await o.context.close()

@@ -34,10 +34,10 @@ async function bootstrap() {
   app.useGlobalPipes(createValidationPipe());
   app.enableShutdownHooks();
 
-  const host = process.env.HOST;
+  const host = process.env.API_HOST;
   if (host) await app.listen(config.port, host);
   else await app.listen(config.port);
-  Logger.log(`API listening on http://localhost:${config.port}/api (${config.nodeEnv})`, 'Bootstrap');
+  Logger.log(`API listening on http://${host ?? 'localhost'}:${config.port}/api (${config.nodeEnv})`, 'Bootstrap');
   if (config.isProduction && config.sms.driver === 'log') {
     Logger.warn('SMS_DRIVER=log in production: OTP codes are written to the log instead of being sent', 'Bootstrap');
   }
