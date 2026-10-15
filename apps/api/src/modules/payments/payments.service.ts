@@ -19,6 +19,8 @@ import { applyPlacementEffects } from '../orders/order-effects.js';
 import { timelineEntry } from '../orders/order-helpers.js';
 import { Order, OrderDocument, type DeferredEffects, type OrderPayment } from '../orders/order.schema.js';
 import { JobsService } from '../dispatch/jobs.service.js';
+import { walletKey } from '../wallet-credits/wallet-credit-model.js';
+import { WalletCreditsService } from '../wallet-credits/wallet-credits.service.js';
 import { RulesService } from '../rules/rules.service.js';
 import { User } from '../users/user.schema.js';
 import type { PaymentDriver } from './payment-driver.js';
@@ -47,6 +49,7 @@ export class PaymentsService {
     config: ConfigService,
     private readonly redis: RedisService,
     private readonly jobs: JobsService,
+    private readonly credits: WalletCreditsService,
   ) {
     this.app = config.getOrThrow<AppConfig>('app');
   }
@@ -222,24 +225,29 @@ export class PaymentsService {
 
   /**
    * The provider captured an amount different from the one requested: the order is NOT paid. The captured
-   * money (rial → toman, floored) is credited to the customer's wallet once per authority — like `creditToWallet`,
-   * the only idempotency guard is `refundedAuthorities: { $ne: authority }`, so the money is credited even when the
+   * money (rial → toman, floored) is credited to the customer's wallet once per authority through the
+   * `gw:<orderId>:<authority>` wallet intent (D34); `refundedAuthorities` guards the marker, so the money is credited even when the
    * order was cancelled/expired or a newer `/pay` replaced the authority meanwhile. Only when the authority still
    * matches and the order is not paid is `payment.status` set to `mismatch` (with a timeline note).
    */
   private async creditMismatch(order: OrderDocument, authority: string, paidRial: number, message: string): Promise<Outcome> {
     const credit = Number.isFinite(paidRial) && paidRial > 0 ? Math.floor(paidRial / 10) : 0;
+    const key = walletKey.gateway(String(order._id), authority);
+    // D34: the intent first, then the marker (+ the {key, amount} credit marker) in one compare-and-set, then the guarded $inc
+    if (credit > 0) {
+      await this.credits.prepare({ key, userId: order.customerId, orderId: order._id, orderCode: order.code, amount: credit, cause: 'gateway_mismatch', note: message });
+    }
     const credited = await this.orders.findOneAndUpdate(
       { _id: order._id, refundedAuthorities: { $ne: authority } },
-      { $push: { refundedAuthorities: authority }, $inc: { __v: 1 } },
+      { $push: { refundedAuthorities: authority, ...(credit > 0 ? { creditKeys: { key, amount: credit } } : {}) }, $inc: { __v: 1 } },
       { returnDocument: 'after' },
     );
     if (!credited) {
       this.logger.warn(`order ${order.code}: payment ${authority} amount mismatch was already handled`);
       return 'mismatch';
     }
-    // credit first: nothing after the marker may prevent or hide it
-    await this.creditWallet(credited, authority, credit, `AMOUNT MISMATCH (${message})`);
+    if (credit > 0) await this.credits.apply(key); // never throws; a failure leaves the intent for the sweep
+    this.logger.warn(`order ${order.code}: payment ${authority} captured ${credit} toman instead of the requested amount (${message}) — credited to the wallet`);
     try {
       const note = { status: 'pending_payment' as const, label: `مغایرت مبلغ پرداخت (${credit} تومان به کیف پول اعتبار شد)`, at: new Date() };
       await this.orders.updateOne(
@@ -250,22 +258,6 @@ export class PaymentsService {
       this.logger.error(`order ${order.code}: mismatch status note for ${authority} failed (wallet already credited ${credit} toman): ${(err as Error).message}`);
     }
     return 'mismatch';
-  }
-
-  /**
-   * `$inc` of the wallet after the idempotency marker was written (not one atomic write — M5 adds a recoverable
-   * pending-credit record). Logs at ERROR before the `$inc` and, if it fails, «settle manually» with the same fields.
-   */
-  private async creditWallet(order: Pick<OrderDocument, 'code' | 'customerId'>, authority: string, amount: number, why: string) {
-    if (!(amount > 0)) return;
-    const fields = `order ${order.code}, authority ${authority}, ${amount} toman, customer ${String(order.customerId)}`;
-    this.logger.error(`wallet credit about to be applied (${why}): ${fields}`);
-    try {
-      await this.users.updateOne({ _id: order.customerId }, { $inc: { walletBalance: amount } });
-    } catch (err) {
-      this.logger.error(`wallet credit FAILED — settle manually (${why}): ${fields}: ${(err as Error).message}`);
-      throw err;
-    }
   }
 
   private async markFailed(attempt: QueryFilter<Order>) {
@@ -290,11 +282,15 @@ export class PaymentsService {
   /**
    * The provider captured `amount` for `authority` but the order can no longer take it (the customer
    * cancelled while it was verified, or another attempt already paid it): credit it to the customer's
-   * wallet exactly once — the authority is pushed to `refundedAuthorities` in the same compare-and-set.
+   * wallet exactly once through the `gw:<orderId>:<authority>` wallet intent (D34); the authority and the credit marker are pushed in the same compare-and-set.
    * When it was the cancelled order's own attempt, the payment is also recorded on the order.
    */
   private async creditToWallet(current: OrderDocument, authority: string, amount: number, refId: string, paidAt: Date) {
     const ownAttempt = current.status === 'cancelled' && current.payment?.authority === authority;
+    const key = walletKey.gateway(String(current._id), authority);
+    if (amount > 0) {
+      await this.credits.prepare({ key, userId: current.customerId, orderId: current._id, orderCode: current.code, amount, cause: 'gateway_capture', note: `refId ${refId}` });
+    }
     const credited = await this.orders.findOneAndUpdate(
       {
         _id: current._id,
@@ -304,7 +300,7 @@ export class PaymentsService {
         $or: [{ 'payment.authority': { $ne: authority } }, { 'payment.status': { $ne: 'paid' } }],
       },
       {
-        $push: { refundedAuthorities: authority },
+        $push: { refundedAuthorities: authority, ...(amount > 0 ? { creditKeys: { key, amount } } : {}) },
         ...(ownAttempt
           ? {
               $set: {
@@ -325,7 +321,7 @@ export class PaymentsService {
       this.logger.log(`order ${current.code}: payment ${authority} was already credited to the wallet`);
       return;
     }
-    await this.creditWallet(credited, authority, amount, `captured payment refId ${refId} the order could not take`);
+    if (amount > 0) await this.credits.apply(key);
     const why = ownAttempt ? 'the order was cancelled while it was verified' : 'the order no longer accepted it';
     this.logger.warn(`order ${credited.code}: payment ${authority} (refId ${refId}) captured but ${why} — ${amount} toman credited to the wallet`);
   }

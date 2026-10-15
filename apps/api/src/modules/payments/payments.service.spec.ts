@@ -3,6 +3,7 @@ import { Types } from 'mongoose';
 import { fakeModel, type Doc } from '../../../test/fake-model.js';
 import { FakeRedis, fakeRedisService } from '../../../test/fake-redis.js';
 import { MockPaymentDriver, type PaymentDriver } from './payment-driver.js';
+import { WalletCreditsService } from '../wallet-credits/wallet-credits.service.js';
 import { PaymentsService } from './payments.service.js';
 
 const AUTH = 'MOCK' + 'A'.repeat(32);
@@ -38,6 +39,8 @@ function setup(orderDocs: Doc[] = [pendingOrder()], driver: PaymentDriver = new 
   const config = { getOrThrow: () => ({ webPublicUrl: WEB, apiPublicUrl: API, payment: { driver: driver.name, timeoutMinutes: 30 } }) };
   const redis = new FakeRedis();
   const jobs = { ensureJob: vi.fn(async () => null) };
+  const intents = fakeModel([], { unique: [['key']] });
+  const credits = new WalletCreditsService(intents as never, users as never, orders as never);
   const svc = new PaymentsService(
     orders as never,
     users as never,
@@ -48,8 +51,9 @@ function setup(orderDocs: Doc[] = [pendingOrder()], driver: PaymentDriver = new 
     config as never,
     fakeRedisService(redis),
     jobs as never,
+    credits as never,
   );
-  return { svc, jobs, orders, users, rules, campaigns, notifications, redis, order: orders.docs[0], user: users.docs[0] };
+  return { svc, jobs, intents, credits, orders, users, rules, campaigns, notifications, redis, order: orders.docs[0], user: users.docs[0] };
 }
 
 const ok = (o: Doc) => `${WEB}/app/pay/return?order=${String(o._id)}&status=ok`;
@@ -194,11 +198,12 @@ describe('PaymentsService: a payment verified at the provider is never lost', ()
         return { ok: true as const, refId: '999' };
       }),
     };
-    const { svc, user, users } = setup([doc], driver);
+    const { svc, user, intents } = setup([doc], driver);
     const urls = await Promise.all(Array.from({ length: 5 }, () => svc.handleCallback('mock', AUTH, 'OK')));
     expect(new Set(urls)).toEqual(new Set([ok(doc)]));
     expect(user.walletBalance).toBe(500000);
-    expect(users.updateOne.mock.calls.filter(([, u]) => JSON.stringify(u).includes('walletBalance'))).toHaveLength(1);
+    expect(user.walletCreditKeys).toHaveLength(1);
+    expect(intents.docs).toHaveLength(1);
     expect(doc.refundedAuthorities).toEqual([AUTH]);
     expect(doc.payment).toMatchObject({ authority: OTHER, refId: '1' }); // the order's own payment is untouched
   });
@@ -406,13 +411,82 @@ describe('PaymentsService: provider amount mismatch', () => {
     expect(ctx.user.walletBalance).toBe(315000);
     expect(ctx.order.refundedAuthorities).toEqual(['159']);
   });
-  it('wallet $inc failure after the marker: logged «settle manually» and rethrown', async () => {
-    const o = zibalOrder();
-    const ctx = setup([o], mismatchDriver());
-    const logs: string[] = [];
-    vi.spyOn((ctx.svc as never as { logger: { error: (m: string) => void } }).logger, 'error').mockImplementation((m: string) => { logs.push(m); });
+  it('D34: the wallet $inc failing after the marker never fails the callback; the sweep credits it once', async () => {
+    const ctx = setup([zibalOrder()], mismatchDriver());
+    const key = `gw:${String(ctx.order._id)}:159`;
     vi.spyOn(ctx.users, 'updateOne').mockRejectedValueOnce(new Error('db down'));
-    await expect(ctx.svc.handleCallback('zibal', '159', 'OK')).rejects.toThrow('db down');
-    expect(logs.some((l) => /settle manually/.test(l) && l.includes('159') && l.includes('315000') && l.includes('10300'))).toBe(true);
+    await expect(ctx.svc.handleCallback('zibal', '159', 'OK')).resolves.toBe(mismatchUrl(ctx.order));
+    expect(ctx.user.walletBalance).toBe(0);
+    expect(ctx.intents.docs).toEqual([expect.objectContaining({ key, amount: 315000, state: 'pending', cause: 'gateway_mismatch' })]);
+    expect(ctx.order.creditKeys).toEqual([{ key, amount: 315000 }]);
+    expect(await ctx.credits.sweep(new Date(Date.now() + 2 * MINUTE))).toMatchObject({ applied: 1 });
+    expect(ctx.user.walletBalance).toBe(315000);
+    await ctx.svc.handleCallback('zibal', '159', 'OK');
+    expect(await ctx.credits.sweep(new Date(Date.now() + 3 * MINUTE))).toMatchObject({ applied: 0 });
+    expect(ctx.user.walletBalance).toBe(315000);
+    expect(ctx.order.creditKeys).toHaveLength(1);
+  });
+  it('D34: a crash between the $inc and done: the sweep finishes the intent without a second credit', async () => {
+    const ctx = setup([zibalOrder()], mismatchDriver());
+    vi.spyOn(ctx.intents, 'updateOne').mockRejectedValueOnce(new Error('db down'));
+    await expect(ctx.svc.handleCallback('zibal', '159', 'OK')).resolves.toBe(mismatchUrl(ctx.order));
+    expect(ctx.user.walletBalance).toBe(315000);
+    expect(ctx.intents.docs[0].state).toBe('pending');
+    await ctx.credits.sweep(new Date(Date.now() + 2 * MINUTE));
+    expect(ctx.user.walletBalance).toBe(315000);
+    expect(ctx.intents.docs[0].state).toBe('done');
+  });
+  it('D34: a crash between the intent and the marker credits nothing; the replayed callback finishes it once', async () => {
+    const ctx = setup([zibalOrder()], mismatchDriver());
+    vi.spyOn(ctx.orders, 'findOneAndUpdate').mockRejectedValueOnce(new Error('connection reset'));
+    await expect(ctx.svc.handleCallback('zibal', '159', 'OK')).rejects.toThrow('connection reset');
+    expect(ctx.user.walletBalance).toBe(0);
+    expect(ctx.intents.docs[0].state).toBe('pending');
+    await expect(ctx.svc.handleCallback('zibal', '159', 'OK')).resolves.toBe(mismatchUrl(ctx.order));
+    expect(ctx.user.walletBalance).toBe(315000);
+    expect(ctx.intents.docs).toHaveLength(1);
+  });
+  describe('captures the order could not take', () => {
+    const OTHER = 'MOCK' + 'B'.repeat(32);
+    const taken = () => {
+      const doc = pendingOrder();
+      const driver: PaymentDriver = {
+        name: 'mock',
+        request: vi.fn(),
+        verify: vi.fn(async () => {
+          if (doc.status === 'pending_payment') Object.assign(doc, { status: 'registered', paid: true, chargedAmount: 500000, paidVia: 'gateway', payment: { driver: 'mock', authority: OTHER, status: 'paid', amount: 500000, refId: '1' } });
+          return { ok: true as const, refId: '999' };
+        }),
+      };
+      return { doc, ...setup([doc], driver) };
+    };
+    it('D34: is credited through one gateway intent', async () => {
+      const { svc, user, intents, doc } = taken();
+      await svc.handleCallback('mock', AUTH, 'OK');
+      expect(user.walletBalance).toBe(500000);
+      expect(intents.docs).toEqual([expect.objectContaining({ key: `gw:${String(doc._id)}:${AUTH}`, cause: 'gateway_capture', amount: 500000, state: 'done' })]);
+      expect(doc.creditKeys).toEqual([{ key: `gw:${String(doc._id)}:${AUTH}`, amount: 500000 }]);
+    });
+    it('D34: a crash after the marker before apply: the sweep credits it once', async () => {
+      const { svc, user, users, credits, intents } = taken();
+      vi.spyOn(users, 'updateOne').mockRejectedValueOnce(new Error('db down'));
+      await svc.handleCallback('mock', AUTH, 'OK');
+      expect(user.walletBalance).toBe(0);
+      expect(intents.docs[0].state).toBe('pending');
+      expect(await credits.sweep(new Date(Date.now() + 2 * MINUTE))).toMatchObject({ applied: 1 });
+      expect(user.walletBalance).toBe(500000);
+      await svc.handleCallback('mock', AUTH, 'OK');
+      await credits.sweep(new Date(Date.now() + 3 * MINUTE));
+      expect(user.walletBalance).toBe(500000);
+    });
+    it('D34: a crash between the $inc and done: the sweep never credits twice', async () => {
+      const { svc, user, credits, intents } = taken();
+      vi.spyOn(intents, 'updateOne').mockRejectedValueOnce(new Error('db down'));
+      await svc.handleCallback('mock', AUTH, 'OK');
+      expect(user.walletBalance).toBe(500000);
+      await credits.sweep(new Date(Date.now() + 2 * MINUTE));
+      expect(user.walletBalance).toBe(500000);
+      expect(intents.docs[0].state).toBe('done');
+    });
   });
 });
