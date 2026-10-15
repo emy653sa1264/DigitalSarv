@@ -159,7 +159,7 @@ describe('wallet credit intents (D34)', () => {
     s.intents.find.mockImplementationOnce(real as never); // pass E (gateway repair)
     s.intents.find.mockImplementationOnce(() => { throw new Error('pass A broke'); });
     expect(await s.svc.sweep(later(2 * MIN))).toMatchObject({ applied: 0 });
-    expect(s.intents.find).toHaveBeenCalledTimes(5);
+    expect(s.intents.find).toHaveBeenCalledTimes(6);
   });
   it('a marker revives a voided or lost intent and the user key prevents a double (C2, M6)', async () => {
     const s = setup();
@@ -392,5 +392,27 @@ describe('a due payment without money frees its key (D35, M3/M4)', () => {
     const key = walletKey.due(String(s.orderId), 'r1');
     await s.svc.prepare({ key, userId: new Types.ObjectId(), orderId: s.orderId, orderCode: '10500', amount: -30000, cause: 'due_wallet', base: 100000 });
     expect(await s.svc.apply(key)).toBe('missing');
+  });
+});
+
+describe('a reversed due payment whose give-back never ran (D35)', () => {
+  it('the next sweep gives the money back once, and a second sweep adds nothing', async () => {
+    const s = setup({ balance: 100000, order: { status: 'picked_up', chargedAmount: 100000, quote: { total: 130000 } } });
+    const key = walletKey.due(String(s.orderId), 'r1');
+    await s.svc.prepare({ key, userId: s.userId, orderId: s.orderId, orderCode: '10500', amount: -30000, cause: 'due_wallet', base: 100000 });
+    s.order.status = 'cancelled';
+    const real = s.svc.prepare.bind(s.svc);
+    vi.spyOn(s.svc, 'prepare').mockImplementationOnce(async () => { throw new Error('process died'); }); // the give-back intent is never written
+    expect(await s.svc.apply(key)).toBe('retry');
+    expect(s.user.walletBalance).toBe(70000);
+    expect(s.intents.docs).toEqual([expect.objectContaining({ key, state: 'reversed' })]);
+    vi.spyOn(s.svc, 'prepare').mockImplementation(real);
+    await s.svc.sweep(later(2 * MIN));
+    expect(s.user.walletBalance).toBe(100000);
+    expect(s.intents.docs.map((d: Doc) => [d.key, d.state])).toEqual([[key, 'reversed'], [`dueback:${key}`, 'done']]);
+    await s.svc.sweep(later(4 * MIN));
+    await s.svc.sweep(later(6 * MIN));
+    expect(s.user.walletBalance).toBe(100000);
+    expect(s.intents.docs).toHaveLength(2);
   });
 });

@@ -330,6 +330,7 @@ export class OrdersService {
     const key = walletKey.due(String(order._id), dto.requestId);
     await this.credits.prepare({ key, userId: order.customerId, orderId: order._id, orderCode: order.code, amount: -due, cause: 'due_wallet', base: order.chargedAmount ?? 0 });
     const res = await this.credits.apply(key);
+    if (res === 'missing') throw new NotFoundException('حساب کاربری یافت نشد');
     if (res === 'insufficient') throw new BadRequestException('موجودی کیف پول کافی نیست');
     if (res === 'void') throw new ConflictException('وضعیت سفارش هم‌زمان تغییر کرد؛ مبلغ به کیف پول برگشت');
     if (res !== 'done') throw new ServiceUnavailableException('پرداخت در حال انجام است؛ چند لحظه دیگر سفارش را بررسی کنید');

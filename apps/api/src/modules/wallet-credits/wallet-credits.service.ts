@@ -252,6 +252,19 @@ export class WalletCreditsService {
         out.pulled++;
       }
     });
+    await pass('F', async () => {
+      // a due payment reversed whose give-back never ran (crash between the switch and the `dueback:` intent): finish it, once
+      // (the user key of `dueback:<key>` makes the credit happen once). Rotates by lastSweptAt so a stuck row never starves the rest.
+      const stuck = (await this.intents
+        .find({ state: 'reversed', cause: 'due_wallet', givenBack: { $exists: false }, doneAt: { $lt: new Date(t - SWEEP_AFTER_MS) } })
+        .sort({ lastSweptAt: 1, _id: 1 })
+        .limit(BATCH)
+        .lean()) as WalletCreditRow[];
+      for (const r of stuck) {
+        if (await this.giveBackDue(r)) out.applied++;
+        else await this.intents.updateOne({ _id: r._id, state: 'reversed' }, { $set: { lastSweptAt: now } });
+      }
+    });
     if (out.applied || out.voided) this.logger.warn(`wallet credits sweep: ${out.applied} applied, ${out.voided} voided`);
     return out;
   }
@@ -461,9 +474,11 @@ export class WalletCreditsService {
   }
 
   /** The debit of a due payment goes back once (`dueback:` intent, idempotent by key). */
-  private async giveBackDue(doc: WalletCreditRow): Promise<void> {
+  private async giveBackDue(doc: WalletCreditRow): Promise<boolean> {
     const back = walletKey.dueBack(doc.key);
     await this.prepare({ key: back, userId: doc.userId, orderId: doc.orderId!, orderCode: doc.orderCode ?? '', amount: -doc.amount, cause: 'due_reversal', base: doc.base });
-    await this.apply(back);
+    const done = (await this.apply(back)) === 'done';
+    if (done) await this.intents.updateOne({ _id: doc._id, state: 'reversed' }, { $set: { givenBack: true } }); // best-effort; pass F skips stamped rows
+    return done;
   }
 }

@@ -22,6 +22,8 @@ export class WalletCredit {
   @Prop({ type: String }) note?: string;
   @Prop({ type: Date }) doneAt?: Date;
   @Prop({ type: Boolean }) keyPulled?: boolean;
+  /** a reversed due payment whose debit has been given back (pass F skips it) */
+  @Prop({ type: Boolean }) givenBack?: boolean;
   /** Transient-error count (drives the exponential backoff in `nextAttemptAt`; never counts toward the cap). */
   @Prop({ type: Number, default: 0 }) failures?: number;
   /** Transient-error backoff: the sweep skips the intent until then. */
@@ -40,6 +42,7 @@ export const WalletCreditSchema = SchemaFactory.createForClass(WalletCredit);
 WalletCreditSchema.index({ state: 1, createdAt: 1 });
 WalletCreditSchema.index({ state: 1, doneAt: 1 }, { partialFilterExpression: { keyPulled: { $exists: false } }, name: 'settled_keys' });
 WalletCreditSchema.index({ state: 1, voidedAt: 1 }, { partialFilterExpression: { origKey: { $exists: true } }, name: 'voided_origkey' });
+WalletCreditSchema.index({ doneAt: 1 }, { partialFilterExpression: { state: 'reversed', givenBack: { $exists: false } }, name: 'reversed_open' });
 // serves dueRequest (one customer's due:<orderId>:<requestId> keys)
 WalletCreditSchema.index({ userId: 1, key: 1 }, { name: 'user_key' });
 WalletCreditSchema.index({ state: 1, lastSweptAt: 1, createdAt: 1 }, { name: 'sweep_rotation' });
