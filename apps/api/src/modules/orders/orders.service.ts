@@ -165,13 +165,25 @@ export class OrdersService {
       ruleIds: appliedRuleIds,
     };
 
-    const debitRef = String(new Types.ObjectId()); // names this checkout debit if it has to be given back (D34)
+    // P-C1 (D34): the order's _id is this checkout's debit reference. The give-back intent is written BEFORE the debit; the debit
+    // proves itself on the user (`debit:<ref>`, same update as the `$inc`); the intent pays back only while that proof exists, no
+    // order has this _id and it is 10 minutes old (or the request saw a definitive failure) - so it can never double a landed order.
+    const debitId = new Types.ObjectId();
+    const debitRef = String(debitId);
+    const giveBackKey = walletKey.createFail(debitRef);
+    const walletDebit = dto.payMethod === 'wallet' && quote.total > 0;
+    if (walletDebit) {
+      await this.credits.prepare({ key: giveBackKey, userId: user._id, orderId: debitId, orderCode: '-', amount: quote.total, cause: 'create_failed', note: 'checkout wallet debit' });
+    }
     if (dto.payMethod === 'wallet') {
       const res = await this.users.updateOne(
         { _id: user._id, walletBalance: { $gte: quote.total } },
-        { $inc: { walletBalance: -quote.total } },
+        { $inc: { walletBalance: -quote.total }, ...(walletDebit ? { $push: { walletCreditKeys: walletKey.debit(debitRef) } } : {}) },
       );
-      if (res.modifiedCount !== 1) throw new BadRequestException('موجودی کیف پول کافی نیست');
+      if (res.modifiedCount !== 1) {
+        if (walletDebit) await this.credits.discard(giveBackKey, 'insufficient wallet balance: nothing was debited');
+        throw new BadRequestException('موجودی کیف پول کافی نیست');
+      }
     }
 
     // wallet is deducted above; a gateway order is paid when its callback verifies; COD is paid on delivery
@@ -218,16 +230,28 @@ export class OrdersService {
     let order: OrderDocument | undefined;
     for (let attempt = 0; !order; attempt++) {
       try {
-        order = await this.orders.create({ ...base, code: await this.nextCode() });
+        order = await this.orders.create({ ...base, _id: debitId, code: await this.nextCode() });
       } catch (err) {
-        const dup = (err as { code?: number }).code === 11000;
+        const e = err as { code?: number; name?: string; message?: string; keyPattern?: Record<string, unknown> };
+        const dup = e.code === 11000;
+        if (dup && (e.keyPattern?._id !== undefined || /index: _id_/.test(e.message ?? ''))) {
+          // an earlier attempt of this very checkout landed: continue with that order
+          const landed = await this.orders.findById(debitId).catch(() => null);
+          if (landed) {
+            order = landed;
+            continue;
+          }
+        }
         if (!dup || attempt >= 2) {
-          if (dto.payMethod === 'wallet') await this.giveBackDebit(user._id, debitRef, quote.total);
+          // definitive = the insert certainly did not happen (validation, or the code collided every time); anything else is
+          // ambiguous and left to the sweep after its delay
+          if (walletDebit) await this.credits.apply(giveBackKey, { immediate: e.name === 'ValidationError' || dup });
           throw err;
         }
         await this.ensureSequence();
       }
     }
+    if (walletDebit) await this.credits.discard(giveBackKey, 'the order was created'); // best-effort; the order's existence already blocks the give-back
 
     await this.uploads.attach(uploadIds, order._id);
 
@@ -330,29 +354,6 @@ export class OrdersService {
     };
   }
 
-  /**
-   * D34 (F7): the checkout wallet debit goes back through a `createfail:<debitRef>` intent. No order exists, so the intent needs no
-   * order marker (cause `create_failed`): it is written only here, after the failure was observed, and the user key makes its
-   * `$inc` happen once whoever runs it (this request or the sweep). Never throws; if even the intent cannot be written the old
-   * direct guarded credit is the last resort. A process crash between the debit and this call is outside what any scheme can see.
-   */
-  private async giveBackDebit(userId: Types.ObjectId, debitRef: string, amount: number): Promise<void> {
-    if (!(amount > 0)) return;
-    const key = walletKey.createFail(debitRef);
-    try {
-      await this.credits.prepare({ key, userId, orderId: debitRef, orderCode: '-', amount, cause: 'create_failed', note: 'order creation failed after the wallet debit' });
-    } catch (err) {
-      this.logger.error(`wallet give-back ${key} (${amount} toman): intent not written, crediting directly: ${(err as Error).message}`);
-      try {
-        await this.users.updateOne({ _id: userId }, { $inc: { walletBalance: amount } });
-      } catch (err2) {
-        this.logger.error(`wallet give-back ${key} (${amount} toman, user ${String(userId)}) failed - settle manually: ${(err2 as Error).message}`);
-      }
-      return;
-    }
-    await this.credits.apply(key); // never throws; a failed $inc is retried by the sweep
-  }
-
   async cancel(id: string, user: AuthUser): Promise<Record<string, unknown>> {
     const tooLate = () => new BadRequestException('این سفارش دیگر قابل لغو نیست؛ با پشتیبانی تماس بگیرید');
     // a gateway payment may land between the read and the compare-and-set (pending_payment → registered
@@ -383,7 +384,8 @@ export class OrdersService {
     const updated = await this.orders.findOneAndUpdate(
       {
         ...guard, _id: order._id, refunded: { $ne: true }, paid: order.paid ? true : { $ne: true },
-        ...(amount > 0 ? { chargedAmount: order.chargedAmount ?? null } : {}),
+        // a legacy order has no chargedAmount: the refund is then quote.total, so that is what the CAS guards
+        ...(amount > 0 ? (order.chargedAmount != null ? { chargedAmount: order.chargedAmount } : { chargedAmount: null, 'quote.total': order.quote?.total }) : {}),
       },
       {
         $set: { status: 'cancelled', ...(amount > 0 ? { refunded: true, paid: false } : {}) },

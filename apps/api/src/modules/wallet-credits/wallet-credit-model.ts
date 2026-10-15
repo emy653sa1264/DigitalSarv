@@ -15,14 +15,18 @@ export const MARKER_WAIT_MS = 24 * 3_600_000;
 export const KEY_KEEP_MS = 7 * 86_400_000;
 /** The sweep gives up on an intent after this many failed attempts (logged once; an admin settles it). */
 export const MAX_ATTEMPTS = 20;
+/** A checkout give-back waits this long after its intent: a slow insert of the order must have landed (or failed) by then. */
+export const CREATE_GIVEBACK_AFTER_MS = 10 * 60_000;
 export const INSUFFICIENT_NOTE = 'insufficient wallet balance';
 
 /** Contract v4.4 «Recoverable wallet credits»: one intent per key, ever. */
 export const walletKey = {
   gateway: (orderId: string, authority: string) => `gw:${orderId}:${authority}`,
   cancel: (orderId: string) => `cancel:${orderId}`,
-  /** The checkout debit's own reference (a fresh ObjectId): there is no order when order creation failed. */
+  /** P-C1: `debitRef` is a fresh ObjectId that is also the new order's `_id`; the intent is written before the checkout debit. */
   createFail: (debitRef: string) => `createfail:${debitRef}`,
+  /** The user-side key the checkout debit pushes in the same update as its `$inc`: proof that the debit happened. */
+  debit: (debitRef: string) => `debit:${debitRef}`,
   recount: (orderId: string, n: number) => `recount:${orderId}:${n}`,
   due: (orderId: string, requestId: string) => `due:${orderId}:${requestId}`,
   dueBack: (dueKey: string) => `dueback:${dueKey}`,

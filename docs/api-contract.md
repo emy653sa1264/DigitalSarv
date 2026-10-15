@@ -1472,7 +1472,7 @@ unchanged (D22). All amounts are integer toman.
 
 Every automatic wallet movement goes through an internal intent (`walletCredits`, never serialized):
 `{ key (unique), userId, orderId, orderCode, amount (integer ≠ 0), cause, base?, state, attempts, lastError?, note?, doneAt? }`,
-`cause ∈ gateway_mismatch | gateway_capture | cancel_refund | recount_refund | due_wallet | due_reversal`,
+`cause ∈ gateway_mismatch | gateway_capture | cancel_refund | recount_refund | due_wallet | due_reversal | create_failed`,
 `state ∈ pending | done | void | reversed`.
 
 | key | written by |
@@ -1482,6 +1482,7 @@ Every automatic wallet movement goes through an internal intent (`walletCredits`
 | `recount:<orderId>:<n>` | D35 refund after the n-th recount approval (n = number of `awaiting_approval` timeline entries) |
 | `due:<orderId>:<requestId>` | D35 wallet payment of a difference (debit) |
 | `dueback:<dueKey>` | that debit given back because the order could no longer take it |
+| `createfail:<debitRef>` | P-C1: give-back of a checkout wallet debit when the order was never created (`debitRef` = the new order's `_id`) |
 
 1. The intent is written first (`pending`).
 2. The write that decides the money pushes `{ key, amount }` into the order's internal `creditKeys` in the **same**
@@ -1505,6 +1506,14 @@ cap 20, logged once; capped intents stay `pending` for an admin to settle and ar
 of `walletCredits`: `failures`, `nextAttemptAt`, `lastSweptAt`, `origKey`, `voidedAt`, `revivedAt`. A failing `$inc` never fails
 the request that caused it (a cancel still answers 200; the money arrives with the sweep; logged at ERROR). This replaces the
 v4.1 «settle manually from the logs» fallback.
+
+Checkout give-back (P-C1, `create_failed`): the order is created with `_id` = `debitRef` (kept across code-collision retries; an
+E11000 on `_id` means an earlier attempt landed). The `createfail:<debitRef>` intent is written **before** the checkout debit, and
+the debit is one guarded update that also pushes `debit:<debitRef>` into the user's internal `walletCreditKeys`. The intent moves
+the wallet only when (1) the user carries `debit:<debitRef>`, (2) no order exists with that `_id` and (3) the intent is at least
+10 minutes old (a definitive request-path failure - validation, or the code colliding on every attempt - skips only (3)).
+Otherwise it waits and is voided after 24 h (an attempt that never debited, e.g. insufficient balance, credits nothing). A created
+order voids the intent (best-effort) and its existence blocks any later give-back. There is no direct-`$inc` fallback.
 
 A cancellation refund is never applied for an amount different from the order's `chargedAmount` at cancel time.
 The checkout wallet debit stays a guarded `$inc`; the compensating credit when order creation fails goes through the same

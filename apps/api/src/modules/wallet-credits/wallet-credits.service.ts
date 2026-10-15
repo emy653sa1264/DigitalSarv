@@ -7,7 +7,7 @@ import { Order } from '../orders/order.schema.js';
 import { User } from '../users/user.schema.js';
 import { WalletCredit } from './wallet-credit.schema.js';
 import {
-  backoffMs, causeOfKey, GATEWAY_REPAIR_AFTER_MS, INSUFFICIENT_NOTE, KEY_KEEP_MS, MARKER_WAIT_MS, MAX_ATTEMPTS, needsOrderMarker, orderIdOfKey, SWEEP_AFTER_MS, voidedKey, walletKey,
+  backoffMs, causeOfKey, CREATE_GIVEBACK_AFTER_MS, GATEWAY_REPAIR_AFTER_MS, INSUFFICIENT_NOTE, KEY_KEEP_MS, MARKER_WAIT_MS, MAX_ATTEMPTS, needsOrderMarker, orderIdOfKey, SWEEP_AFTER_MS, voidedKey, walletKey,
   type WalletCreditCause,
 } from './wallet-credit-model.js';
 
@@ -70,12 +70,28 @@ export class WalletCreditsService {
   }
 
   /** Steps 2-3 for one intent. Safe to call any number of times, concurrently, from the request and from the sweep. */
-  async apply(key: string): Promise<ApplyResult> {
-    return this.run(key, { moved: false });
+  async apply(key: string, opts: { immediate?: boolean } = {}): Promise<ApplyResult> {
+    return this.run(key, { moved: false, immediate: opts.immediate });
+  }
+
+  /**
+   * Best-effort: retire a pending intent that will never be needed (checkout succeeded, or the debit never happened). The key is
+   * freed (renamed) and a checkout's debit proof is pulled from the user. Never throws.
+   */
+  async discard(key: string, note: string): Promise<boolean> {
+    try {
+      const doc = (await this.intents.findOne({ key, state: 'pending' }).lean()) as WalletCreditRow | null;
+      if (!doc || !(await this.voidIntent(doc, note))) return false;
+      if (doc.cause === 'create_failed') await this.users.updateOne({ _id: doc.userId }, { $pull: { walletCreditKeys: walletKey.debit(orderIdOfKey(key) ?? '') } });
+      return true;
+    } catch (err) {
+      this.logger.warn(`wallet credit ${key} could not be discarded (the sweep voids it): ${(err as Error).message}`);
+      return false;
+    }
   }
 
   /** `ctx.moved` becomes true only when THIS call moved the wallet (the sweep counts real moves only). */
-  private async run(key: string, ctx: { moved: boolean }): Promise<ApplyResult> {
+  private async run(key: string, ctx: { moved: boolean; immediate?: boolean; now?: Date }): Promise<ApplyResult> {
     let doc: WalletCreditRow | null = null;
     try {
       doc = (await this.intents.findOne({ key }).lean()) as WalletCreditRow | null;
@@ -89,6 +105,7 @@ export class WalletCreditsService {
       }
       if (doc.state === 'done') return 'done';
       if (doc.state !== 'pending') return 'void';
+      if (doc.cause === 'create_failed') return await this.finishCreateFail(doc, ctx);
       if (marker && doc.amount !== marker.amount) {
         doc = await this.align(doc, marker.amount);
         if (doc.state === 'done') return 'done';
@@ -133,7 +150,7 @@ export class WalletCreditsService {
       }
     };
     const applyCounting = async (key: string) => {
-      const ctx = { moved: false };
+      const ctx = { moved: false, now };
       const res = await this.run(key, ctx);
       if (res === 'done' && ctx.moved) out.applied++;
       return res;
@@ -362,6 +379,28 @@ export class WalletCreditsService {
     } catch {
       // the intent stays pending either way
     }
+  }
+
+  /**
+   * P-C1: the checkout give-back. The wallet moves only when (1) the user carries `debit:<ref>` (the debit really happened - it is
+   * pushed in the same update as its `$inc`), (2) no order exists with `_id` = ref (the insert did not land) and (3) the intent is
+   * `CREATE_GIVEBACK_AFTER_MS` old, unless the request itself saw a definitive failure (`immediate`; checks 1 and 2 still run).
+   * An order that exists retires the intent. Anything else waits; pass B voids it after a day (an attempt that never debited).
+   */
+  private async finishCreateFail(doc: WalletCreditRow, ctx: { moved: boolean; immediate?: boolean; now?: Date }): Promise<ApplyResult> {
+    const ref = String(doc.orderId);
+    if (await this.orders.exists({ _id: oid(ref) })) {
+      await this.voidIntent(doc, 'the order was created');
+      await this.users.updateOne({ _id: doc.userId }, { $pull: { walletCreditKeys: walletKey.debit(ref) } });
+      return 'void';
+    }
+    const age = (ctx.now ?? new Date()).getTime() - new Date((doc as { createdAt?: Date }).createdAt ?? 0).getTime();
+    if (!ctx.immediate && age < CREATE_GIVEBACK_AFTER_MS) return 'waiting';
+    if (!(await this.users.exists({ _id: doc.userId, walletCreditKeys: walletKey.debit(ref) }))) return 'waiting';
+    if (!(await this.move(doc, ctx))) return 'missing';
+    await this.markDone(doc);
+    await this.users.updateOne({ _id: doc.userId }, { $pull: { walletCreditKeys: walletKey.debit(ref) } });
+    return 'done';
   }
 
   /**

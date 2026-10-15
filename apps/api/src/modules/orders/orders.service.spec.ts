@@ -641,31 +641,97 @@ describe('cancellation refunds through intents (D34)', () => {
   });
 });
 
-describe('create failure after the wallet debit (D34, F7)', () => {
+describe('checkout give-back only when the debit happened and no order exists (D34, P-C1)', () => {
   const tomorrow = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tehran' }).format(new Date(Date.now() + 86_400_000));
   const walletDraft = { children: [{ name: 'a', grade: 'g', color: 'blue', books: 1 }], services: [], payMethod: 'wallet', pickup: { address: 'addr', phone: '09123456789', date: tomorrow, slot: '۱۰ تا ۱۲' } } as unknown as OrderDraftDto;
-
-  it('the compensating credit goes through a createfail intent and happens once', async () => {
+  const later = (ms: number) => new Date(Date.now() + ms);
+  const funded = () => {
     const s = setup();
     s.user.walletBalance = 1_000_000;
-    s.orders.create.mockRejectedValueOnce(new Error('insert failed'));
-    await expect(s.svc.create(customer, walletDraft)).rejects.toThrow('insert failed');
+    return s;
+  };
+  const debitKeys = (s: ReturnType<typeof setup>) => ((s.user.walletCreditKeys as string[] | undefined) ?? []).filter((k) => k.startsWith('debit:'));
+
+  it('create throws but the insert landed: no give-back, the order exists, the balance is debited once', async () => {
+    const s = funded();
+    const real = s.orders.create.getMockImplementation()!;
+    s.orders.create.mockImplementationOnce(async (doc: Doc) => { await real(doc); throw new Error('connection lost after the insert'); });
+    await expect(s.svc.create(customer, walletDraft)).rejects.toThrow('connection lost');
+    expect(s.orders.docs).toHaveLength(2);
+    expect(String(s.orders.docs[1]._id)).toBe(String(s.intents.docs[0].orderId));
+    expect(s.user.walletBalance).toBe(700000);
+    await s.credits.sweep(later(11 * 60_000));
+    await s.credits.sweep(later(12 * 60_000));
+    expect(s.user.walletBalance).toBe(700000);
+    expect(s.intents.docs[0].state).toBe('void');
+  });
+  it('an _id duplicate on the retry means an earlier attempt landed: the request succeeds with that order', async () => {
+    const s = funded();
+    const real = s.orders.create.getMockImplementation()!;
+    s.orders.create.mockImplementationOnce(async (doc: Doc) => { await real(doc); throw Object.assign(new Error('E11000 index: code_1'), { code: 11000, keyPattern: { code: 1 } }); });
+    s.orders.create.mockImplementationOnce(async () => { throw Object.assign(new Error('E11000 index: _id_'), { code: 11000, keyPattern: { _id: 1 } }); });
+    await expect(s.svc.create(customer, walletDraft)).resolves.toMatchObject({ status: 'registered' });
+    expect(s.orders.docs).toHaveLength(2);
+    expect(s.user.walletBalance).toBe(700000);
+  });
+  it('a crash after the debit and before the insert: the sweep gives back once, only after the delay', async () => {
+    const s = funded();
+    (s.svc as unknown as { pricing: { pricedServices: ReturnType<typeof vi.fn> } }).pricing.pricedServices.mockImplementationOnce(() => { throw new Error('process died'); });
+    await expect(s.svc.create(customer, walletDraft)).rejects.toThrow('process died');
+    expect(s.user.walletBalance).toBe(700000);
+    expect(debitKeys(s)).toHaveLength(1);
+    expect(await s.credits.sweep(later(5 * 60_000))).toMatchObject({ applied: 0 });
+    expect(s.user.walletBalance).toBe(700000);
+    expect(await s.credits.sweep(later(11 * 60_000))).toMatchObject({ applied: 1 });
+    expect(await s.credits.sweep(later(12 * 60_000))).toMatchObject({ applied: 0 });
+    expect(s.user.walletBalance).toBe(1_000_000);
+    expect(debitKeys(s)).toHaveLength(0);
+    expect(s.intents.docs).toEqual([expect.objectContaining({ state: 'done', cause: 'create_failed', amount: 300000 })]);
+  });
+  it('insufficient balance: the intent is voided and nothing is ever credited', async () => {
+    const s = setup(); // wallet is 0
+    await expect(s.svc.create(customer, walletDraft)).rejects.toThrow('موجودی کیف پول کافی نیست');
+    expect(s.intents.docs).toEqual([expect.objectContaining({ state: 'void' })]);
+    expect(await s.credits.sweep(later(25 * 3_600_000))).toMatchObject({ applied: 0 });
+    expect(s.user.walletBalance).toBe(0);
+  });
+  it('a pending intent whose debit never happened is never credited and is voided after a day', async () => {
+    const s = setup();
+    await s.credits.prepare({ key: `createfail:${String(new Types.ObjectId())}`, userId: customerId, orderId: new Types.ObjectId(), orderCode: '-', amount: 300000, cause: 'create_failed' });
+    expect(await s.credits.sweep(later(11 * 60_000))).toMatchObject({ applied: 0, voided: 0 });
+    expect(await s.credits.sweep(later(25 * 3_600_000))).toMatchObject({ applied: 0, voided: 1 });
+    expect(s.user.walletBalance).toBe(0);
+  });
+  it('a definitive failure gives back at once, exactly once', async () => {
+    const s = funded();
+    s.orders.create.mockRejectedValueOnce(Object.assign(new Error('validation'), { name: 'ValidationError' }));
+    await expect(s.svc.create(customer, walletDraft)).rejects.toThrow('validation');
     expect(s.user.walletBalance).toBe(1_000_000);
     expect(s.intents.docs).toEqual([expect.objectContaining({ key: expect.stringMatching(/^createfail:[0-9a-f]{24}$/), state: 'done', cause: 'create_failed', amount: 300000 })]);
-    expect(await s.credits.sweep(new Date(Date.now() + 120_000))).toMatchObject({ applied: 0 });
+    expect(await s.credits.sweep(later(11 * 60_000))).toMatchObject({ applied: 0 });
     expect(s.user.walletBalance).toBe(1_000_000);
   });
-  it('a crash during the credit: the sweep credits it once', async () => {
-    const s = setup();
-    s.user.walletBalance = 1_000_000;
-    s.orders.create.mockRejectedValueOnce(new Error('insert failed'));
-    const real = s.users.updateOne.getMockImplementation()!;
-    s.users.updateOne.mockImplementationOnce(real); // the checkout debit
-    s.users.updateOne.mockImplementationOnce(async () => { throw new Error('mongo down'); }); // the credit
-    await expect(s.svc.create(customer, walletDraft)).rejects.toThrow('insert failed');
+  it('an ambiguous failure gives back nothing at once; the sweep does after the delay', async () => {
+    const s = funded();
+    s.orders.create.mockRejectedValueOnce(new Error('socket hang up'));
+    await expect(s.svc.create(customer, walletDraft)).rejects.toThrow('socket hang up');
     expect(s.user.walletBalance).toBe(700000);
-    expect(await s.credits.sweep(new Date(Date.now() + 120_000))).toMatchObject({ applied: 1 });
-    expect(await s.credits.sweep(new Date(Date.now() + 180_000))).toMatchObject({ applied: 0 });
+    expect(await s.credits.sweep(later(11 * 60_000))).toMatchObject({ applied: 1 });
     expect(s.user.walletBalance).toBe(1_000_000);
+  });
+  it('success: the intent is voided and the debit proof is removed', async () => {
+    const s = funded();
+    await s.svc.create(customer, walletDraft);
+    expect(s.user.walletBalance).toBe(700000);
+    expect(s.intents.docs).toEqual([expect.objectContaining({ state: 'void' })]);
+    expect(debitKeys(s)).toHaveLength(0);
+    expect(await s.credits.sweep(later(25 * 3_600_000))).toMatchObject({ applied: 0 });
+    expect(s.user.walletBalance).toBe(700000);
+  });
+  it('M5: a legacy order without chargedAmount refunds quote.total, and the cancel CAS guards on it', async () => {
+    const s = setup({ chargedAmount: undefined, quote: { total: 420000 } });
+    expect(await s.svc.cancel(String(orderId), customer)).toMatchObject({ status: 'cancelled', refunded: true });
+    expect(s.user.walletBalance).toBe(420000);
+    expect(s.orders.findOneAndUpdate.mock.calls[0][0]).toMatchObject({ chargedAmount: null, 'quote.total': 420000 });
   });
 });
