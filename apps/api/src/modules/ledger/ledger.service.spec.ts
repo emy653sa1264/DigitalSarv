@@ -164,10 +164,37 @@ describe('LedgerService rulings', () => {
     await expect(put('e', { kind: 'payout', state: 'counted', amount: -1.5 })).rejects.toBeInstanceOf(BadRequestException);
     await expect(put('f', { kind: 'payout', state: 'pending', amount: null })).rejects.toBeInstanceOf(BadRequestException);
     await expect(put('g', { kind: 'payout_void', state: 'counted', amount: 10 })).rejects.toBeInstanceOf(BadRequestException);
-    const pay = await put('h', { kind: 'payout', state: 'counted', amount: -700 });
-    await expect(put('i', { kind: 'payout_void', state: 'counted', amount: 600, voidOf: pay.entry._id })).rejects.toBeInstanceOf(BadRequestException);
-    expect((await put('j', { kind: 'payout_void', state: 'counted', amount: 700, voidOf: pay.entry._id })).created).toBe(true);
+    const pay = await put('h', { kind: 'payout', state: 'counted', amount: -700, slot: 'S1' });
+    const vk = `void:${String(pay.entry._id)}`;
+    const v = (key: string, o: Doc = {}) => put(key, { kind: 'payout_void', state: 'counted', amount: 700, voidOf: pay.entry._id, ...o });
+    await expect(v(vk, { amount: 600 })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(v('void:other')).rejects.toBeInstanceOf(BadRequestException); // not the canonical key
+    await expect(v(vk, { providerId: new Types.ObjectId() })).rejects.toBeInstanceOf(BadRequestException); // another provider
+    expect((await v(vk)).created).toBe(true);
+    expect((await v(vk)).created).toBe(false); // the same request replays
+    await expect(v('void:again')).rejects.toBeInstanceOf(BadRequestException); // never a second +amount under another key
+    const voidEntry = s.entries.docs.find((d) => d.kind === 'payout_void')!;
+    await expect(put(`void:${String(voidEntry._id)}`, { kind: 'payout_void', state: 'counted', amount: -700, voidOf: voidEntry._id })).rejects.toBeInstanceOf(BadRequestException); // voiding a void
+    const cr = counted(50, NOW);
+    s.entries.docs.push(cr);
+    await expect(put(`void:${String(cr._id)}`, { kind: 'payout_void', state: 'counted', amount: -50, voidOf: cr._id })).rejects.toBeInstanceOf(BadRequestException); // not a payout
+    expect(s.entries.docs.filter((d) => d.kind === 'payout_void')).toHaveLength(1);
     expect((await put('k', { kind: 'credit', state: 'pending', amount: null })).created).toBe(true);
+  });
+  it('M1: an admin entry that can reduce the balance needs a slot', async () => {
+    const s = setup();
+    const base = { providerId: P, occurredAt: NOW, countedAt: NOW, state: 'counted' as const, byRole: 'admin' as const };
+    await expect(s.svc.insertOnce({ key: 'x1', kind: 'payout', amount: -1, ...base } as never)).rejects.toBeInstanceOf(BadRequestException);
+    await expect(s.svc.insertOnce({ key: 'x2', kind: 'adjustment', amount: -1, ...base } as never)).rejects.toBeInstanceOf(BadRequestException);
+    expect((await s.svc.insertOnce({ key: 'x3', kind: 'adjustment', amount: 1, ...base } as never)).created).toBe(true);
+    expect((await s.svc.insertOnce({ key: 'x4', kind: 'payout', amount: -1, slot: 'S', ...base } as never)).created).toBe(true);
+  });
+  it('M4: adjustments also compare cause and jobId', () => {
+    const j = new Types.ObjectId();
+    const e = { providerId: P, kind: 'adjustment' as const, amount: 5, reason: 'r', orderCode: '1', cause: 'manual' as const, jobId: j };
+    expect(sameRequest(e as never)(e)).toBe(true);
+    expect(sameRequest({ ...e, cause: 'compensation' } as never)(e)).toBe(false);
+    expect(sameRequest({ ...e, jobId: new Types.ObjectId() } as never)(e)).toBe(false);
   });
   it('a lost slot race beyond the retry bound is a Persian 409', async () => {
     const s = setup();

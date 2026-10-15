@@ -7,7 +7,7 @@ import { Order } from '../orders/order.schema.js';
 import { creditDrafts, type CreditJob, type CreditOrder } from './credits.js';
 import { LedgerAccount } from './ledger-account.schema.js';
 import { LedgerEntry, type LedgerEntryDocument } from './ledger-entry.schema.js';
-import { isAmount, MAX_AMOUNT, settlementCutoff, slotOf } from './ledger-model.js';
+import { isAmount, ledgerKey, MAX_AMOUNT, settlementCutoff, slotOf } from './ledger-model.js';
 
 export interface Balance { available: number; earnedSinceCutoff: number; due: number; pendingCount: number }
 export const EMPTY_BALANCE: Balance = { available: 0, earnedSinceCutoff: 0, due: 0, pendingCount: 0 };
@@ -17,7 +17,7 @@ export const ledgerRaced = () => new ConflictException('حساب مجری هم�
 /** Ruling P3: the same requestId arrived with a different body. */
 export const requestReused = () => new ConflictException('این درخواست قبلاً با مقادیر دیگری ثبت شده است');
 
-/** Ruling P3: does a stored entry carry the body of this request? Adjustments compare provider, kind, amount, reason, orderCode; payouts compare provider, kind, amount, paidAt, bankRef, note. */
+/** Ruling P3: does a stored entry carry the body of this request? Adjustments compare provider, kind, amount, reason, orderCode, cause, jobId; payouts compare provider, kind, amount, paidAt, bankRef, note. */
 export function sameRequest(want: Partial<NewEntry>): (e: Partial<LedgerEntry>) => boolean {
   const s = (v: unknown) => (v === undefined || v === null || v === '' ? '' : String(v));
   return (e) => {
@@ -26,7 +26,7 @@ export function sameRequest(want: Partial<NewEntry>): (e: Partial<LedgerEntry>) 
     if (want.kind === 'payout') {
       return s(e.payout?.paidAt) === s(want.payout?.paidAt) && s(e.payout?.bankRef) === s(want.payout?.bankRef) && s(e.payout?.note) === s(want.payout?.note);
     }
-    return s(e.reason) === s(want.reason) && s(e.orderCode) === s(want.orderCode);
+    return s(e.reason) === s(want.reason) && s(e.orderCode) === s(want.orderCode) && s(e.cause) === s(want.cause) && s(e.jobId) === s(want.jobId);
   };
 }
 
@@ -75,8 +75,11 @@ export class LedgerService {
       if (d.cause === 'compensation' ? a < 0 : a === 0) throw bad(d.cause === 'compensation' ? 'مبلغ جبران خسارت نمی‌تواند منفی باشد' : 'مبلغ اصلاحیه نمی‌تواند صفر باشد');
     }
     if (d.kind === 'payout_void') {
-      const orig = d.voidOf ? await this.entries.findOne({ _id: d.voidOf, kind: 'payout' }).lean() : null;
-      if (!orig || orig.amount === null || a !== -orig.amount) throw bad('ابطال باید دقیقاً مبلغ پرداخت را برگرداند');
+      const orig = d.voidOf ? await this.entries.findOne({ _id: d.voidOf }).lean() : null;
+      if (
+        !orig || orig.kind !== 'payout' || orig.state !== 'counted' || orig.amount === null || a !== -orig.amount ||
+        String(orig.providerId) !== String(d.providerId) || d.key !== ledgerKey.void(String(d.voidOf))
+      ) throw bad('ابطال باید دقیقاً مبلغ همان پرداخت قابل ابطال را برگرداند');
     }
   }
 
@@ -84,6 +87,10 @@ export class LedgerService {
   async insertOnce(doc: NewEntry & { slot?: string }): Promise<{ entry: LedgerEntryDocument; created: boolean }> {
     const { key, ...rest } = doc;
     await this.assertSigned(doc);
+    // M1: every admin entry that can reduce the balance goes through `withSlot`, which sets the slot
+    if (!doc.slot && (doc.kind === 'payout' || (doc.kind === 'adjustment' && doc.state === 'counted' && (doc.amount ?? 0) < 0))) {
+      throw new BadRequestException('این ثبت باید از مسیر نوبت حساب مجری انجام شود');
+    }
     try {
       const res = await this.entries.updateOne({ key }, { $setOnInsert: rest }, { upsert: true });
       return { entry: (await this.entries.findOne({ key }))!, created: (res.upsertedCount ?? 0) > 0 };

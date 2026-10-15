@@ -1264,10 +1264,13 @@ Customer prices, quotes and catalog customer data are unchanged (D22). All amoun
   (JS `getDay()`, default `6` = Saturday). `cutoff` = Tehran 00:00 of the latest settlement day ≤ now; the statement week
   ending at a cutoff = [cutoff − 7 days, cutoff). `due` = max(0, balance − Σ credits/adjustments counted at or after the
   cutoff). A payout may not exceed the balance (`available`).
-- **Admin-written entries take the provider's slot** (R1): `ledgerAccounts {_id: providerId, rev}`; the entry stores the
-  unique `slot = "<providerId>:<rev>"` it was computed on, then `rev` is incremented. A concurrent writer on the same slot
-  re-reads the balance and is refused when it no longer fits. A lost race three times in a row answers
-  **409 «حساب مجری هم‌زمان تغییر کرد؛ دوباره تلاش کنید»**.
+- **Admin-written entries take the provider's slot** (R1): `ledgerAccounts {_id: providerId, rev}`; the writer reads `rev`
+  and then the balance, inserts the entry with the unique `slot = "<providerId>:<readRev>"`, then compare-and-sets `rev`
+  from `readRev` to `readRev + 1`. On a slot collision the loser CASes `rev` itself (repairing a slot left by a crash),
+  re-reads the balance and retries (bounded, 3 times); it is refused when the entry no longer fits, and after the bound it
+  answers **409 «حساب مجری هم‌زمان تغییر کرد؛ دوباره تلاش کنید»**. `rev` must never be incremented before the insert
+  (the slot would not protect the balance read). Every admin entry that can reduce the balance requires a slot. A void
+  must use key `void:<payoutId>`, name a counted payout of the same provider, and a payout is voided at most once.
 
 `LedgerEntryView` (admin):
 ```ts

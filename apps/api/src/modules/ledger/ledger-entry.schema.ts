@@ -14,7 +14,7 @@ export interface Resolution { by: Types.ObjectId; at: Date; reason: string }
  * v4.3 provider ledger entry (D26–D33). Append-only: an entry is never deleted and a counted `amount` never changes;
  * the only in-place change is a pending credit's one-time resolution (R2).
  */
-@Schema({ collection: 'ledgerEntries', timestamps: { createdAt: true, updatedAt: false } })
+@Schema({ collection: 'ledgerEntries', timestamps: { createdAt: true, updatedAt: false }, writeConcern: { w: 'majority' } })
 export class LedgerEntry {
   /** Idempotency key (contract «Ledger entries»). */
   @Prop({ type: String, required: true }) key: string;
@@ -55,5 +55,5 @@ LedgerEntrySchema.index({ providerId: 1, state: 1, countedAt: 1 });
 LedgerEntrySchema.index({ providerId: 1, createdAt: -1 });
 LedgerEntrySchema.index({ state: 1, createdAt: 1 });
 LedgerEntrySchema.index({ countedAt: 1 });
-LedgerEntrySchema.index({ voidOf: 1 }, { sparse: true });
+LedgerEntrySchema.index({ voidOf: 1 }, { unique: true, partialFilterExpression: { voidOf: { $type: 'objectId' } } });
 LedgerEntrySchema.index({ jobId: 1 }, { sparse: true });
