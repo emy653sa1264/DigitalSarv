@@ -3,6 +3,7 @@ import type { AuthUser } from '../../common/auth/auth-user.js';
 import { CurrentUser, Roles } from '../../common/auth/decorators.js';
 import { JwtAuthGuard, RolesGuard } from '../../common/auth/guards.js';
 import { AdminOrdersQueryDto, AssignDto, QcDto, SetStatusDto } from './dto/orders.dto.js';
+import { adminOrderJson } from './order-helpers.js';
 import { OrdersService } from './orders.service.js';
 
 @Controller('admin')
@@ -18,22 +19,22 @@ export class AdminOrdersController {
 
   @Get('orders/:id')
   get(@Param('id') id: string) {
-    return this.orders.findById(id);
+    return this.orders.findById(id).then(adminOrderJson);
   }
 
   @Patch('orders/:id/status')
   setStatus(@Param('id') id: string, @Body() dto: SetStatusDto, @CurrentUser() user: AuthUser) {
-    return this.orders.setStatus(id, dto.status, user.id);
+    return this.orders.setStatus(id, dto.status, user.id, { confirmCashCollected: dto.confirmCashCollected === true }).then(adminOrderJson);
   }
 
   @Patch('orders/:id/assign')
   assign(@Param('id') id: string, @Body() dto: AssignDto, @CurrentUser() user: AuthUser) {
-    return this.orders.assign(id, dto, user.id);
+    return this.orders.assign(id, dto, user.id).then(adminOrderJson);
   }
 
   @Patch('orders/:id/qc')
   qc(@Param('id') id: string, @Body() dto: QcDto) {
-    return this.orders.setQc(id, dto.index, dto.done);
+    return this.orders.setQc(id, dto.index, dto.done).then(adminOrderJson);
   }
 
   @Get('production')

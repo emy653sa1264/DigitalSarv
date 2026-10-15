@@ -156,6 +156,10 @@ export class AdminOrdersQueryDto extends PageQueryDto {
 export class SetStatusDto {
   @IsIn(ORDER_STATUSES, { message: 'وضعیت سفارش معتبر نیست' })
   status: OrderStatus;
+
+  /** Ruling F-I2: «تحویل شد» while a difference is due needs the admin to confirm the cash was taken. */
+  @IsOptional() @IsBoolean()
+  confirmCashCollected?: boolean;
 }
 
 /** `''` is treated like `null` (= unassign); `undefined` leaves the field untouched. */

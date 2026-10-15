@@ -481,7 +481,9 @@ export class DispatchService {
   async setStatus(id: string, dto: AdminJobStatusDto, by: string): Promise<DispatchJobDetail> {
     if (!dto.reason?.trim()) throw new BadRequestException('دلیل را بنویسید');
     const job = await this.jobs.byId(id);
-    await this.jobs.move(String(job._id), dto.status, { actor: 'admin', byRole: 'admin', by, reason: dto.reason, reasonCode: dto.reasonCode });
+    await this.jobs.move(String(job._id), dto.status, {
+      actor: 'admin', byRole: 'admin', by, reason: dto.reason, reasonCode: dto.reasonCode, ...(dto.confirmCashCollected ? { confirmCashCollected: true } : {}),
+    });
     return this.result(job._id, by);
   }
 

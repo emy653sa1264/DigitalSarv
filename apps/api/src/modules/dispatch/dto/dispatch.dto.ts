@@ -76,6 +76,8 @@ export class AdminJobStatusDto {
   @IsIn(ADMIN_JOB_TARGETS, { message: 'وضعیت معتبر نیست' }) status: (typeof ADMIN_JOB_TARGETS)[number];
   @IsString(reasonMsg) @IsNotEmpty(reasonMsg) @MaxLength(300) reason: string;
   @IsOptional() @IsIn(REJECT_REASONS, { message: 'دلیل معتبر نیست' }) reasonCode?: RejectReason;
+  /** Ruling F-I2: «تحویل شد» while a difference is due needs the admin to confirm the cash was taken. */
+  @IsOptional() @IsBoolean() confirmCashCollected?: boolean;
 }
 
 export const PROVIDER_JOB_TARGETS = ['in_production', 'ready', 'out_for_delivery', 'ready_for_pickup', 'delivered', 'failed'] as const;

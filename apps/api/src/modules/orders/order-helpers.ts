@@ -24,6 +24,14 @@ function customerPlace<T extends PlaceSnapshot | undefined>(p: T): T {
   return (p && p.kind === 'provider' ? { ...p, id: '' } : p) as T;
 }
 
+/** Ruling F-I2: the admin's order JSON = the document plus `amountDue` (only when > 0, the customer rule), next to `settlements`. */
+export function adminOrderJson(order: unknown): Record<string, unknown> {
+  const o = order as { toJSON?: () => Record<string, unknown> };
+  const json = typeof o.toJSON === 'function' ? o.toJSON() : { ...(order as Record<string, unknown>) };
+  const due = amountDue(json as never);
+  return { ...json, ...(due > 0 && !DUE_CLOSED.includes(json.status as never) ? { amountDue: due } : {}) };
+}
+
 /** The customer's view of an order (contract v4.2): never the provider id, provider prices or the mirror bookkeeping. */
 export function customerOrderJson(order: unknown, fulfillment?: CustomerFulfillment): Record<string, unknown> {
   const o = order as { toJSON?: () => Record<string, unknown> };

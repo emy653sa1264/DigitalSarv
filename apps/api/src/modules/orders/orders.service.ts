@@ -59,7 +59,7 @@ import {
 } from './order-helpers.js';
 import { deliveryOf, needsHomePickup, resolveDelivery } from './delivery-rules.js';
 import { Order, OrderDocument, type DeferredEffects } from './order.schema.js';
-import { amountDue, DUE_CLOSED, paymentOnDelivery, recountRefund, recountSeq } from './order-money.js';
+import { amountDue, DUE_CLOSED, dueGuard, dueOutstandingForAdmin, paymentOnDelivery, recountRefund, recountSeq } from './order-money.js';
 import { pickupProblem } from './pickup-rules.js';
 
 /** F10: what a customer is told when a difference cannot be paid in this status (asked before «nothing due»). */
@@ -491,12 +491,14 @@ export class OrdersService {
    * leaving production (`picked_up … qc`) for packing / out_for_delivery / delivered needs every QC item
    * done — checked again atomically in the update, so an item unticked meanwhile makes it a 409.
    */
-  async setStatus(id: string, status: OrderStatus, by?: string): Promise<OrderDocument> {
+  async setStatus(id: string, status: OrderStatus, by?: string, opts: { confirmCashCollected?: boolean } = {}): Promise<OrderDocument> {
     const order = await this.findById(id);
     if (order.status === status) return order;
     if (!canAdminTransition(order.status, status)) {
       throw new BadRequestException(`تغییر وضعیت از «${STATUS_LABELS[order.status]}» به «${STATUS_LABELS[status]}» مجاز نیست`);
     }
+    // ruling F-I2: a difference due is marked collected only when the admin confirms the cash (the CAS below keeps `dueGuard`)
+    if (status === 'delivered' && amountDue(order) > 0 && !opts.confirmCashCollected) throw new ConflictException(dueOutstandingForAdmin(amountDue(order)));
     if (status === 'cancelled') {
       const cancelled = await this.cancelAndRefund(order, { status: order.status }, 'admin', by);
       if (!cancelled) throw OrdersService.raced();
@@ -517,7 +519,7 @@ export class OrdersService {
     const money = status === 'delivered' ? paymentOnDelivery(order, now) : { set: {}, push: {}, guard: {} };
     const updated = await this.orders.findOneAndUpdate(
       {
-        _id: order._id, status: order.status, ...qcGuard, ...money.guard,
+        _id: order._id, status: order.status, ...qcGuard, ...money.guard, ...(status === 'delivered' ? dueGuard(order) : {}),
         ...(refund > 0 ? { chargedAmount: order.chargedAmount ?? null, 'quote.total': order.quote?.total, refunded: { $ne: true } } : {}),
       },
       {

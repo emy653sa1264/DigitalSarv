@@ -1,4 +1,5 @@
 import type { OrderStatus } from '../../common/constants.js';
+import { fa } from '../../common/utils/fa.js';
 
 /** v4.4 (D35): a difference can be paid only once the recount is approved and before the order is closed. The single list. */
 export const DUE_CLOSED: OrderStatus[] = ['awaiting_approval', 'pending_payment', 'cancelled', 'delivered'];
@@ -43,3 +44,24 @@ export function paymentOnDelivery(o: MoneyOrder, at: Date = new Date()): Deliver
   if (due > 0) return { set: { chargedAmount: totalOf(o) }, push: { settlements: { kind: 'due_cash', amount: due, at } }, guard: { chargedAmount: o.chargedAmount ?? null } };
   return { set: {}, push: {}, guard: {} };
 }
+
+/**
+ * Ruling F-I2: the fields `amountDue` is computed from, as an equality filter. A «تحویل شد» write that decided on a due (or on
+ * none) keeps this in its compare-and-set, so a difference raised meanwhile can never be marked collected (or slip through).
+ */
+export function dueGuard(o: MoneyOrder): Record<string, unknown> {
+  return {
+    paid: o.paid ? true : { $ne: true },
+    refunded: o.refunded ? true : { $ne: true },
+    chargedAmount: o.chargedAmount ?? null,
+    'quote.total': o.quote?.total ?? null,
+  };
+}
+
+/** Ruling F-I2: a non-courier handover while a difference is due (409 `DUE_OUTSTANDING`). The provider never sees the amount. */
+export const dueOutstandingForProvider = () => ({
+  statusCode: 409, code: 'DUE_OUTSTANDING', message: 'برای این سفارش مابه‌التفاوت باقی است؛ تحویل را پشتیبانی ثبت می‌کند',
+});
+export const dueOutstandingForAdmin = (due: number) => ({
+  statusCode: 409, code: 'DUE_OUTSTANDING', message: `مابه‌التفاوت ${fa(due)} تومان هنوز دریافت نشده است`, amountDue: due,
+});

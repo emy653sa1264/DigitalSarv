@@ -1,4 +1,4 @@
-import { Logger } from '@nestjs/common';
+import { ConflictException, Logger } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { fakeModel, type Doc } from '../../../test/fake-model.js';
 import { DEFAULT_DISPATCH } from '../catalog/catalog.defaults.js';
@@ -547,11 +547,49 @@ describe('v4.3 fix round 1 — open compensation cases flagged on the job (P10, 
 });
 
 describe('D35: cash at handover through the job mirror', () => {
-  it('a provider-delivered paid order with a difference due records due_cash once', async () => {
-    const s = setup({ status: 'packing', payMethod: 'wallet', paid: true, paidVia: 'wallet', chargedAmount: 60000, quote: { total: 90000 } });
+  const dueSetup = (over: Doc = {}) =>
+    setup({ status: 'packing', payMethod: 'wallet', paid: true, paidVia: 'wallet', chargedAmount: 60000, quote: { total: 90000 }, ...over });
+  async function providerDelivery(s: ReturnType<typeof setup>) {
     const id = await heldBy(s, 'out_for_delivery');
     Object.assign(s.jobs.docs[0], { deliveryMethod: 'provider', deliveryProviderId: P });
+    return id;
+  }
+  it('F-I2: a provider «تحویل شد» while a difference is due is 409 DUE_OUTSTANDING without the amount; job and order stay', async () => {
+    const s = dueSetup();
+    const id = await providerDelivery(s);
+    const err = await s.svc.move(id, 'delivered', { actor: 'delivery', byRole: 'provider', providerId: String(P) }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ConflictException);
+    const body = (err as ConflictException).getResponse() as Record<string, unknown>;
+    expect(body).toEqual({ statusCode: 409, code: 'DUE_OUTSTANDING', message: 'برای این سفارش مابه‌التفاوت باقی است؛ تحویل را پشتیبانی ثبت می‌کند' });
+    expect(s.jobs.docs[0].status).toBe('out_for_delivery');
+    expect(s.orders.docs[0]).toMatchObject({ status: 'packing', chargedAmount: 60000 });
+    expect(s.orders.docs[0].settlements).toBeUndefined();
+  });
+  it('F-I2: with no difference due the provider delivers', async () => {
+    const s = dueSetup({ chargedAmount: 90000 });
+    const id = await providerDelivery(s);
     await s.svc.move(id, 'delivered', { actor: 'delivery', byRole: 'provider', providerId: String(P) });
+    expect(s.jobs.docs[0].status).toBe('delivered');
+    expect(s.orders.docs[0]).toMatchObject({ status: 'delivered', chargedAmount: 90000 });
+    expect(s.orders.docs[0].settlements).toBeUndefined();
+  });
+  it('F-I2: a due raised after the provider’s read is a 409 from the order CAS, never a silent due_cash', async () => {
+    const s = dueSetup({ chargedAmount: 90000 });
+    const id = await providerDelivery(s);
+    const stale = { ...s.orders.docs[0], quote: { total: 90000 } };
+    (s.orders.docs[0].quote as Doc).total = 120000;
+    s.orders.findById.mockImplementationOnce((() => stale) as never);
+    await expect(s.svc.move(id, 'delivered', { actor: 'delivery', byRole: 'provider', providerId: String(P) })).rejects.toThrow('هم‌زمان');
+    expect(s.jobs.docs[0].status).toBe('out_for_delivery');
+    expect(s.orders.docs[0]).toMatchObject({ status: 'packing', chargedAmount: 90000 });
+  });
+  it('F-I2: an admin (dispatch) «تحویل شد» needs confirmCashCollected; with it due_cash is recorded once', async () => {
+    const s = dueSetup();
+    const id = await providerDelivery(s);
+    const err = await s.svc.move(id, 'delivered', { actor: 'admin', byRole: 'admin' }).catch((e: unknown) => e);
+    expect((err as ConflictException).getResponse()).toMatchObject({ code: 'DUE_OUTSTANDING', amountDue: 30000 });
+    expect(s.orders.docs[0].status).toBe('packing');
+    await s.svc.move(id, 'delivered', { actor: 'admin', byRole: 'admin', confirmCashCollected: true });
     expect(s.orders.docs[0]).toMatchObject({ status: 'delivered', chargedAmount: 90000, settlements: [expect.objectContaining({ kind: 'due_cash', amount: 30000 })] });
     await s.svc.onOrderDelivered(s.order._id, 'admin');
     expect((s.orders.docs[0].settlements as unknown[]).length).toBe(1);

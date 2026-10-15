@@ -828,10 +828,33 @@ describe('recount after payment (D35)', () => {
     expect(s.user.walletBalance).toBe(0);
     expect(s.intents.docs).toHaveLength(0);
   });
-  it('the admin «تحویل شد» collects a difference due in cash, in the same update', async () => {
+  it('F-I2: the admin «تحویل شد» with a difference due is 409 DUE_OUTSTANDING without confirmCashCollected, and nothing changes', async () => {
     const s = setup({ status: 'out_for_delivery', chargedAmount: 420000, quote: { total: 500000 } });
-    await s.svc.setStatus(String(orderId), 'delivered');
+    const err = await s.svc.setStatus(String(orderId), 'delivered', 'admin1').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ConflictException);
+    expect((err as ConflictException).getResponse()).toMatchObject({ code: 'DUE_OUTSTANDING', amountDue: 80000, message: 'مابه‌التفاوت ۸۰٬۰۰۰ تومان هنوز دریافت نشده است' });
+    expect(s.order).toMatchObject({ status: 'out_for_delivery', chargedAmount: 420000 });
+    expect(s.order.settlements).toBeUndefined();
+  });
+  it('F-I2: with confirmCashCollected the admin «تحویل شد» collects the difference in cash, in the same update', async () => {
+    const s = setup({ status: 'out_for_delivery', chargedAmount: 420000, quote: { total: 500000 } });
+    await s.svc.setStatus(String(orderId), 'delivered', undefined, { confirmCashCollected: true });
     expect(s.order).toMatchObject({ status: 'delivered', chargedAmount: 500000, settlements: [expect.objectContaining({ kind: 'due_cash', amount: 80000 })] });
+  });
+  it('F-I2: a due raised after the read is a 409 (the CAS keeps the due inputs), never a silent delivery', async () => {
+    const s = setup({ status: 'out_for_delivery', chargedAmount: 500000, quote: { total: 500000 } });
+    const read = await s.svc.findById(String(orderId));
+    const stale = { ...read, quote: { ...(read.quote as object), total: 500000 } } as typeof read;
+    (s.order.quote as Doc).total = 580000; // raised between the read and the write
+    vi.spyOn(s.svc, 'findById').mockResolvedValueOnce(stale);
+    await expect(s.svc.setStatus(String(orderId), 'delivered')).rejects.toThrow('هم‌زمان');
+    expect(s.order).toMatchObject({ status: 'out_for_delivery', chargedAmount: 500000 });
+  });
+  it('F-I2: no difference due → «تحویل شد» needs no confirmation', async () => {
+    const s = setup({ status: 'out_for_delivery', chargedAmount: 500000, quote: { total: 500000 } });
+    await s.svc.setStatus(String(orderId), 'delivered');
+    expect(s.order).toMatchObject({ status: 'delivered', chargedAmount: 500000 });
+    expect(s.order.settlements).toBeUndefined();
   });
   it('COD + a raised recount: chargedAmount equals the final total once, with no due_cash', async () => {
     const s = setup(recounted({ payMethod: 'cod', paid: false, chargedAmount: undefined, paidVia: undefined, quote: { total: 600000 } }));

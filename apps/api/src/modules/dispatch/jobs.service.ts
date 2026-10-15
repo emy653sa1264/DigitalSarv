@@ -7,7 +7,7 @@ import { Center } from '../centers/center.schema.js';
 import { CatalogService } from '../catalog/catalog.service.js';
 import { deliveryOf, placeOf } from '../orders/delivery-rules.js';
 import { BEFORE_QC_DONE, needsQcGuard, qcComplete, qcLabelsOf, timelineEntry, type CustomerFulfillment } from '../orders/order-helpers.js';
-import { paymentOnDelivery } from '../orders/order-money.js';
+import { amountDue, dueGuard, dueOutstandingForAdmin, dueOutstandingForProvider, paymentOnDelivery } from '../orders/order-money.js';
 import { Order, type OrderDelivery, type OrderDocument } from '../orders/order.schema.js';
 import { DispatchNotifier } from './dispatch-notifier.js';
 import {
@@ -19,7 +19,11 @@ import { Job, JobDocument } from './job.schema.js';
 import { dropEmptyComp } from './comp-flags.js';
 import { JOB_ORDER_STATUSES, isBackfill, jobSeed, orderNeedsJob, type JobSource } from './job-seed.js';
 
-export interface MoveOptions { actor: Actor; byRole: ByRole; by?: string; reason?: string; reasonCode?: RejectReason; providerId?: string; assignmentId?: string }
+export interface MoveOptions {
+  actor: Actor; byRole: ByRole; by?: string; reason?: string; reasonCode?: RejectReason; providerId?: string; assignmentId?: string;
+  /** Ruling F-I2: an admin «تحویل شد» while a difference is due needs it (the cash was taken). */
+  confirmCashCollected?: boolean;
+}
 export interface GiveBackOptions { byRole: ByRole; by?: string; reason?: string; reasonCode?: RejectReason; providerId?: string; assignmentId?: string }
 /** What `cas` needs: who acts (selects the holder guard), extra guards, the field changes and the history entry. */
 export interface CasSpec {
@@ -268,7 +272,14 @@ export class JobsService {
     }
     if (to === 'ready' && !qcComplete(order)) throw new BadRequestException('کنترل کیفیت کامل نشده است');
     const now = new Date();
-    if (to === 'delivered') await this.mirrorOrder(order, 'delivered', true);
+    if (to === 'delivered') {
+      // ruling F-I2: only the courier is shown a difference due; a provider never hands it over, an admin confirms the cash.
+      // `mirrorOrder` keeps `dueGuard` in its compare-and-set, so a due raised after this check is a 409, never a silent `due_cash`.
+      const due = amountDue(order);
+      if (due > 0 && o.byRole === 'provider') throw new ConflictException(dueOutstandingForProvider());
+      if (due > 0 && !o.confirmCashCollected) throw new ConflictException(dueOutstandingForAdmin(due));
+      await this.mirrorOrder(order, 'delivered', true);
+    }
     const action: JobAction = to === 'accepted' ? 'accepted' : to === 'completed' ? 'completed' : 'status';
     const updated = await this.cas(job, to, { actor: o.actor, extraGuard: flowGuardOf(job), set: stampsFor(to, now), ...(to === 'delivered' ? pullCompOpen(job) : {}), history: this.entry(job, action, to, o, now) });
     if (!updated) {
@@ -308,7 +319,7 @@ export class JobsService {
       qcGuard = { [`qc.${last}`]: true, qc: { $not: { $elemMatch: { $ne: true } } } };
     }
     const updated = await this.orders.findOneAndUpdate(
-      { _id: order._id, status: order.status, ...qcGuard, ...money.guard },
+      { _id: order._id, status: order.status, ...qcGuard, ...money.guard, ...(target === 'delivered' ? dueGuard(order) : {}) },
       { $set: { status: target, ...money.set }, $push: { timeline: timelineEntry(target), ...money.push }, $inc: { __v: 1 } },
       { returnDocument: 'after' },
     );
