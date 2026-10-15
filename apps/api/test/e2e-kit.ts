@@ -61,6 +61,7 @@ export function expectSafeError(res: { status: number; body: Record<string, unkn
   expect(res.status, JSON.stringify(res.body)).toBe(status);
   expect(Object.keys(res.body).sort()).toEqual(['error', 'message', 'statusCode']);
   expect(String(res.body.message)).toMatch(/[؀-ۿ]/);
+  expect(String(res.body.message)).not.toMatch(/[A-Za-z]{4,}|E11000|ValidationError|Cast to|node_modules|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/);
   expect(JSON.stringify(res.body)).not.toMatch(/[a-f\d]{24}|stack|mongo|\.ts:\d|\.js:\d|09\d{9}|\.pdf/i);
 }
 
