@@ -59,6 +59,38 @@ describe('«تسویه» in «سرو مجری» (D32, R8, §64)', () => {
     for (const l of res.items) for (const k of Object.keys(l)) expect(allowed.has(k), k).toBe(true);
     expect(JSON.stringify(res)).not.toMatch(/یادداشت داخلی|اشتباه|777777|10999|"basis"|"createdBy"|"slot"|"reason"|"providerId"/);
   });
+  it('IDOR: the handlers use only the guard-provided provider, whatever ids the query or params carry', async () => {
+    const ctrl = new ProviderLedgerController(setup());
+    const evil = { providerId: String(B), id: String(B), page: undefined } as never;
+    const sum = await ctrl.summary(String(A));
+    expect(sum.balance.available).toBe(85000);
+    expect(sum.bank?.holder).toBe('علی نگینی');
+    const res = await ctrl.entries(String(A), evil);
+    expect(res.total).toBe(5);
+    expect(JSON.stringify(res)).not.toMatch(/777777|10999/);
+    expect(ctrl.summary.length).toBe(1);
+    expect(ctrl.entries.length).toBe(2);
+  });
+  it('exactly two GET routes and no other verbs', () => {
+    const proto = ProviderLedgerController.prototype as unknown as Record<string, () => void>;
+    const routes = ['summary', 'entries'].map((m) => [Reflect.getMetadata('method', proto[m]), Reflect.getMetadata('path', proto[m])]);
+    expect(routes).toEqual([[0, '/'], [0, 'entries']]);
+    expect(Reflect.getMetadata('path', ProviderLedgerController)).toBe('provider/ledger');
+    const methods = Object.getOwnPropertyNames(proto).filter((m) => m !== 'constructor');
+    expect(methods.every((m) => Reflect.getMetadata('method', proto[m]) === 0)).toBe(true);
+  });
+  it('the provider summary never requests the bank change history', async () => {
+    const entries = fakeModel([]);
+    const found = { _id: A, name: 'x', bankAccount: { sheba: 'IR062960000000100324200001', holder: 'h' } };
+    const select = vi.fn(() => ({ lean: async () => found }));
+    const findById = vi.fn(() => ({ select }));
+    const centers = { findById };
+    const ledger = { balanceOf: vi.fn(async () => ({ available: 0, due: 0, pendingCount: 0 })), weekday: vi.fn(async () => 6) };
+    const svc = new LedgerReadsService(entries as never, centers as never, fakeModel([]) as never, ledger as never);
+    await svc.providerSummary(String(A));
+    expect(select).toHaveBeenCalledWith('+bankAccount');
+    expect(JSON.stringify([findById.mock.calls, select.mock.calls])).not.toContain('bankAccountHistory');
+  });
   it('the controller is provider-only, scoped by ProviderScopeGuard and read-only', () => {
     expect(Reflect.getMetadata(ROLES_KEY, ProviderLedgerController)).toEqual(['provider']);
     expect(Reflect.getMetadata('__guards__', ProviderLedgerController)).toContain(ProviderScopeGuard);

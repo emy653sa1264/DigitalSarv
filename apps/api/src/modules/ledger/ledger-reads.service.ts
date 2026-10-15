@@ -83,6 +83,14 @@ export class LedgerReadsService {
     return p;
   }
 
+  /** The provider's own read: the current bank account only, never the change history (which names admins). */
+  private async ownProvider(id: string): Promise<ProviderRow> {
+    assertObjectId(id, 'مجری');
+    const p = (await this.centers.findById(id, { name: 1, bankAccount: 1 }).select('+bankAccount').lean()) as ProviderRow | null;
+    if (!p) throw new NotFoundException('مجری یافت نشد');
+    return p;
+  }
+
   /** Only `payout_record` (or a super-admin, who has no stored permission list) sees the full Sheba. */
   async canSeeFullBank(userId: string): Promise<boolean> {
     const u = (await this.users.findById(userId, { role: 1, permissions: 1 }).lean()) as { role?: string; permissions?: string[] } | null;
@@ -172,7 +180,7 @@ export class LedgerReadsService {
 
   /** «سرو مجری» → «تسویه»: the caller's own balance, the next settlement day and its masked bank account (R7, R8). */
   async providerSummary(providerId: string): Promise<ProviderLedgerSelf> {
-    const p = await this.findProvider(providerId);
+    const p = await this.ownProvider(providerId);
     const [b, s] = await Promise.all([this.ledger.balanceOf(providerId), this.settlement()]);
     return {
       balance: { available: b.available, due: b.due, pendingCount: b.pendingCount },

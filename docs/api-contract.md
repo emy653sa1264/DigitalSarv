@@ -1378,6 +1378,8 @@ timeline) in the row; `courierCost` = `courierTasks × courier.perTaskFee` (curr
 
 Only the caller's entries; never reasons, notes, bases, `createdBy`, other providers or customer prices (D32, R8).
 There is no provider write endpoint for the bank account (R7).
+A line still waiting for an amount keeps `state: 'pending'` with `amount: null`; the app shows it as «در انتظار تعیین مبلغ».
+`bankRef` on the provider's own payout lines is intended (it is the provider's own transfer reference).
 
 ### Bank account (D31, R7)
 
