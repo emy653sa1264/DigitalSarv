@@ -1,4 +1,4 @@
-import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
+import { Injectable, Logger, OnApplicationBootstrap, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Interval } from '@nestjs/schedule';
 import { Model } from 'mongoose';
@@ -7,11 +7,12 @@ import { CatalogService } from '../catalog/catalog.service.js';
 import { Center } from '../centers/center.schema.js';
 import { DispatchNotifier } from './dispatch-notifier.js';
 import { HELD } from './job-model.js';
+import { LedgerService } from '../ledger/ledger.service.js';
 import { Job } from './job.schema.js';
 import { JobsService } from './jobs.service.js';
 
-export interface TickResult { timeouts: number; reminders: number; late: number; unavailable: number; completed: number; reconciled: { created: number; cancelled: number; delivered: number; mirrored: number } }
-const EMPTY: TickResult = { timeouts: 0, reminders: 0, late: 0, unavailable: 0, completed: 0, reconciled: { created: 0, cancelled: 0, delivered: 0, mirrored: 0 } };
+export interface TickResult { timeouts: number; reminders: number; late: number; unavailable: number; completed: number; reconciled: { created: number; cancelled: number; delivered: number; mirrored: number }; ledger: number }
+const EMPTY: TickResult = { timeouts: 0, reminders: 0, late: 0, unavailable: 0, completed: 0, reconciled: { created: 0, cancelled: 0, delivered: 0, mirrored: 0 }, ledger: 0 };
 const BATCH = 200;
 
 /**
@@ -29,6 +30,7 @@ export class DispatchScheduler implements OnApplicationBootstrap {
     private readonly jobs: JobsService,
     private readonly catalog: CatalogService,
     private readonly notifier: DispatchNotifier,
+    @Optional() private readonly ledger?: LedgerService,
   ) {}
 
   /** `DISPATCH_SCHEDULER=0` switches the timer off (e2e); tests can still call `tick()`. */
@@ -65,6 +67,7 @@ export class DispatchScheduler implements OnApplicationBootstrap {
         unavailable: await step('unavailable', () => this.unavailable(now), 0),
         completed: await step('autoComplete', () => this.autoComplete(now, dispatch.autoCompleteHours), 0),
         reconciled: await step('reconcile', () => this.jobs.reconcile(BATCH), EMPTY.reconciled),
+        ledger: await step('ledger', () => (this.ledger ? this.ledger.reconcile(BATCH) : Promise.resolve(0)), 0),
       };
     } catch (err) {
       this.logger.warn(`dispatch tick failed: ${(err as Error).message}`);

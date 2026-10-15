@@ -2,6 +2,7 @@ import { Logger } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { fakeModel, type Doc } from '../../../test/fake-model.js';
 import { DEFAULT_DISPATCH } from '../catalog/catalog.defaults.js';
+import { LedgerService } from '../ledger/ledger.service.js';
 import { JobsService } from './jobs.service.js';
 
 const P = new Types.ObjectId();
@@ -434,5 +435,65 @@ describe('M3 final review', () => {
     expect(s.jobs.docs[0].status).toBe('ready');
     expect(await s.svc.onOrderDelivered(s.order._id, 'admin')).toBe(true);
     expect(s.jobs.docs[0].status).toBe('delivered');
+  });
+});
+
+describe('v4.3 ledger hook (D27, Review Focus 2)', () => {
+  const snapshot = {
+    providerId: String(P), snapshotAt: '2026-10-16T08:00:00.000Z', currency: 'toman', missing: [], providerSubtotal: 60000,
+    lines: [{ serviceIndex: 0, comboKey: 'bw|A4|single', label: 'x', versionId: 'v', version: 1, unitPrice: 3000, quantity: 20, subtotal: 60000 }],
+    delivery: { providerId: String(P), fee: 30000 }, payoutBasis: 90000, confirmedMissing: false, childCount: 0,
+  };
+  function withLedger(orderOver: Doc = {}) {
+    const s = setup(orderOver);
+    const entries = fakeModel([], { unique: [['key'], ['slot']] });
+    const catalog = { getSettings: vi.fn(async () => ({ dispatch: { ...DEFAULT_DISPATCH }, ledger: { settlementWeekday: 6 } })) };
+    const ledger = new LedgerService(entries as never, fakeModel([]) as never, s.jobs as never, s.orders as never, catalog as never);
+    const svc = new JobsService(s.jobs as never, s.orders as never, catalog as never, s.notifier as never, undefined, ledger);
+    return { ...s, svc, ledger, entries };
+  }
+  async function providerDelivers(s: ReturnType<typeof withLedger>) {
+    const id = await heldBy(s, 'out_for_delivery');
+    Object.assign(s.jobs.docs[0], { deliveryMethod: 'provider', deliveryProviderId: P, providerPricing: snapshot });
+    await s.svc.move(id, 'delivered', { actor: 'delivery', byRole: 'provider', providerId: String(P) });
+    return id;
+  }
+
+  it('provider delivery credits the producer from its snapshot exactly once, the COD payment included in the same delivery', async () => {
+    const s = withLedger({ status: 'packing' });
+    const id = await providerDelivers(s);
+    expect(s.orders.docs[0]).toMatchObject({ status: 'delivered', paid: true });
+    expect(s.entries.docs).toHaveLength(1);
+    expect(s.entries.docs[0]).toMatchObject({ key: `credit:${id}:${String(P)}:production`, kind: 'credit', state: 'counted', amount: 90000, orderCode: '10400' });
+    expect(s.jobs.docs[0].ledgerPending).toBeUndefined();
+    expect(s.jobs.docs[0].ledgerAt).toBeInstanceOf(Date);
+    s.jobs.docs[0].ledgerPending = true; // the hook and the tick never credit twice
+    expect(await s.ledger.reconcile()).toBe(0);
+    expect(s.entries.docs).toHaveLength(1);
+  });
+  it('a failed ledger write is retried by the tick: the flag was set by the delivery write itself', async () => {
+    const s = withLedger({ status: 'packing' });
+    vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    s.entries.updateOne.mockRejectedValueOnce(new Error('mongo down'));
+    await providerDelivers(s); // never throws into the job flow
+    expect(s.jobs.docs[0]).toMatchObject({ status: 'delivered', ledgerPending: true });
+    expect(s.entries.docs).toHaveLength(0);
+    expect(await s.ledger.reconcile()).toBe(1);
+    expect(s.jobs.docs[0].ledgerPending).toBeUndefined();
+  });
+  it('the order-level delivery (courier / admin) flags the job in the same write and credits it', async () => {
+    const s = withLedger({ status: 'out_for_delivery', paid: true });
+    await heldBy(s, 'out_for_delivery');
+    Object.assign(s.jobs.docs[0], { providerPricing: { ...snapshot, delivery: null, payoutBasis: 60000 } });
+    expect(await s.svc.onOrderDelivered(s.order._id, 'admin')).toBe(true);
+    const update = s.jobs.findOneAndUpdate.mock.calls.at(-1)![1] as { $set: Record<string, unknown> };
+    expect(update.$set).toMatchObject({ status: 'delivered', ledgerPending: true });
+    expect(s.entries.docs[0]).toMatchObject({ amount: 60000, state: 'counted' });
+  });
+  it('without a ledger (older wiring / tests) delivery still works and leaves the flag for the tick', async () => {
+    const s = setup({ status: 'out_for_delivery', paid: true });
+    await heldBy(s, 'out_for_delivery');
+    expect(await s.svc.onOrderDelivered(s.order._id, 'admin')).toBe(true);
+    expect(s.jobs.docs[0]).toMatchObject({ status: 'delivered', ledgerPending: true });
   });
 });

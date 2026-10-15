@@ -102,4 +102,12 @@ describe('DispatchScheduler (D21)', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('mongo down'));
     warn.mockRestore();
   });
+  it('v4.3: the tick re-runs the ledger for flagged jobs (0 without a ledger)', async () => {
+    const s = setup();
+    const ledger = { reconcile: vi.fn(async () => 2) };
+    const sched = new DispatchScheduler(s.jobsModel as never, fakeModel([]) as never, s.jobs, { getSettings: async () => ({ dispatch: { ...DEFAULT_DISPATCH } }) } as never, s.notifier as never, ledger as never);
+    await expect(sched.tick(NOW)).resolves.toMatchObject({ ledger: 2 });
+    expect(ledger.reconcile).toHaveBeenCalledWith(200);
+    await expect(s.sched.tick(NOW)).resolves.toMatchObject({ ledger: 0 });
+  });
 });

@@ -13,6 +13,7 @@ import {
   DELIVERY_VISIBLE, HELD, LIVE, ORDER_MIRROR, canMove, orderProviderFields, cancelStage, customerFulfillmentLabel, mirrorSources, productionBlocked,
   type Actor, type ByRole, type FlowCtx, type JobAction, type JobHistoryEntry, type MirrorSource,
 } from './job-model.js';
+import { LedgerService } from '../ledger/ledger.service.js';
 import { Job, JobDocument } from './job.schema.js';
 import { JOB_ORDER_STATUSES, isBackfill, jobSeed, orderNeedsJob, type JobSource } from './job-seed.js';
 
@@ -38,10 +39,11 @@ const flowGuardOf = (job: Pick<Job, 'deliveryMethod' | 'pickupAt'>): Record<stri
   ...(job.deliveryMethod ? { deliveryMethod: job.deliveryMethod } : {}), pickupAt: job.pickupAt ?? null,
 });
 
-function stampsFor(to: JobStatus, now: Date): Record<string, Date> {
+function stampsFor(to: JobStatus, now: Date): Record<string, Date | boolean> {
   if (to === 'accepted') return { 'assignment.acceptedAt': now };
   if (to === 'ready') return { readyAt: now };
-  if (to === 'delivered') return { deliveredAt: now };
+  // v4.3: the ledger flag is part of the delivery write itself, so a crash before the credit never loses it (D27)
+  if (to === 'delivered') return { deliveredAt: now, ledgerPending: true };
   if (to === 'completed') return { completedAt: now };
   return {};
 }
@@ -60,6 +62,7 @@ export class JobsService {
     private readonly catalog: CatalogService,
     private readonly notifier: DispatchNotifier,
     @Optional() @InjectModel(Center.name) private readonly centers?: Model<Center>,
+    @Optional() private readonly ledger?: LedgerService,
   ) {}
 
   // ------------------------------------------------------------ creation and reads
@@ -259,6 +262,8 @@ export class JobsService {
       }
       throw raced();
     }
+    // v4.3: the provider credit (never throws; a flagged job is retried by the tick)
+    if (to === 'delivered') await this.ledger?.creditJob(updated._id);
     if (to !== 'delivered') await this.mirrorOrder(order, ORDER_MIRROR[to], false);
     if (to === 'accepted') await this.notifier.customer('assigned', order);
     if (to === 'ready_for_pickup') {
@@ -393,9 +398,10 @@ export class JobsService {
       const updated = await this.cas(job, 'delivered', {
         actor,
         ...(actor !== 'admin' ? { extraGuard: flowGuardOf(job) } : {}),
-        set: { deliveredAt: now, ...(job.readyAt ? {} : { readyAt: now }) },
+        set: { deliveredAt: now, ledgerPending: true, ...(job.readyAt ? {} : { readyAt: now }) },
         history: this.entry(job, 'status', 'delivered', { byRole, ...(by ? { by } : {}) }, now),
       });
+      if (updated) await this.ledger?.creditJob(updated._id);
       return !!updated;
     } catch (err) {
       this.logger.warn(`delivered job of order ${String(orderId)} failed (reconcile retries): ${(err as Error).message}`);

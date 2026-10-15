@@ -7,11 +7,12 @@ import { ProviderJobsService } from './provider-jobs.service.js';
 import { AdminDispatchController, ProviderJobsController } from './dispatch.controller.js';
 import { DispatchService } from './dispatch.service.js';
 import { DispatchScheduler } from './dispatch.scheduler.js';
+import { LedgerModule } from '../ledger/ledger.module.js';
 import { JobsService } from './jobs.service.js';
 
 /** v4.2 dispatch & fulfilment (M3). Uses the global models; never imports the orders module (no cycles). */
 @Module({
-  imports: [NotificationsModule, CatalogModule, CentersModule],
+  imports: [NotificationsModule, CatalogModule, CentersModule, LedgerModule],
   controllers: [AdminDispatchController, ProviderJobsController],
   providers: [JobsService, DispatchNotifier, DispatchService, ProviderJobsService, DispatchScheduler],
   exports: [JobsService, DispatchNotifier, DispatchService],

@@ -16,6 +16,7 @@ import { Plan } from '../modules/catalog/schemas/plan.schema.js';
 import { Settings, SETTINGS_ID } from '../modules/catalog/schemas/settings.schema.js';
 import { Center } from '../modules/centers/center.schema.js';
 import { providerBackfill } from '../modules/centers/provider-model.js';
+import { Job } from '../modules/dispatch/job.schema.js';
 import { CmsSection } from '../modules/cms/cms-section.schema.js';
 import { NotificationTemplate } from '../modules/notifications/notification-template.schema.js';
 import { BindingRange } from '../modules/price-book/schemas/binding-range.schema.js';
@@ -122,6 +123,16 @@ export async function seedBase(app: INestApplicationContext, log = new Logger('S
   const backfill = providerBackfill();
   counts.providersBackfilled = (
     await model<Center>(Center.name).updateMany(backfill.filter, { $set: backfill.set }, { timestamps: false })
+  ).modifiedCount;
+
+  // v4.3 (R11): jobs delivered before the ledger existed are credited once by the reconcile pass (ledger keys make
+  // re-running this harmless; `ledgerAt` marks a processed job)
+  counts.ledgerBackfill = (
+    await model<Job>(Job.name).updateMany(
+      { status: { $in: ['delivered', 'completed'] }, ledgerAt: { $exists: false }, ledgerPending: { $exists: false } },
+      { $set: { ledgerPending: true } },
+      { timestamps: false },
+    )
   ).modifiedCount;
 
   // v4 papers: backfill the old ones once (only while `colorPrint` is missing), then insert the new ones
