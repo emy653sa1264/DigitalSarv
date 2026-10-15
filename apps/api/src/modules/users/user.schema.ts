@@ -40,6 +40,10 @@ export class User {
   @Prop({ type: [String], enum: PERMISSIONS, default: undefined })
   permissions?: Permission[];
 
+  /** Internal (v4.4, D34): keys of wallet credits applied to this wallet — the guard that makes each `$inc` happen once. Never serialized. */
+  @Prop({ type: [String], default: undefined, select: false })
+  walletCreditKeys?: string[];
+
   createdAt: Date;
   updatedAt: Date;
 }

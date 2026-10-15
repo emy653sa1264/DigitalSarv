@@ -27,6 +27,7 @@ import { PriceAudit, PriceAuditSchema } from '../modules/price-book/schemas/pric
 import { BindingRange, BindingRangeSchema } from '../modules/price-book/schemas/binding-range.schema.js';
 import { Job, JobSchema } from '../modules/dispatch/job.schema.js';
 import { LedgerAccount, LedgerAccountSchema } from '../modules/ledger/ledger-account.schema.js';
+import { WalletCredit, WalletCreditSchema } from '../modules/wallet-credits/wallet-credit.schema.js';
 import { LedgerEntry, LedgerEntrySchema } from '../modules/ledger/ledger-entry.schema.js';
 
 const features = MongooseModule.forFeature([
@@ -55,6 +56,7 @@ const features = MongooseModule.forFeature([
   { name: Job.name, schema: JobSchema },
   { name: LedgerEntry.name, schema: LedgerEntrySchema },
   { name: LedgerAccount.name, schema: LedgerAccountSchema },
+  { name: WalletCredit.name, schema: WalletCreditSchema },
 ]);
 
 /**

@@ -26,6 +26,7 @@ import { OrdersModule } from './modules/orders/orders.module.js';
 import { DispatchModule } from './modules/dispatch/dispatch.module.js';
 import { LedgerModule } from './modules/ledger/ledger.module.js';
 import { PaymentsModule } from './modules/payments/payments.module.js';
+import { WalletCreditsModule } from './modules/wallet-credits/wallet-credits.module.js';
 import { PriceBookModule } from './modules/price-book/price-book.module.js';
 import { PricingModule } from './modules/pricing/pricing.module.js';
 import { RulesModule } from './modules/rules/rules.module.js';
@@ -76,6 +77,7 @@ export const infraImports = [
     CampaignsModule,
     NotificationsModule,
     PaymentsModule,
+    WalletCreditsModule,
     UploadsModule,
     OrdersModule,
     DispatchModule,

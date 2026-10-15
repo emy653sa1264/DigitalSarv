@@ -121,6 +121,9 @@ export class OrderDelivery {
 }
 export const OrderDeliverySchema = SchemaFactory.createForClass(OrderDelivery);
 
+/** v4.4 (D35): money settled after checkout — a recount refund, a difference paid from the wallet or in cash at handover. */
+export interface OrderSettlement { kind: 'recount_refund' | 'due_wallet' | 'due_cash'; amount: number; at: Date }
+
 @Schema({ collection: 'orders', timestamps: true, optimisticConcurrency: true })
 export class Order {
   @Prop({ type: String, required: true, unique: true })
@@ -232,6 +235,14 @@ export class Order {
    */
   @Prop({ type: [String], default: undefined, select: false })
   refundedAuthorities?: string[];
+
+  /** Internal (v4.4, D34): wallet-credit keys this order's own writes confirmed (cancel, gateway marker, recount, due). Never serialized. */
+  @Prop({ type: [String], default: undefined, select: false })
+  creditKeys?: string[];
+
+  /** v4.4 (D35): settlements after checkout (customer + admin JSON). */
+  @Prop({ type: [{ _id: false, kind: { type: String, enum: ['recount_refund', 'due_wallet', 'due_cash'] }, amount: Number, at: Date }], default: undefined })
+  settlements?: OrderSettlement[];
 
   /** Internal: effects a gateway order applies once paid. Never serialized (select: false). */
   @Prop({ type: MongooseSchema.Types.Mixed, select: false })
