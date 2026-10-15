@@ -40,7 +40,7 @@ The four v2 files share one prototype script (logic/pricing unchanged from v1); 
 - [x] V4-M2 Providers, provider prices, staff permissions, Zibal — `docs/superpowers/plans/2026-10-15-v4-m2-providers.md`
 - [x] V4-M3 Dispatch center, provider panel, fulfillment and delivery — `docs/superpowers/plans/2026-10-16-v4-m3-dispatch.md`
 - [x] V4-M4 Provider ledger and settlement — `docs/superpowers/plans/2026-10-17-v4-m4-ledger.md` (contract «v4.3»)
-- [ ] V4-M5 Security and regression verification — see «Handoff to M5» in `docs/superpowers/plans/2026-10-17-v4-m4-ledger.md` (ledger permission matrix and IDOR, Playwright on all apps incl. «تسویه مجریان» / «تسویه», the recoverable pending-wallet-credit record, the R11 backfill on a production copy)
+- [ ] V4-M5 Security and regression verification — `docs/superpowers/plans/2026-10-18-v4-m5-verification.md` (contract «v4.4»)
 
 ## Needs from the owner before going live
 

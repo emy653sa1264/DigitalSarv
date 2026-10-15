@@ -1462,3 +1462,104 @@ Admin: «تسویه مجریان» (`/admin/ledger`, after «مدیریت مجر
 «جبران خسارت مجری», «کیف پول دیجیتال سرو»; a provider sheet with statement, entries, bank account, payout and
 adjustment). «تنظیمات» gets «تسویه مجریان» (settlement weekday). Pricing center «قیمت مجریان» lists the new services.
 Provider app: new «تسویه» tab (`/provider/settlement`); «قیمت‌های من» lists the new services.
+## v4.4 — hardening (Master Specification V4, Milestone 5)
+
+Design: `docs/v4-design.md` (D34–D37) and the rulings S1–S15 of `docs/superpowers/plans/2026-10-18-v4-m5-verification.md`.
+Everything is additive; v1–v4.3 behaviour is unchanged unless stated. Customer prices, quotes and catalog customer data are
+unchanged (D22). All amounts are integer toman.
+
+### Recoverable wallet credits (D34, S1)
+
+Every automatic wallet movement goes through an internal intent (`walletCredits`, never serialized):
+`{ key (unique), userId, orderId, orderCode, amount (integer ≠ 0), cause, base?, state, attempts, lastError?, note?, doneAt? }`,
+`cause ∈ gateway_mismatch | gateway_capture | cancel_refund | recount_refund | due_wallet | due_reversal`,
+`state ∈ pending | done | void | reversed`.
+
+| key | written by |
+|---|---|
+| `gw:<orderId>:<authority>` | Zibal amount mismatch; a verified capture the order could no longer take (v2 notes) |
+| `cancel:<orderId>` | cancellation refund of `chargedAmount` (customer or admin) |
+| `recount:<orderId>:<n>` | D35 refund after the n-th recount approval (n = number of `awaiting_approval` timeline entries) |
+| `due:<orderId>:<requestId>` | D35 wallet payment of a difference (debit) |
+| `dueback:<dueKey>` | that debit given back because the order could no longer take it |
+
+1. The intent is written first (`pending`).
+2. The write that decides the money pushes the key into the order's internal `creditKeys` in the **same** compare-and-set
+   (cancel: with `status: 'cancelled', refunded: true`; gateway: with `refundedAuthorities`; recount: with the approval).
+3. The wallet moves only when the order carries the key, by `$inc` guarded on the key (`User.walletCreditKeys`, internal), so it
+   happens at most once whoever runs it; then the intent is `done`.
+
+A sweep (every minute, every instance) re-applies intents still `pending` after 60 s; an intent whose order never took it
+becomes `void` after 24 h. A failing `$inc` never fails the request that caused it (a cancel still answers 200; the money
+arrives with the sweep; logged at ERROR). This replaces the v4.1 «settle manually from the logs» fallback.
+
+A cancellation refund is never applied for an amount different from the order's `chargedAmount` at cancel time.
+The checkout wallet debit stays a guarded `$inc`; the compensating credit when order creation fails goes through the same
+wallet-credit intent as every other automatic credit.
+
+### Recount after payment (D35, S2–S4)
+
+- The admin approves a courier recount (`PATCH /admin/orders/:id/status`, `awaiting_approval → confirmed | picked_up`). For an order
+  paid by wallet or gateway whose new `quote.total` is **lower** than `chargedAmount`, the same compare-and-set sets
+  `chargedAmount = quote.total` and appends `settlements: { kind: 'recount_refund', amount, at }`; the difference goes to the wallet
+  once (`recount:<orderId>:<n>`). A cancellation afterwards refunds the new `chargedAmount`.
+- When the new total is **higher**, nothing is charged. `amountDue = quote.total − chargedAmount` is shown on the order (customer
+  JSON `amountDue?: number`, only when > 0, never while `awaiting_approval`, `cancelled` or refunded). The customer pays it:
+  - from the wallet: `POST /orders/:id/pay-due` (owner) body `{ method: 'wallet', requestId: <uuid v4> }` → the customer `Order`
+    (`chargedAmount = quote.total`, `settlements` + `{ kind: 'due_wallet', amount }`). Repeating the same `requestId` after the payment
+    has succeeded returns the same order view (200), not an error (the replay is idempotent).
+    For orders in status `awaiting_approval`, `pending_payment`, `cancelled` or `delivered` the status message below is answered
+    before any «مبلغی برای پرداخت باقی نمانده است» message.
+    Errors: 400 «مبلغی برای پرداخت باقی نمانده است» · 400 «پرداخت مابه‌التفاوت پس از تأیید سفارش ممکن است» (status
+    `awaiting_approval` / `pending_payment` / `cancelled` / `delivered`) · 400 «موجودی کیف پول کافی نیست» · 409 «وضعیت سفارش هم‌زمان
+    تغییر کرد؛ مبلغ به کیف پول برگشت» (the order changed after the debit; the debit is given back once) · 503 «پرداخت در حال انجام
+    است؛ چند لحظه دیگر سفارش را بررسی کنید» (the sweep finishes it) · 403 «به این سفارش دسترسی ندارید».
+  - in cash at handover: every «تحویل شد» write (courier, provider/admin through the job, admin status) sets
+    `chargedAmount = quote.total` and appends `{ kind: 'due_cash', amount }` — like COD, in the same update as `delivered`.
+  A gateway payment of a difference is not offered (S3).
+- `chargedAmount` is always what was actually collected. `Order.settlements?: { kind: 'recount_refund' | 'due_wallet' | 'due_cash'; amount: number; at: string }[]`
+  (customer and admin JSON). `CourierTask.collect?: number` on delivery tasks = cash to take at the door (unpaid COD total, or the
+  difference due). The wallet report (v4.3) keeps reading `chargedAmount`.
+
+### Sessions (D36, S5, S7)
+
+- Web: each app persists its own session — `sarv-auth:app` (landing + customer app), `sarv-auth:courier`, `sarv-auth:provider`,
+  `sarv-auth:admin` — each `{ state: { token, user }, version: 0 }`. A legacy `sarv-auth` session is moved once into the app of its
+  `user.role` and removed. A 401 signs out only the app that got it.
+- `ADMIN_PHONES` boot: an existing account whose role, permissions, provider or courier link the boot changes has its tokens revoked.
+- Courier login (`POST/PATCH/DELETE /admin/couriers`): the phone's account is claimed by a compare-and-set; an admin or provider phone
+  stays 409 (v4.1), a phone linked to another courier → **409 «این شماره به پیک دیگری متصل است»**, a concurrent change → 409
+  «حساب این شماره هم‌زمان تغییر کرد؛ دوباره تلاش کنید». Linking, the old login's demotion (phone change, courier deleted) and
+  every role change revoke that account's tokens (`user:revoked`, v4.1).
+- `JWT_EXPIRES_IN` longer than the 30-day revocation window still fails the boot (v4.1).
+
+### Price book (S8–S10, deferred M2 items)
+
+- `GET /admin/price-book/compare?service=&providerId=&page=&limit=` (`provider_price_view` + `customer_price_view`) →
+  `Paged<CompareRow>`, paged **by provider** (`limit` default 20, max 100; `total` = number of providers; `items` = every row of the
+  page's providers, combos in catalog order). Replaces the v4.1 unpaged `CompareRow[]`.
+- `POST /admin/price-book/versions/:id/{publish|disable|rollback}` with an unknown id: 403 «به این بخش دسترسی ندارید» unless the
+  admin holds that action's permission on at least one layer, then 404 «نسخه قیمت یافت نشد».
+- `POST /admin/price-book/bulk/preview` with an unknown `providerId` → 404 «مجری یافت نشد» (as `bulk/apply`). The bulk audit's
+  `negativeMargin` lists only rows that were applied. The bulk apply confirmation field is `confirmNegativeMargin` (as on versions).
+- Margin check (§25): a customer `…|single` price also checks the customer `…|double` price of the same configuration when that one is
+  derived (mode ≠ `manual`); its conflicts carry the double `comboKey` in the same 409 `NEGATIVE_MARGIN`.
+- `priceVersions` gets a partial index on `baseProviderId`.
+
+### Ledger (S11–S13)
+
+- The delivered write closes only the producer's open compensation case (v4.3 «Compensation» amended): a provider that lost
+  production and delivers the job as the separate delivery provider keeps its case; it is listed and decidable once the job is
+  `delivered` / `completed` (a delivery provider no longer «holds» a delivered job).
+- `GET /admin/ledger/waiting?page&limit` (`ledger_view`) → `Paged<WaitingCreditRow>`: jobs delivered more than 24 h ago whose
+  credit still waits (`ledgerPending`), oldest first:
+  `WaitingCreditRow { jobId, orderId, orderCode, providerId: string | null, providerName: string | null, deliveredAt, triedAt: string | null, reason: 'unpaid' | 'retrying' }`
+  (`unpaid` = the order is not paid yet). Orders delivered before v4.2 have no job and are never credited (v4.3).
+- `PATCH /admin/dispatch/jobs/:id/delivery` stays refused after `ready` («روش تحویل این سفارش دیگر قابل تغییر نیست»), so a delivery
+  leg is never changed once started.
+
+### Browser regression (D37)
+
+`pnpm --filter web e2e` (on demand, not CI): vitest + `playwright-core` on the installed Edge (`channel: 'msedge'`). It needs
+`pnpm db:up`, `pnpm seed`, `pnpm --filter api build` and `pnpm --filter web build` first; its global setup starts the built API
+(port 3999, `DISPATCH_SCHEDULER=0`) and a static + `/api` proxy server for `apps/web/dist` (port 4199) and stops both in teardown.
