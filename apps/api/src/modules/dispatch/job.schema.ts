@@ -108,8 +108,9 @@ JobSchema.index({ 'assignment.assignedAt': 1 }, { sparse: true });
 JobSchema.index({ status: 1, updatedAt: -1 });
 JobSchema.index({ updatedAt: -1 });
 JobSchema.index({ mirrorPending: 1, _id: 1 }, { sparse: true });
-// partial (only flagged jobs are indexed); `_id` first so the reconcile / queue cursors walk them in order
+// S12 «waiting credits» (GET /admin/ledger/waiting): flagged jobs by delivery time, oldest first (partial: only flagged jobs)
 JobSchema.index({ deliveredAt: 1, _id: 1 }, { name: 'ledger_waiting', partialFilterExpression: { ledgerPending: true } });
+// partial (only flagged jobs are indexed); `_id` first so the reconcile / queue cursors walk them in order
 JobSchema.index({ _id: 1, ledgerPending: 1 }, { name: 'ledger_pending', partialFilterExpression: { ledgerPending: true } });
 JobSchema.index({ _id: 1, compOpen: 1 }, { name: 'comp_open', partialFilterExpression: { compOpen: { $exists: true } } });
 JobSchema.index({ _id: 1, compClaimed: 1 }, { name: 'comp_claimed', partialFilterExpression: { compClaimed: { $exists: true } } });

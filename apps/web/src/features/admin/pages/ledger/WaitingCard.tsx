@@ -15,7 +15,7 @@ export function WaitingCard({ onOpenProvider }: { onOpenProvider: (providerId: s
   return (
     <div className="grid gap-2">
       <div className="text-[14px] font-black">تحویل‌شده، هنوز بدون سهم مجری</div>
-      <div className="text-[12px] leading-6 text-muted-2">سهم مجری فقط پس از پرداخت سفارش ثبت می‌شود؛ سفارش‌های تحویل‌شده پیش از نسخه‌ی تخصیص مجری سهمی ندارند.</div>
+      <div className="text-[12px] leading-6 text-muted-2">سهم مجری فقط پس از پرداخت سفارش ثبت می‌شود؛ سفارش‌های تحویل‌شده پیش از فعال‌شدن تخصیص مجری سهمی ندارند و این‌جا دیده نمی‌شوند.</div>
       <QueryView query={query} rows={2} isEmpty={(d) => d.items.length === 0} empty={{ title: 'موردی در انتظار نیست' }}>
         {(d) => (
           <AdminTable columns={COLUMNS} minWidth={640} head={['سفارش', 'مجری', 'تحویل', 'وضعیت']}
@@ -27,9 +27,10 @@ export function WaitingCard({ onOpenProvider }: { onOpenProvider: (providerId: s
                   ? <button type="button" className="min-w-0 cursor-pointer truncate text-start font-bold hover:text-accent" onClick={() => onOpenProvider(r.providerId!)}>{r.providerName ?? '—'}</button>
                   : <span className="text-muted-3">—</span>}
                 <span className="text-[12px] text-muted-1">{when(r.deliveredAt)}</span>
-                <span>{r.reason === 'unpaid'
+                <span className="grid justify-items-start gap-1">{r.reason === 'unpaid'
                   ? <Tag bg={TONES.amber.soft} fg={TONES.amber.ink}>در انتظار پرداخت سفارش</Tag>
-                  : <Tag bg={TONES.pink.soft} fg={TONES.pink.ink}>خطای ثبت؛ دوباره تلاش می‌شود</Tag>}</span>
+                  : <Tag bg={TONES.pink.soft} fg={TONES.pink.ink}>خطای ثبت؛ دوباره تلاش می‌شود</Tag>}
+                  {r.triedAt && <span className="text-[11px] text-muted-2">آخرین تلاش: {when(r.triedAt)}</span>}</span>
               </AdminRow>
             ))}
           </AdminTable>
