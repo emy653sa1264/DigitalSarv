@@ -2,7 +2,7 @@ import { Body, Controller, Get, HttpCode, Param, Post, UseGuards } from '@nestjs
 import type { AuthUser } from '../../common/auth/auth-user.js';
 import { CurrentUser, Roles } from '../../common/auth/decorators.js';
 import { JwtAuthGuard, OptionalJwtAuthGuard, RolesGuard } from '../../common/auth/guards.js';
-import { OrderDraftDto } from './dto/orders.dto.js';
+import { OrderDraftDto, PayDueDto } from './dto/orders.dto.js';
 import { OrdersService } from './orders.service.js';
 
 @Controller('orders')
@@ -52,6 +52,15 @@ export class OrdersController {
   @Roles('customer')
   pay(@Param('id') id: string, @CurrentUser() user: AuthUser) {
     return this.orders.pay(id, user);
+  }
+
+  /** v4.4 (D35): pay a difference due after a recount from the wallet (the global per-IP throttle applies). */
+  @Post(':id/pay-due')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('customer')
+  payDue(@Param('id') id: string, @Body() dto: PayDueDto, @CurrentUser() user: AuthUser) {
+    return this.orders.payDue(id, user, dto);
   }
 
   @Post(':id/cancel')

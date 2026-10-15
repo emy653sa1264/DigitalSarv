@@ -74,6 +74,15 @@ export class WalletCreditsService {
     return this.run(key, { moved: false, immediate: opts.immediate });
   }
 
+  /** D35 (S3): has this customer already used `requestId` - paid on this order (`done`), or on another order (`other`)? */
+  async dueRequest(userId: Types.ObjectId | string, orderId: string, requestId: string): Promise<'done' | 'other' | 'none'> {
+    const rid = requestId.replace(/[^0-9a-zA-Z-]/g, '');
+    const row = (await this.intents.findOne({ userId: oid(userId), key: new RegExp(`^due:[0-9a-f]{24}:${rid}$`), state: { $in: ['pending', 'done', 'reversed'] } }).lean()) as WalletCreditRow | null;
+    if (!row) return 'none';
+    if (String(row.orderId) !== orderId) return 'other';
+    return row.state === 'done' ? 'done' : 'none';
+  }
+
   /**
    * Best-effort: retire a pending intent that will never be needed (checkout succeeded, or the debit never happened). The key is
    * freed (renamed) and a checkout's debit proof is pulled from the user. Never throws.

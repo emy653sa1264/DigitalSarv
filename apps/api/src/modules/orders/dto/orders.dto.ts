@@ -11,6 +11,7 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  IsUUID,
   Matches,
   Max,
   MaxLength,
@@ -180,4 +181,10 @@ export class QcDto {
 
   @IsBoolean({ message: 'وضعیت چک‌لیست معتبر نیست' })
   done: boolean;
+}
+
+/** v4.4 (D35, S3): pay a difference due from the wallet; `requestId` makes a retried click idempotent. */
+export class PayDueDto {
+  @IsIn(['wallet'], { message: 'روش پرداخت معتبر نیست' }) method: 'wallet';
+  @IsUUID('4', { message: 'شناسه درخواست معتبر نیست' }) requestId: string;
 }

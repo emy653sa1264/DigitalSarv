@@ -1,5 +1,5 @@
 import 'reflect-metadata';
-import { HttpException, ServiceUnavailableException } from '@nestjs/common';
+import { ConflictException, HttpException, NotFoundException, ServiceUnavailableException } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { Types } from 'mongoose';
@@ -8,7 +8,7 @@ import { FakeRedis, fakeRedisService } from '../../../test/fake-redis.js';
 import type { AuthUser } from '../../common/auth/auth-user.js';
 import { DEFAULT_CHECKLISTS } from '../catalog/catalog.defaults.js';
 import { WalletCreditsService } from '../wallet-credits/wallet-credits.service.js';
-import { AssignDto, type OrderDraftDto } from './dto/orders.dto.js';
+import { AssignDto, PayDueDto, type OrderDraftDto } from './dto/orders.dto.js';
 import { OrdersService } from './orders.service.js';
 
 type Doc = Record<string, unknown>;
@@ -838,5 +838,96 @@ describe('D35 guards', () => {
     await s.svc.setStatus(String(orderId), 'picked_up');
     const filter = s.orders.findOneAndUpdate.mock.calls[0][0] as Doc;
     expect(filter).toMatchObject({ chargedAmount: 500000, 'quote.total': 420000, refunded: { $ne: true }, status: 'awaiting_approval' });
+  });
+});
+
+describe('POST /orders/:id/pay-due (D35)', () => {
+  const rid = '3f0c1d2e-4b5a-4c6d-8e7f-9a0b1c2d3e4f';
+  const rid2 = '7a1b2c3d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
+  const owing = (balance = 100000) => {
+    const s = setup({ status: 'picked_up', chargedAmount: 420000, quote: { total: 500000 } });
+    s.user.walletBalance = balance;
+    return s;
+  };
+  it('pays the difference from the wallet once per requestId and returns the customer view', async () => {
+    const s = owing();
+    const res = await s.svc.payDue(String(orderId), customer, { method: 'wallet', requestId: rid });
+    expect(res).toMatchObject({ chargedAmount: 500000 });
+    expect(res).not.toHaveProperty('amountDue');
+    expect(s.order.settlements).toEqual([expect.objectContaining({ kind: 'due_wallet', amount: 80000 })]);
+    // F4: the same click again is an idempotent replay - the same view, 200, no second charge
+    expect(await s.svc.payDue(String(orderId), customer, { method: 'wallet', requestId: rid })).toMatchObject({ chargedAmount: 500000 });
+    expect(s.user.walletBalance).toBe(20000);
+    // a new requestId after the payment has nothing left to pay
+    await expect(s.svc.payDue(String(orderId), customer, { method: 'wallet', requestId: rid2 })).rejects.toThrow('مبلغی برای پرداخت باقی نمانده است');
+    expect(s.user.walletBalance).toBe(20000);
+  });
+  it('a double click in flight charges once', async () => {
+    const s = owing();
+    const both = await Promise.allSettled([
+      s.svc.payDue(String(orderId), customer, { method: 'wallet', requestId: rid }),
+      s.svc.payDue(String(orderId), customer, { method: 'wallet', requestId: rid }),
+    ]);
+    expect(both.some((r) => r.status === 'fulfilled')).toBe(true);
+    expect(s.user.walletBalance).toBe(20000);
+    expect(s.order.settlements).toHaveLength(1);
+  });
+  it('two different requestIds racing charge once and give the other back once', async () => {
+    const s = owing(200000);
+    const both = await Promise.allSettled([
+      s.svc.payDue(String(orderId), customer, { method: 'wallet', requestId: rid }),
+      s.svc.payDue(String(orderId), customer, { method: 'wallet', requestId: rid2 }),
+    ]);
+    expect(both.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(s.user.walletBalance).toBe(120000); // 200,000 - 80,000 charged once; the loser's debit went back
+    expect(s.order).toMatchObject({ chargedAmount: 500000, settlements: [expect.objectContaining({ kind: 'due_wallet', amount: 80000 })] });
+    expect(s.intents.docs.filter((d: Doc) => d.state === 'reversed')).toHaveLength(1);
+    expect(s.intents.docs.filter((d: Doc) => String(d.key).startsWith('dueback:') && d.state === 'done')).toHaveLength(1);
+  });
+  it('nothing due, too little money: Persian 400s that move nothing', async () => {
+    await expect(setup({ status: 'picked_up' }).svc.payDue(String(orderId), customer, { method: 'wallet', requestId: rid })).rejects.toThrow('مبلغی برای پرداخت باقی نمانده است');
+    const poor = owing(10000);
+    await expect(poor.svc.payDue(String(orderId), customer, { method: 'wallet', requestId: rid })).rejects.toThrow('موجودی کیف پول کافی نیست');
+    expect(poor.user.walletBalance).toBe(10000);
+    expect(poor.order.chargedAmount).toBe(420000);
+  });
+  it('each closed status answers the status message before any «nothing due»', async () => {
+    for (const status of ['awaiting_approval', 'pending_payment', 'cancelled', 'delivered']) {
+      for (const money of [{ chargedAmount: 420000, quote: { total: 500000 } }, {}]) {
+        const s = setup({ status, ...money });
+        await expect(s.svc.payDue(String(orderId), customer, { method: 'wallet', requestId: rid })).rejects.toThrow('پرداخت مابه‌التفاوت پس از تأیید سفارش ممکن است');
+      }
+    }
+  });
+  it('another customer gets a 404 and nothing moves (IDOR)', async () => {
+    const s = owing();
+    const other = { ...customer, id: String(new Types.ObjectId()) } as AuthUser;
+    const err = await s.svc.payDue(String(orderId), other, { method: 'wallet', requestId: rid }).catch((e: HttpException) => e);
+    expect(err).toBeInstanceOf(NotFoundException);
+    expect(s.user.walletBalance).toBe(100000);
+    expect(s.intents.docs).toHaveLength(0);
+  });
+  it('a requestId already used on another order is a 409', async () => {
+    const s = owing();
+    s.intents.docs.push({ _id: new Types.ObjectId(), key: `due:${String(new Types.ObjectId())}:${rid}`, userId: customerId, orderId: new Types.ObjectId(), state: 'done' });
+    await expect(s.svc.payDue(String(orderId), customer, { method: 'wallet', requestId: rid })).rejects.toBeInstanceOf(ConflictException);
+    expect(s.user.walletBalance).toBe(100000);
+  });
+  it('a crash after the debit, before the order took it: 503, then the sweep settles it once', async () => {
+    const s = owing();
+    s.orders.updateOne.mockImplementationOnce(async () => { throw new Error('connection reset'); });
+    await expect(s.svc.payDue(String(orderId), customer, { method: 'wallet', requestId: rid })).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(s.user.walletBalance).toBe(20000);
+    expect(s.order.chargedAmount).toBe(420000);
+    await s.credits.sweep(new Date(Date.now() + 2 * 60_000));
+    expect(s.user.walletBalance).toBe(20000);
+    expect(s.order).toMatchObject({ chargedAmount: 500000, settlements: [expect.objectContaining({ kind: 'due_wallet', amount: 80000 })] });
+    expect(await s.svc.payDue(String(orderId), customer, { method: 'wallet', requestId: rid })).toMatchObject({ chargedAmount: 500000 });
+    expect(s.user.walletBalance).toBe(20000);
+  });
+  it('the body is validated', async () => {
+    const bad = plainToInstance(PayDueDto, { method: 'card', requestId: 'x' });
+    expect((await validate(bad)).length).toBe(2);
+    expect(await validate(plainToInstance(PayDueDto, { method: 'wallet', requestId: rid }))).toHaveLength(0);
   });
 });

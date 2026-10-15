@@ -325,3 +325,49 @@ describe('wallet credit intents (D34)', () => {
     }
   });
 });
+
+describe('paying a difference from the wallet (D35)', () => {
+  const dueSetup = (balance = 100000) => setup({ balance, order: { status: 'picked_up', chargedAmount: 100000, quote: { total: 130000 } } });
+  const due = async (s: S, requestId = 'r1') => {
+    const key = walletKey.due(String(s.orderId), requestId);
+    await s.svc.prepare({ key, userId: s.userId, orderId: s.orderId, orderCode: '10500', amount: -30000, cause: 'due_wallet', base: 100000 });
+    return key;
+  };
+  it('debits once and the order takes it; a double click changes nothing', async () => {
+    const s = dueSetup();
+    const key = await due(s);
+    expect(await Promise.all([s.svc.apply(key), s.svc.apply(key)])).toContain('done');
+    expect(s.user.walletBalance).toBe(70000);
+    expect(s.order).toMatchObject({ chargedAmount: 130000, settlements: [expect.objectContaining({ kind: 'due_wallet', amount: 30000 })] });
+    expect(s.order.creditKeys).toEqual([{ key, amount: -30000 }]);
+  });
+  it('too little money: nothing moves and the answer is «insufficient», also when asked again', async () => {
+    const s = dueSetup(10000);
+    const key = await due(s);
+    expect(await s.svc.apply(key)).toBe('insufficient');
+    expect(await s.svc.apply(key)).toBe('insufficient');
+    expect(s.user.walletBalance).toBe(10000);
+    expect(s.order.chargedAmount).toBe(100000);
+  });
+  it('the order no longer takes it (cancelled meanwhile): the debit goes back once', async () => {
+    const s = dueSetup();
+    const key = await due(s);
+    s.order.status = 'cancelled';
+    expect(await s.svc.apply(key)).toBe('void');
+    expect(s.user.walletBalance).toBe(100000);
+    expect(s.intents.docs.map((d: Doc) => [d.key, d.state])).toEqual([[key, 'reversed'], [`dueback:${key}`, 'done']]);
+    expect(await s.svc.sweep(later(2 * MIN))).toMatchObject({ applied: 0 });
+    expect(s.user.walletBalance).toBe(100000);
+  });
+  it('crash after the debit, before the order took it: the sweep finishes the payment', async () => {
+    const s = dueSetup();
+    const key = await due(s);
+    s.orders.updateOne.mockImplementationOnce(async () => { throw new Error('connection reset'); });
+    expect(await s.svc.apply(key)).toBe('retry');
+    expect(s.user.walletBalance).toBe(70000);
+    expect(s.order.chargedAmount).toBe(100000);
+    expect(await s.svc.sweep(later(2 * MIN))).toMatchObject({ applied: 0 });
+    expect(s.user.walletBalance).toBe(70000);
+    expect(s.order.chargedAmount).toBe(130000);
+  });
+});

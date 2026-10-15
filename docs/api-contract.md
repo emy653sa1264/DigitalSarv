@@ -1535,7 +1535,7 @@ wallet-credit intent as every other automatic credit.
     Errors: 400 «مبلغی برای پرداخت باقی نمانده است» · 400 «پرداخت مابه‌التفاوت پس از تأیید سفارش ممکن است» (status
     `awaiting_approval` / `pending_payment` / `cancelled` / `delivered`) · 400 «موجودی کیف پول کافی نیست» · 409 «وضعیت سفارش هم‌زمان
     تغییر کرد؛ مبلغ به کیف پول برگشت» (the order changed after the debit; the debit is given back once) · 503 «پرداخت در حال انجام
-    است؛ چند لحظه دیگر سفارش را بررسی کنید» (the sweep finishes it) · 403 «به این سفارش دسترسی ندارید».
+    است؛ چند لحظه دیگر سفارش را بررسی کنید» (the sweep finishes it) · 404 «سفارش یافت نشد» (not the owner - existence never leaks) · 409 «این شناسه درخواست برای پرداخت دیگری استفاده شده است» (the `requestId` was used on another order).
   - in cash at handover: every «تحویل شد» write (courier, provider/admin through the job, admin status) sets
     `chargedAmount = quote.total` and appends `{ kind: 'due_cash', amount }` — like COD, in the same update as `delivered`.
   A gateway payment of a difference is not offered (S3).

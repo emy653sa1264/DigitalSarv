@@ -40,7 +40,7 @@ import { UploadsService } from '../uploads/uploads.service.js';
 import { walletKey } from '../wallet-credits/wallet-credit-model.js';
 import { WalletCreditsService } from '../wallet-credits/wallet-credits.service.js';
 import { User } from '../users/user.schema.js';
-import type { AdminOrdersQueryDto, AssignDto, OrderDraftDto } from './dto/orders.dto.js';
+import type { AdminOrdersQueryDto, AssignDto, OrderDraftDto, PayDueDto } from './dto/orders.dto.js';
 import { applyPlacementEffects } from './order-effects.js';
 import {
   CUSTOMER_CANCELLABLE,
@@ -59,7 +59,7 @@ import {
 } from './order-helpers.js';
 import { deliveryOf, needsHomePickup, resolveDelivery } from './delivery-rules.js';
 import { Order, OrderDocument, type DeferredEffects } from './order.schema.js';
-import { paymentOnDelivery, recountRefund, recountSeq } from './order-money.js';
+import { amountDue, DUE_CLOSED, paymentOnDelivery, recountRefund, recountSeq } from './order-money.js';
 import { pickupProblem } from './pickup-rules.js';
 
 @Injectable()
@@ -307,6 +307,25 @@ export class OrdersService {
     const order = await this.ownOrder(id, user);
     if (order.status !== 'pending_payment') throw new BadRequestException('این سفارش در انتظار پرداخت نیست');
     return { paymentUrl: await this.payments.start(order) };
+  }
+
+  /** D35 (S3): the customer pays a difference due from the wallet - a debit intent the sweep can finish or give back (D34). */
+  async payDue(id: string, user: AuthUser, dto: PayDueDto): Promise<Record<string, unknown>> {
+    const order = await this.findById(id);
+    if (String(order.customerId) !== user.id) throw new NotFoundException('سفارش یافت نشد'); // IDOR: existence never leaks
+    const seen = await this.credits.dueRequest(order.customerId, String(order._id), dto.requestId);
+    if (seen === 'other') throw new ConflictException('این شناسه درخواست برای پرداخت دیگری استفاده شده است');
+    if (seen === 'done') return this.customerView(order); // an idempotent replay of a payment that already succeeded
+    if (DUE_CLOSED.includes(order.status)) throw new BadRequestException('پرداخت مابه‌التفاوت پس از تأیید سفارش ممکن است');
+    const due = amountDue(order);
+    if (!due) throw new BadRequestException('مبلغی برای پرداخت باقی نمانده است');
+    const key = walletKey.due(String(order._id), dto.requestId);
+    await this.credits.prepare({ key, userId: order.customerId, orderId: order._id, orderCode: order.code, amount: -due, cause: 'due_wallet', base: order.chargedAmount ?? 0 });
+    const res = await this.credits.apply(key);
+    if (res === 'insufficient') throw new BadRequestException('موجودی کیف پول کافی نیست');
+    if (res === 'void') throw new ConflictException('وضعیت سفارش هم‌زمان تغییر کرد؛ مبلغ به کیف پول برگشت');
+    if (res !== 'done') throw new ServiceUnavailableException('پرداخت در حال انجام است؛ چند لحظه دیگر سفارش را بررسی کنید');
+    return this.customerView(await this.findById(id));
   }
 
   /** The customer's JSON of an order, with its fulfilment (v4.2; customer-safe fields only). */
