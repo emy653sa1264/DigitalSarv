@@ -94,7 +94,7 @@ describe('ProviderJobsService — workflow (§58–59, §88–89)', () => {
     const afterQc = await s.svc.setQc(String(P), s.id, 0, true);
     expect(afterQc.qc).toEqual({ labels: ['کیفیت چاپ'], done: [true] });
     const ready = await s.svc.setStatus(String(P), s.id, { status: 'ready' } as never, USER);
-    expect(ready.status).toBe('ready');
+    expect((ready as { status: string }).status).toBe('ready');
     expect(s.orders.docs[0].status).toBe('packing');
     await expect(s.svc.setStatus(String(P), s.id, { status: 'out_for_delivery' } as never, USER)).rejects.toThrow(/مجاز نیست/); // courier job
   });
@@ -156,7 +156,7 @@ const ent = (o: Doc) => ({ at: new Date(), action: 'status', byRole: 'provider',
 describe('ProviderJobsService — fix round 1', () => {
   it('I1: a status change carries the assignment id; a stale one is a 409 and changes nothing', async () => {
     const s = setup({ status: 'accepted' });
-    const own = vi.spyOn(s.svc as never, 'own' as never);
+    const own = vi.spyOn(s.svc as never, 'own' as never) as unknown as { mockResolvedValueOnce(v: unknown): void };
     const stale = { ...s.job, assignment: { ...s.job.assignment, id: new Types.ObjectId() } };
     own.mockResolvedValueOnce(stale as never);
     await expect(s.svc.setStatus(String(P), s.id, { status: 'in_production' } as never, USER)).rejects.toThrow('هم‌زمان');

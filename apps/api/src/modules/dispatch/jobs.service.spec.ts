@@ -118,7 +118,7 @@ describe('JobsService.move — the one transition path', () => {
     const r = await Promise.allSettled([s.svc.move(id, 'accepted', asP), s.svc.move(id, 'accepted', asP)]);
     expect(r.filter((x) => x.status === 'fulfilled')).toHaveLength(1);
     expect((r.find((x) => x.status === 'rejected') as PromiseRejectedResult).reason.status).toBe(409);
-    expect(s.notifier.customer.mock.calls.filter(([e]) => e === 'assigned')).toHaveLength(1);
+    expect(s.notifier.customer.mock.calls.filter(([e]: unknown[]) => e === 'assigned')).toHaveLength(1);
   });
 });
 
@@ -145,8 +145,8 @@ describe('JobsService.giveBack (D21) and cancellation', () => {
     const s = setup();
     const id = await heldBy(s, 'in_production');
     s.orders.docs[0].status = 'cancelled';
-    await s.svc.cancelForOrder(s.orders.docs[0]);
-    await s.svc.cancelForOrder(s.orders.docs[0]);
+    await s.svc.cancelForOrder(s.orders.docs[0] as never);
+    await s.svc.cancelForOrder(s.orders.docs[0] as never);
     expect(s.jobs.docs[0]).toMatchObject({ status: 'cancelled', cancel: { stage: 'in_production', byRole: 'admin' } });
     expect(s.notifier.provider).toHaveBeenCalledTimes(1);
     expect(s.notifier.provider).toHaveBeenCalledWith('job_cancelled', P, expect.anything());
@@ -237,7 +237,7 @@ describe('JobsService — races and review fixes', () => {
     expect(await s.svc.onOrderDelivered(s.order._id, 'courier')).toBe(false); // a courier cannot deliver from production
     expect(await s.svc.onOrderDelivered(s.order._id, 'admin')).toBe(true);
     expect(await s.svc.onOrderDelivered(s.order._id, 'admin')).toBe(false);
-    expect(await s.svc.cancelForOrder(s.order)).toBe(false);
+    expect(await s.svc.cancelForOrder(s.order as never)).toBe(false);
   });
   it('a v1 centre that is missing or inactive still holds the migrated job, with a warning', async () => {
     const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
@@ -291,7 +291,7 @@ describe('v4.2 fix round 1', () => {
     const admin = String(new Types.ObjectId());
     const a = setup();
     await heldBy(a, 'in_production');
-    await a.svc.cancelForOrder(a.orders.docs[0], 'admin', admin);
+    await a.svc.cancelForOrder(a.orders.docs[0] as never, 'admin', admin);
     expect(a.jobs.docs[0].history.at(-1)).toMatchObject({ action: 'cancelled', byRole: 'admin' });
     expect(String(a.jobs.docs[0].history.at(-1).by)).toBe(admin);
     const d = setup();

@@ -69,7 +69,7 @@ describe('DispatchService.eligibility (§51–54, §88)', () => {
     expect(e.eligible[0]).toMatchObject({ hasLogin: true, canDeliver: true, deliveryFee: 30000, current: false });
     const a = e.others.find((r) => r.name === 'آزمون A')!;
     expect(a).toMatchObject({ assignable: false, price: { subtotal: null } });
-    expect(a.price.missing[0]).toContain('چاپ رنگی');
+    expect(a.price!.missing[0]).toContain('چاپ رنگی');
     expect(a.checks.find((c) => c.key === 'capability')).toMatchObject({ ok: false, hard: true });
     expect(e.others.find((r) => r.name === 'آزمون F')!.assignable).toBe(false); // delivery-only (§86 F)
     expect(e.deliveryProviders.map((d) => d.name)).toEqual(['آزمون C', 'آزمون F']);
@@ -228,7 +228,7 @@ describe('DispatchService.assign (§54, §88)', () => {
     const r = await Promise.allSettled([1, 2].map(() => s.svc.assign(id, { providerId: String(C) } as never, String(ADMIN))));
     expect(r.filter((x) => x.status === 'fulfilled')).toHaveLength(1);
     expect((r.find((x) => x.status === 'rejected') as PromiseRejectedResult).reason.status).toBe(409);
-    expect(s.notifier.provider.mock.calls.filter(([e]) => e === 'job_assigned')).toHaveLength(1);
+    expect(s.notifier.provider.mock.calls.filter(([e]: unknown[]) => e === 'job_assigned')).toHaveLength(1);
     expect(s.jobsModel.docs[0].attempts).toBe(1);
   });
   it('assigning an assigned job is 409; a cancelled order is 400', async () => {

@@ -333,6 +333,224 @@ describe.skipIf(!servicesUp)('API (e2e)', () => {
     tokens.delete(phone);
   });
 
+  // ---- v4.2 dispatch and fulfillment (§86, §88, §89, §91) ---------------------------------------------
+  const glossy = (pages = 200) => ({ kind: 'color_printing', spec: { pages, scope: 'all', size: 'A4', sides: 'single', copies: 1, colorType: 'full', paper: 'glossy200', binding: 'none', staple: false, laminate: 'none' } });
+  /** A COD print order (no pickup slot, D12). Extra body fields are sent as-is (smuggling tests). */
+  async function placeCod(token: string, services: unknown[], extra: Record<string, unknown> = {}) {
+    const res = await http().post('/api/orders').set(authH(token))
+      .send({ children: [], services, payMethod: 'cod', pickup: { address: 'تهران، خیابان آزمون، پلاک ۲', phone: '09123456789' }, ...extra });
+    expect(res.status, JSON.stringify(res.body)).toBe(201);
+    return res.body as { id: string; code: string };
+  }
+  const cap = (service: string, sizes: string[] = [], papers: string[] = []) => ({
+    service, sizes, colorTypes: service === 'color_printing' ? ['text', 'full'] : [], papers, sides: sizes.length ? ['single', 'double'] : [], addons: [],
+  });
+  /** §86 test providers A–F (find-or-create; profile reset every run) with logins 0912555000N. */
+  async function testProviders(admin: string) {
+    const spec: [string, unknown[], Record<string, unknown>][] = [
+      ['آزمون A', [cap('color_printing', ['A3'], ['glossy200', 'tahrir80'])], {}],
+      ['آزمون B', [cap('black_white_printing', ['A4'])], {}],
+      ['آزمون C', [cap('color_printing', ['A4'], ['glossy200'])], { canDeliver: true, deliveryFee: 30000 }],
+      ['آزمون D', [cap('school'), cap('docs')], {}],
+      ['آزمون E', [cap('color_printing', ['A3', 'A4'], ['tahrir80'])], {}],
+      ['آزمون F', [], { canDeliver: true, deliveryFee: 20000 }],
+    ];
+    const ids = await providersByName(admin);
+    const out: Record<string, { id: string; phone: string }> = {};
+    let linked = false;
+    for (const [i, [name, capabilities, extra]] of spec.entries()) {
+      const body = { name, status: 'active', availableForOrders: true, workingHours: [], serviceZoneIds: [], capacity: { perService: [] }, capabilities, canDeliver: false, deliveryFee: 0, ...extra };
+      const id = ids.get(name) ?? ((await http().post('/api/admin/providers').set(authH(admin)).send(body).expect(201)).body.id as string);
+      await http().patch(`/api/admin/providers/${id}`).set(authH(admin)).send(body).expect(200);
+      const phone = `0912555000${i + 1}`;
+      const p = (await http().get(`/api/admin/providers/${id}`).set(authH(admin)).expect(200)).body;
+      if (p.login?.phone !== phone) {
+        await http().put(`/api/admin/providers/${id}/login`).set(authH(admin)).send({ phone }).expect(200);
+        tokens.delete(phone);
+        linked = true;
+      }
+      out[name.slice(-1)] = { id, phone };
+    }
+    if (linked) await new Promise((r) => setTimeout(r, 1100)); // linking revokes earlier tokens (per-second iat)
+    return out;
+  }
+  const jobOf = async (admin: string, orderId: string) => (await http().get(`/api/admin/dispatch/jobs/${orderId}`).set(authH(admin)).expect(200)).body;
+
+  it('§86 + §88: only capable providers can receive it; C accepts, produces, delivers; the admin completes', async () => {
+    const admin = await login('09120000000');
+    const cust = await login('09123456789');
+    const P = await testProviders(admin);
+    await http().post('/api/admin/price-book/versions').set(authH(admin))
+      .send({ layer: 'provider', providerId: P.C.id, comboKey: 'color|A4|full|glossy200|single', mode: 'manual', price: 8000, publish: true, reason: 'e2e §88', confirmNegativeMargin: true }).expect(201);
+    const order = await placeCod(cust, [glossy()]);
+    const job = await jobOf(admin, order.id);
+    expect(job).toMatchObject({ status: 'unassigned', homePickup: false, sheets: 200 });
+
+    const e = (await http().get(`/api/admin/dispatch/jobs/${job.id}/eligibility`).set(authH(admin)).expect(200)).body;
+    const tests = [...e.eligible, ...e.others].filter((r: any) => r.name.startsWith('آزمون'));
+    expect(tests.filter((r: any) => r.assignable).map((r: any) => r.name)).toEqual(['آزمون C']); // A, B, D, E, F cannot fulfil it
+    expect(e.eligible.find((r: any) => r.name === 'آزمون C').price.subtotal).toBe(1_600_000);
+    const noPrice = tests.find((r: any) => r.name === 'آزمون E');
+    expect(noPrice.price.subtotal).toBeNull(); // «قیمت مجری تنظیم نشده», never 0 (§53)
+    await http().post(`/api/admin/dispatch/jobs/${job.id}/assign`).set(authH(admin)).send({ providerId: P.A.id, override: true, reason: 'e2e' }).expect(400);
+
+    const assigned = (await http().post(`/api/admin/dispatch/jobs/${job.id}/assign`).set(authH(admin)).send({ providerId: P.C.id, deliveryMethod: 'provider' }).expect(200)).body;
+    expect(assigned).toMatchObject({ status: 'assigned', deliveryMethod: 'provider', providerPricing: { providerSubtotal: 1_600_000, payoutBasis: 1_630_000 } });
+
+    const c = await login(P.C.phone);
+    const inbox = (await http().get('/api/notifications/mine').set(authH(c)).expect(200)).body;
+    expect(inbox.items.some((n: any) => n.event === 'job_assigned' && n.jobId === job.id && n.audience === 'provider')).toBe(true); // §88 «C receives notification»
+    const step = async (status: string) => (await http().post(`/api/provider/jobs/${job.id}/status`).set(authH(c)).send({ status }).expect(200)).body;
+    expect((await http().post(`/api/provider/jobs/${job.id}/accept`).set(authH(c)).expect(200)).body.status).toBe('accepted');
+    await step('in_production');
+    const detail = (await http().get(`/api/provider/jobs/${job.id}`).set(authH(c)).expect(200)).body;
+    for (let i = 0; i < detail.qc.labels.length; i++) await http().patch(`/api/provider/jobs/${job.id}/qc`).set(authH(c)).send({ index: i, done: true }).expect(200);
+    await step('ready');
+    expect((await http().get(`/api/orders/${order.id}`).set(authH(cust)).expect(200)).body).toMatchObject({ status: 'packing', fulfillment: { status: 'ready', label: 'آماده شد' } });
+    await step('out_for_delivery');
+    await step('delivered');
+    const done = (await http().get(`/api/orders/${order.id}`).set(authH(cust)).expect(200)).body;
+    expect(done).toMatchObject({ status: 'delivered', paid: true, paidVia: 'cod' });
+    expect(JSON.stringify(done)).not.toMatch(/centerId|providerPricing|providerId|آزمون C/);
+    const completed = (await http().post(`/api/admin/dispatch/jobs/${job.id}/status`).set(authH(admin)).send({ status: 'completed', reason: 'e2e' }).expect(200)).body;
+    expect(completed.status).toBe('completed');
+    expect(completed.history.map((h: any) => h.status)).toEqual(expect.arrayContaining(['assigned', 'accepted', 'in_production', 'ready', 'out_for_delivery', 'delivered', 'completed']));
+  });
+
+  it('courier-method job: the courier collects it ready at the provider, then delivers (D15)', async () => {
+    const admin = await login('09120000000');
+    const cust = await login('09123456789');
+    const P = await testProviders(admin);
+    const order = await placeCod(cust, [glossy(10)]);
+    const { id } = await jobOf(admin, order.id);
+    await http().post(`/api/admin/dispatch/jobs/${id}/assign`).set(authH(admin)).send({ providerId: P.C.id, deliveryMethod: 'courier', confirmMissingPrice: true }).expect(200);
+    const couriers = (await http().get('/api/admin/couriers').set(authH(admin)).expect(200)).body as any[];
+    const courierId = couriers.find((x) => x.phone === '09121111111')?.id ?? couriers[0].id;
+    await http().patch(`/api/admin/orders/${order.id}/assign`).set(authH(admin)).send({ courierId }).expect(200);
+    const c = await login(P.C.phone);
+    await http().post(`/api/provider/jobs/${id}/accept`).set(authH(c)).expect(200);
+    await http().post(`/api/provider/jobs/${id}/status`).set(authH(c)).send({ status: 'in_production' }).expect(200);
+    const detail = (await http().get(`/api/provider/jobs/${id}`).set(authH(c)).expect(200)).body;
+    for (let i = 0; i < detail.qc.labels.length; i++) await http().patch(`/api/provider/jobs/${id}/qc`).set(authH(c)).send({ index: i, done: true }).expect(200);
+    await http().post(`/api/provider/jobs/${id}/status`).set(authH(c)).send({ status: 'ready' }).expect(200);
+    expect((await jobOf(admin, id)).status).toBe('ready');
+    const courier = await login('09121111111');
+    await http().post(`/api/courier/orders/${order.id}/collected`).set(authH(courier)).expect(200);
+    expect((await jobOf(admin, id)).status).toBe('out_for_delivery');
+    await http().post(`/api/courier/orders/${order.id}/delivered`).set(authH(courier)).expect(200);
+    expect((await jobOf(admin, id)).status).toBe('delivered');
+  });
+
+  it('provider file access: the holder downloads while the job is held; another provider gets 403 (§65)', async () => {
+    const admin = await login('09120000000');
+    const cust = await login('09123456789');
+    const P = await testProviders(admin);
+    const up = await http().post('/api/uploads?purpose=docs').set(authH(cust))
+      .attach('file', Buffer.from('%PDF-1.4\n%%EOF\n'), { filename: 'e2e2.pdf', contentType: 'application/pdf' }).expect(201);
+    const order = await placeCod(cust, [{ kind: 'color_printing', spec: { ...glossy(1).spec, fileId: up.body.id } }]);
+    const { id } = await jobOf(admin, order.id);
+    await http().post(`/api/admin/dispatch/jobs/${id}/assign`).set(authH(admin)).send({ providerId: P.C.id, confirmMissingPrice: true }).expect(200);
+    const c = await login(P.C.phone);
+    const e = await login(P.E.phone);
+    await http().get(`/api/uploads/${up.body.id}`).set(authH(c)).expect(200);
+    await http().get(`/api/uploads/${up.body.id}`).set(authH(e)).expect(403);
+    await http().patch(`/api/admin/orders/${order.id}/status`).set(authH(admin)).send({ status: 'cancelled' }).expect(200);
+  });
+
+  it('§89: the rejection is recorded with reason and time, returns to the queue, the admin reassigns, the history keeps the previous provider', async () => {
+    const admin = await login('09120000000');
+    const cust = await login('09123456789');
+    const P = await testProviders(admin);
+    const order = await placeCod(cust, [glossy(10)]);
+    const { id } = await jobOf(admin, order.id);
+    await http().post(`/api/admin/dispatch/jobs/${id}/assign`).set(authH(admin)).send({ providerId: P.C.id, confirmMissingPrice: true }).expect(200);
+    const c = await login(P.C.phone);
+    await http().post(`/api/provider/jobs/${id}/reject`).set(authH(c)).send({ reasonCode: 'other' }).expect(400);
+    await http().post(`/api/provider/jobs/${id}/reject`).set(authH(c)).send({ reasonCode: 'equipment_unavailable' }).expect(200);
+    const back = await jobOf(admin, id);
+    expect(back).toMatchObject({ status: 'unassigned', lastException: { kind: 'rejected', reason: 'تجهیزات در دسترس نیست', providerName: 'آزمون C' } });
+    expect(back.assignments[0]).toMatchObject({ providerName: 'آزمون C', outcome: 'rejected', reasonCode: 'equipment_unavailable', rejectedAt: expect.any(String) });
+    const alerts = (await http().get('/api/notifications/mine').set(authH(admin)).expect(200)).body;
+    expect(alerts.items.some((n: any) => n.event === 'job_rejected' && n.jobId === id && n.audience === 'admin')).toBe(true);
+
+    const negin = (await providersByName(admin)).get('چاپ نگین')!;
+    const again = (await http().post(`/api/admin/dispatch/jobs/${id}/assign`).set(authH(admin))
+      .send({ providerId: negin, override: true, reason: 'e2e §89 (ساعت کاری)', confirmMissingPrice: true }).expect(200)).body;
+    expect(again.assignments.map((a: any) => [a.providerName, a.outcome])).toEqual([['آزمون C', 'rejected'], ['چاپ نگین', 'pending']]);
+    await http().get(`/api/provider/jobs/${id}`).set(authH(c)).expect(404);
+    const stubs = (await http().get('/api/provider/jobs?tab=cancelled').set(authH(c)).expect(200)).body.items as any[];
+    expect(stubs.find((s) => s.id === id)).toEqual({ id, orderCode: order.code, withdrawn: true, at: expect.any(String), label: 'رد شده توسط شما' });
+    await http().patch(`/api/admin/orders/${order.id}/status`).set(authH(admin)).send({ status: 'cancelled' }).expect(200); // keep the demo provider clean
+  });
+
+  it('§91: IDOR through job / order / file ids, another provider’s assignment, a smuggled provider id, internal data', async () => {
+    const admin = await login('09120000000');
+    const cust = await login('09123456789');
+    const P = await testProviders(admin);
+    const up = await http().post('/api/uploads?purpose=docs').set(authH(cust))
+      .attach('file', Buffer.from('%PDF-1.4\n%%EOF\n'), { filename: 'e2e.pdf', contentType: 'application/pdf' }).expect(201);
+    const order = await placeCod(cust, [{ kind: 'color_printing', spec: { ...glossy(1).spec, fileId: up.body.id } }], { centerId: P.C.id, providerId: P.C.id });
+    expect((await http().get(`/api/admin/orders/${order.id}`).set(authH(admin)).expect(200)).body.centerId).toBeUndefined(); // customer changing provider_id
+    const { id, status } = await jobOf(admin, order.id);
+    expect(status).toBe('unassigned');
+    await http().post(`/api/admin/dispatch/jobs/${id}/assign`).set(authH(admin)).send({ providerId: P.C.id, confirmMissingPrice: true }).expect(200);
+    const a = await login(P.A.phone);
+    const c = await login(P.C.phone);
+    await http().get(`/api/provider/jobs/${id}`).set(authH(a)).expect(404);
+    await http().get(`/api/provider/jobs/${order.id}`).set(authH(a)).expect(404);
+    await http().post(`/api/provider/jobs/${id}/accept`).set(authH(a)).expect(404);
+    await http().post(`/api/provider/jobs/${id}/status`).set(authH(a)).send({ status: 'in_production' }).expect(404);
+    await http().patch(`/api/provider/jobs/${id}/qc`).set(authH(a)).send({ index: 0, done: true }).expect(404);
+    await http().get(`/api/uploads/${up.body.id}`).set(authH(a)).expect(403);
+    await http().get(`/api/uploads/${up.body.id}`).set(authH(c)).expect(200);
+    const view = (await http().get(`/api/provider/jobs/${id}`).set(authH(c)).expect(200)).body;
+    expect(JSON.stringify(view)).not.toMatch(/"price"|quote|chargedAmount|09123456789|margin|آزمون A|customerPhone/);
+    await http().get('/api/admin/dispatch/jobs').set(authH(c)).expect(403);
+    await http().get('/api/admin/dispatch/jobs').set(authH(cust)).expect(403);
+    await http().get('/api/provider/jobs').set(authH(cust)).expect(403);
+    expect(JSON.stringify((await http().get(`/api/orders/${order.id}`).set(authH(cust)).expect(200)).body)).not.toMatch(/centerId|providerPricing|providerId/);
+    await http().patch(`/api/admin/orders/${order.id}/status`).set(authH(admin)).send({ status: 'cancelled' }).expect(200);
+    expect((await http().get(`/api/provider/jobs/${id}`).set(authH(c)).expect(200)).body.status).toBe('cancelled');
+    await http().get(`/api/uploads/${up.body.id}`).set(authH(c)).expect(403); // no file access after cancellation
+  });
+
+  it('D12/D17/D22: a print order can be picked up at a Digital Sarv point; the quote is identical to M2', async () => {
+    const cust = await login('09123456789');
+    const cat = (await http().get('/api/catalog').expect(200)).body;
+    const point = cat.pickupPoints?.[0];
+    expect(point, 'pnpm seed adds «دفتر مرکزی دیجیتال سرو»').toBeTruthy();
+    const draft = { children: [], services: [glossy(2)], delivery: { method: 'customer_pickup', pickupPointId: point.id } };
+    const q = (await http().post('/api/orders/quote').send(draft).expect(200)).body;
+    const m2 = (await http().post('/api/orders/quote').send({ children: [], services: draft.services }).expect(200)).body;
+    expect(q).toEqual(m2); // D22: the delivery choice never changes fees or totals
+    expect(q).not.toHaveProperty('homePickup');
+    await http().post('/api/orders').set(authH(cust)).send({ ...draft, delivery: { method: 'customer_pickup', pickupPointId: 'nope' }, payMethod: 'cod', pickup: { phone: '09123456789' } }).expect(400);
+    const order = await placeCod(cust, draft.services, { delivery: draft.delivery, pickup: { phone: '09123456789' } });
+    const got = (await http().get(`/api/orders/${order.id}`).set(authH(cust)).expect(200)).body;
+    expect(got).toMatchObject({ delivery: { method: 'customer_pickup', homePickup: false, pickupPoint: { id: point.id } }, fulfillment: { status: 'unassigned', place: { id: point.id } } });
+    const admin = await login('09120000000');
+    await http().patch(`/api/admin/orders/${order.id}/status`).set(authH(admin)).send({ status: 'cancelled' }).expect(200);
+  });
+
+  it('§81: dispatch permissions apply — view-only staff cannot assign', async () => {
+    const admin = await login('09120000000');
+    const phone = '09127777778';
+    const list = (await http().get('/api/admin/staff').set(authH(admin)).expect(200)).body as any[];
+    const existing = list.find((s) => s.phone === phone);
+    const member = existing
+      ? (await http().patch(`/api/admin/staff/${existing.id}`).set(authH(admin)).send({ permissions: ['dispatch_view'] }).expect(200)).body
+      : (await http().post('/api/admin/staff').set(authH(admin)).send({ phone, name: 'e2e dispatch', permissions: ['dispatch_view'] }).expect(201)).body;
+    await new Promise((r) => setTimeout(r, 1100));
+    tokens.delete(phone);
+    const staff = await login(phone);
+    await http().get('/api/admin/dispatch/jobs?tab=unassigned').set(authH(staff)).expect(200);
+    await http().post('/api/admin/dispatch/jobs/000000000000000000000000/assign').set(authH(staff)).send({ providerId: '000000000000000000000000' }).expect(403); // the permission guard answers first
+    await http().get('/api/admin/dispatch/performance').set(authH(staff)).expect(403);
+    await new Promise((r) => setTimeout(r, 1100));
+    await http().delete(`/api/admin/staff/${member.id}`).set(authH(admin)).expect(200);
+    tokens.delete(phone);
+  });
+
   it('protects admin routes', async () => {
     await request(app.getHttpServer()).get('/api/admin/dashboard').expect(401);
   });

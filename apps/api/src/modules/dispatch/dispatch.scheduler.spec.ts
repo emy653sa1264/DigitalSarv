@@ -46,7 +46,7 @@ describe('DispatchScheduler (D21)', () => {
     const r = await Promise.allSettled([s.sched.timeouts(NOW), s.jobs.move(s.id, 'accepted', { actor: 'production', byRole: 'provider', providerId: String(P) })]);
     const status = s.jobsModel.docs[0].status;
     expect(['accepted', 'unassigned']).toContain(status);
-    const timeoutAlerts = s.notifier.admins.mock.calls.filter(([e]) => e === 'job_timeout').length;
+    const timeoutAlerts = s.notifier.admins.mock.calls.filter(([e]: unknown[]) => e === 'job_timeout').length;
     if (status === 'accepted') {
       expect(timeoutAlerts).toBe(0);
     } else {
