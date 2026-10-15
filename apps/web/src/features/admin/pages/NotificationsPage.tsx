@@ -4,6 +4,7 @@ import { notify, toast } from '@/components/ui/sonner'
 import { Textarea } from '@/components/ui/textarea'
 import { DISPATCH_EVENTS_ORDER, LEDGER_EVENTS_ORDER, NOTIFICATION_AUDIENCE_LABEL, NOTIFICATION_EVENT_LABEL, audienceOfEvent } from '@/lib/dispatch-labels'
 import type { NotificationAudience, NotificationEvent, NotificationTemplate } from '@/lib/types'
+import { faText } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { useNotificationMutations, useNotificationTemplates } from '../api'
 import { AddButton, AdminSelect, ConfirmDelete } from '../components/controls'
@@ -60,7 +61,7 @@ export function NotificationsPage() {
                   <div key={n.id} className="flex flex-wrap items-center gap-3 border-t border-line-soft py-[13px] first:border-t-0 sm:flex-nowrap">
                     <span className={cn('shrink-0 rounded-full px-[11px] py-[5px] text-center text-[11px] font-extrabold', ch.className)}>{ch.label}</span>
                     <div className="min-w-0 flex-1 basis-[200px]">
-                      <div className={cn('text-sm font-semibold', !n.on && 'text-muted-3')}>{n.text}</div>
+                      <div className={cn('text-sm font-semibold', !n.on && 'text-muted-3')}>{faText(n.text)}</div>
                       <div className="text-[11.5px] text-muted-3">{NOTIFICATION_EVENT_LABEL(n.event)}</div>
                     </div>
                     <button

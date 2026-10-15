@@ -5,7 +5,7 @@ import { EmptyState, ErrorState, InfoBanner, LoadingBlock, MobileHeader, Panel, 
 import { Button } from '@/components/ui/button'
 import { notify, toast } from '@/components/ui/sonner'
 import { api, isAbortError, uploadAccept, uploadProblem } from '@/lib/api'
-import { fa } from '@/lib/format'
+import { fa, faText } from '@/lib/format'
 import { ORDER_STATUS_LABEL, type Order, type Upload } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { useCourierOrder, useCourierTasks, useVerifyPickup } from './api'
@@ -226,7 +226,7 @@ function VerifyForm({ order }: { order: Order }) {
             <div key={i} className="flex justify-between gap-2.5 border-t border-line-soft py-2 text-[13px] first:border-t-0">
               <span className="font-bold">{s.label}</span>
               <span className="min-w-0 text-end text-muted-2">
-                <bdi>{s.detail}</bdi>
+                <bdi>{faText(s.detail)}</bdi>
               </span>
             </div>
           ))}

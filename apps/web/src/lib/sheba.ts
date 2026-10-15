@@ -1,4 +1,4 @@
-import { toEnDigits } from '@/lib/format'
+import { fa, toEnDigits } from '@/lib/format'
 
 const SHAPE = /^IR\d{24}$/
 
@@ -17,4 +17,4 @@ export function shebaProblem(raw: string): string | null {
 }
 
 /** `IR06 2960 0000 …` — always render inside `dir="ltr"`. */
-export const groupSheba = (s: string) => s.replace(/(.{4})(?=.)/g, '$1 ')
+export const groupSheba = (s: string) => fa(s.replace(/(.{4})(?=.)/g, '$1 '))

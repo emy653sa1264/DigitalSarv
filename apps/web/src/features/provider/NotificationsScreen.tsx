@@ -2,7 +2,7 @@ import { useNavigate } from 'react-router'
 import { Bell } from 'lucide-react'
 import { EmptyState, LoadingBlock, MobileHeader, Panel, ScreenBody } from '@/components/brand'
 import { PushRow } from '@/components/notifications/PushRow'
-import { fa, when } from '@/lib/format'
+import { fa, faText, when } from '@/lib/format'
 import { useInbox, useMarkInboxRead } from '@/lib/notifications'
 import { cn } from '@/lib/utils'
 import { ProviderError } from './ProviderError'
@@ -27,7 +27,7 @@ export function NotificationsScreen() {
               {inbox.data.items.map((n) => (
                 <button key={n.id} type="button" onClick={() => { if (!n.read) markRead.mutate([n.id]); navigate(n.url) }}
                   className={cn('cursor-pointer rounded-[20px] border border-line bg-white p-3.5 text-start', !n.read && 'border-cyan/40 bg-cyan-soft/40')}>
-                  <div className="text-[13.5px] font-bold">{n.text}</div>
+                  <div className="text-[13.5px] font-bold">{faText(n.text)}</div>
                   <div className="mt-1 text-[11.5px] text-muted-2">{n.orderCode ? `سفارش ${fa(n.orderCode)} · ` : ''}{when(n.createdAt)}</div>
                 </button>
               ))}

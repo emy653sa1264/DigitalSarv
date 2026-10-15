@@ -72,3 +72,12 @@ export function when(iso: string | Date): string {
     day: 'numeric', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'Asia/Tehran',
   }).format(new Date(iso))
 }
+
+/**
+ * Free text from the database (catalog and extra names, campaign / CMS / notification text): standalone digit runs become
+ * Persian digits; digits inside a token with Latin letters (HP 85A, SCHOOL14, #2f6df6) are identifiers and stay as they are.
+ */
+export function faText(value: string | null | undefined): string {
+  if (!value) return ''
+  return value.replace(/(?<![A-Za-z0-9#])\d+(?![A-Za-z0-9])/g, (run) => fa(run))
+}

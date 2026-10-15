@@ -22,7 +22,7 @@ describe.each(VIEWPORTS)('admin panel at $name', (vp) => {
   it('§92 «مرکز تخصیص سفارش» shows its heading', async () => {
     const o = await openPage(vp, { sessions: { admin: await session(PHONES.admin) } })
     await visit(o, '/admin/dispatch', `admin-dispatch-${vp.name}`)
-    await o.page.getByText('مرکز تخصیص سفارش').first().waitFor()
+    await o.page.getByRole('heading', { name: 'مرکز تخصیص سفارش' }).waitFor() // the sidebar item of the same name is hidden on a phone
     await o.context.close()
   })
 

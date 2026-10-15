@@ -2,7 +2,7 @@ import { useState, type ComponentProps, type ReactNode } from 'react'
 import { Minus, Pencil, Plus, Trash, X } from 'lucide-react'
 import { GradientBadge, TONES, type BrandTone } from '@/components/brand'
 import { Button } from '@/components/ui/button'
-import { discount, fa, money, toNum } from '@/lib/format'
+import { discount, fa, faText, money, toNum } from '@/lib/format'
 import type { Quote, QuoteLine, Tone } from '@/lib/types'
 import { cn } from '@/lib/utils'
 
@@ -194,7 +194,7 @@ export function QuoteLines({ quote, dense = false }: { quote: Quote; dense?: boo
     <>
       {quote.lines.map((line) => (
         <div key={line.key} className={cn('flex justify-between gap-2.5', dense ? 'py-1 text-[13px]' : 'py-[5px] text-[13.5px]')}>
-          <span className="text-muted-1">{line.label}</span>
+          <span className="text-muted-1">{faText(line.label)}</span>
           <span className={cn('font-bold', line.accent || line.amount < 0 ? 'text-green-dark' : 'text-ink')}>{lineValue(line)}</span>
         </div>
       ))}

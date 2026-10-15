@@ -57,7 +57,7 @@ function OrderDetail({ id }: { id: string }) {
           <div className="mt-1 flex flex-wrap items-center gap-2">
             <StatusTag status={order.status} />
             <span dir="ltr" className="text-[12.5px] font-bold text-muted-2">
-              {order.customerPhone}
+              {fa(order.customerPhone)}
             </span>
             {order.urgent && <span className="rounded-full bg-pink-soft px-2.5 py-1 text-[11px] font-extrabold text-pink-ink">فوری</span>}
           </div>
@@ -443,7 +443,7 @@ function PickupCard({ order }: { order: Order }) {
     <Section title="تحویل‌گیری">
       <Row label="آدرس" value={<span className="block max-w-[260px] text-end leading-6">{p.address}</span>} />
       <Row label="تاریخ و بازه" value={`${p.date ? jalali(p.date) : '—'} · ${p.slot}`} />
-      <Row label="تلفن" value={<span dir="ltr">{p.phone}</span>} />
+      <Row label="تلفن" value={<span dir="ltr">{fa(p.phone)}</span>} />
       {order.zone && <Row label="منطقه" value={order.zone} />}
       {order.collectedCount !== undefined && <Row label="شمارش پیک" value={`${fa(order.collectedCount)} کتاب`} />}
     </Section>

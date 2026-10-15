@@ -2,7 +2,7 @@ import { useLocation, useNavigate } from 'react-router'
 import { ChevronLeft, Crown } from 'lucide-react'
 import { GradientBadge } from '@/components/brand'
 import { notify } from '@/components/ui/sonner'
-import { fa } from '@/lib/format'
+import { fa, faText } from '@/lib/format'
 import { useCatalog } from '@/lib/query'
 import { cn } from '@/lib/utils'
 import { useDraft } from '@/stores/draft'
@@ -39,11 +39,11 @@ export function CampaignBanner({ className }: { className?: string }) {
         <Crown className="size-[22px]" strokeWidth={2.4} />
       </GradientBadge>
       <span className="relative min-w-0 flex-1">
-        <span className="block text-[15px] font-extrabold">{campaign.title}</span>
+        <span className="block text-[15px] font-extrabold">{faText(campaign.title)}</span>
         <span className="mt-0.5 block text-[12.5px] text-[#d5cbff]">
           {on
             ? `کد ${campaign.code} فعال است · ${fa(campaign.couponPct)}٪ تخفیف روی این سفارش`
-            : campaign.bannerNote || `${fa(campaign.couponPct)}٪ تخفیف با کد ${campaign.code} — برای فعال‌سازی بزنید`}
+            : faText(campaign.bannerNote) || `${fa(campaign.couponPct)}٪ تخفیف با کد ${campaign.code} — برای فعال‌سازی بزنید`}
         </span>
       </span>
       <ChevronLeft className="relative size-[18px] shrink-0 text-[#d5cbff]" strokeWidth={2.6} />

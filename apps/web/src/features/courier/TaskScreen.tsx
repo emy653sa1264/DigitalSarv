@@ -5,7 +5,7 @@ import { EmptyState, ErrorState, InfoBanner, LoadingBlock, MobileHeader, Panel, 
 import { Button } from '@/components/ui/button'
 import { notify } from '@/components/ui/sonner'
 import { ApiError } from '@/lib/api'
-import { fa } from '@/lib/format'
+import { fa, faText } from '@/lib/format'
 import { ORDER_STATUS_LABEL, type CourierTask, type Order } from '@/lib/types'
 import { useCourierOrder, useCourierTasks, useMarkCollected, useMarkDelivered } from './api'
 import { ContentRow, PrimaryAction } from './components'
@@ -171,7 +171,7 @@ function TaskDetail({ order, kind, task }: { order: Order; kind: TaskKind; task?
           <ContentRow key={`c${i}`} label={`${c.name} — ${c.grade}`} value={`${fa(c.books)} کتاب`} />
         ))}
         {order.services.map((s, i) => (
-          <ContentRow key={`s${i}`} label={s.label} value={<bdi>{s.detail}</bdi>} />
+          <ContentRow key={`s${i}`} label={s.label} value={<bdi>{faText(s.detail)}</bdi>} />
         ))}
         {order.children.length === 0 && order.services.length === 0 && <div className="text-[13px] opacity-80">موردی ثبت نشده است.</div>}
       </div>

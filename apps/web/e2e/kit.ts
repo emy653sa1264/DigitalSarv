@@ -91,7 +91,8 @@ export async function checkPage(o: Opened, label: string) {
       const el = n.parentElement
       if (!el || el.closest('script,style,noscript,input,textarea,code,[data-ascii]')) continue
       if (!el.getClientRects().length) continue // not rendered
-      const text = (n.textContent ?? '').replace(allow, '')
+      // a whitespace-delimited token with Latin letters (HP 85A, SCHOOL14, #2f6df6) is an identifier read verbatim (R15-1)
+      const text = (n.textContent ?? '').replace(allow, '').split(/\s+/).filter((t) => !/[A-Za-z]/.test(t)).join(' ')
       for (const d of text.match(/\d+/g) ?? []) ascii.push(`${d} in «${text.trim().slice(0, 40)}»`)
     }
     return { dir: html.getAttribute('dir'), lang: html.getAttribute('lang'), overflow: html.scrollWidth - window.innerWidth, ascii: ascii.slice(0, 5), title: document.title }

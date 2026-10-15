@@ -2,6 +2,7 @@ import { NavLink, useNavigate } from 'react-router'
 import { LogOut } from 'lucide-react'
 import { GradientBadge, TreeIcon } from '@/components/brand'
 import { notify } from '@/components/ui/sonner'
+import { fa } from '@/lib/format'
 import { useLogout } from '@/lib/query'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/stores/auth'
@@ -69,7 +70,7 @@ export function SidebarContent({ onNavigate }: { onNavigate?: () => void }) {
           <div className="px-3 pb-2 text-[12px] leading-6 text-[#7b839a]">
             <div className="font-bold text-[#c6cbdc]">{user.name || 'مدیر سیستم'}</div>
             <div dir="ltr" className="text-end">
-              {user.phone}
+              {fa(user.phone)}
             </div>
           </div>
         )}

@@ -30,6 +30,7 @@ describe.each(VIEWPORTS)('customer app at $name', (vp) => {
     const o = await openPage(vp)
     await visit(o, '/app/login', `customer-login-${vp.name}`)
     await o.page.fill('#login-phone', PHONES.customer)
+    await o.page.getByRole('checkbox').click() // the terms must be accepted before a code is sent
     const requested = o.page.waitForResponse((r) => r.url().endsWith('/api/auth/otp/request'))
     await o.page.locator('button[type=submit]').first().click()
     await requested

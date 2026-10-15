@@ -50,7 +50,7 @@ export function CustomersPage() {
               <AdminRow key={c.id} className={query.isPlaceholderData ? 'opacity-60' : undefined}>
                 <span className="truncate font-bold">{c.name || '—'}</span>
                 <span dir="ltr" className="text-end text-muted-2">
-                  {c.phone}
+                  {fa(c.phone)}
                 </span>
                 <span className="text-muted-2">{c.planTitle}</span>
                 <span className="text-muted-2">{fa(c.ordersCount)}</span>

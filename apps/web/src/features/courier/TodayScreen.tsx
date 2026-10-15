@@ -2,7 +2,7 @@ import { useNavigate } from 'react-router'
 import { Route } from 'lucide-react'
 import { EmptyState, ErrorState, LoadingBlock, MobileHeader, ScreenBody, ToneTag } from '@/components/brand'
 import { Button } from '@/components/ui/button'
-import { fa, money } from '@/lib/format'
+import { fa, faText, money } from '@/lib/format'
 import type { CourierTask } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { useCourierTasks } from './api'
@@ -80,7 +80,7 @@ function TaskCard({ task }: { task: CourierTask }) {
       <div className="mt-[3px] text-[12.5px] leading-[1.6] text-muted-2">{task.address}</div>
       {task.from && <div className="mt-1 text-[12.5px] font-bold text-accent">دریافت از: {task.from.name}</div>}
       {task.dropoff && !done && <div className="mt-1 text-[12.5px] font-bold text-cyan-dark">تحویل به مجری: {task.dropoff.name}</div>}
-      <div className="mt-2 text-[12.5px] font-extrabold text-green-dark">{task.detail}</div>
+      <div className="mt-2 text-[12.5px] font-extrabold text-green-dark">{faText(task.detail)}</div>
       {!!task.collect && !done && <div className="mt-1 text-[12.5px] font-black text-amber-ink">دریافت نقدی هنگام تحویل: {money(task.collect)}</div>}
       <div className="mt-3 flex gap-2">
         <Button variant="secondary" size="sm" className="h-10 flex-1" onClick={open}>

@@ -2,7 +2,7 @@ import { useNavigate } from 'react-router'
 import { Bell } from 'lucide-react'
 import { EmptyState, ErrorState, LoadingBlock } from '@/components/brand'
 import { notify } from '@/components/ui/sonner'
-import { fa, jalali, jalaliDayTime } from '@/lib/format'
+import { fa, faText, jalali, jalaliDayTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { Screen } from '../components/Screen'
 import { useMarkRead, useNotifications } from '../hooks/notifications'
@@ -59,7 +59,7 @@ export function NotificationsScreen() {
                       {jalali(n.createdAt, { day: 'numeric', month: 'long' })} · {jalaliDayTime(n.createdAt)}
                     </span>
                   </span>
-                  <span className={cn('mt-1 block text-[13px] leading-[1.7]', n.read ? 'text-muted-2' : 'text-ink')}>{n.text}</span>
+                  <span className={cn('mt-1 block text-[13px] leading-[1.7]', n.read ? 'text-muted-2' : 'text-ink')}>{faText(n.text)}</span>
                   {!n.read && <span className="sr-only">خوانده‌نشده</span>}
                 </span>
               </button>
