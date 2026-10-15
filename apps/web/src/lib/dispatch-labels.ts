@@ -58,3 +58,23 @@ export const JOB_OPTION_LABEL: Record<string, string> = {
   grade: 'پایه', books: 'کتاب', color: 'رنگ فنر', lined: 'برگ خط‌دار', linedCount: 'تعداد برگ خط‌دار', linedPos: 'محل برگ خط‌دار', labelText: 'متن برچسب',
   brief_business: 'نام کسب‌وکار', brief_phone: 'تلفن روی تراکت', brief_address: 'آدرس روی تراکت', brief_social: 'شبکه اجتماعی', brief_text: 'متن تراکت',
 }
+
+const SIDES = { single: 'یک‌رو', double: 'دورو' }
+const BINDING = { none: 'بدون', spiral: 'فنری', glue: 'ته‌چسب', hardcover: 'گالینگور' }
+/** Persian labels for the enum-valued keys of `ProviderJobLine.options` (what job-json.ts sends); unknown values fall back to raw. */
+export const JOB_OPTION_VALUE_LABEL: Record<string, Record<string, string>> = {
+  linedPos: { all: 'همه صفحه‌ها', range: 'بازه‌ی مشخص' },
+  scope: { all: 'همه صفحه‌ها', range: 'بازه‌ی مشخص' },
+  sides: SIDES,
+  ink: { bw: 'سیاه‌وسفید', color: 'همه رنگی', mixed: 'ترکیبی', mono: 'سیاه‌وسفید' },
+  binding: BINDING,
+  colorType: { text: 'متن رنگی', full: 'تمام‌رنگی' },
+  laminate: { none: 'بدون', cover: 'لمینت جلد', all: 'لمینت هر برگ' },
+  mode: { have: 'طراحی دارم', need: 'طراحی ندارم' },
+  cartType: { laserBw: 'لیزری سیاه', laserColor: 'لیزری رنگی', inkjet: 'جوهرافشان' },
+  device: { laser: 'لیزری', inkjet: 'جوهرافشان', mfp: 'چندکاره', copier: 'فتوکپی' },
+}
+/** Display value of one job option; `paper`/`color` names are resolved by the caller (catalog). */
+export function jobOptionValue(key: string, value: string): string {
+  return JOB_OPTION_VALUE_LABEL[key]?.[value] ?? value
+}

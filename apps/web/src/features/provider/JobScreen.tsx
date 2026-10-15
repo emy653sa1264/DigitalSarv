@@ -5,14 +5,14 @@ import { EmptyState, InfoBanner, LoadingBlock, MobileHeader, Panel, ScreenBody, 
 import { Button } from '@/components/ui/button'
 import { notify, toast } from '@/components/ui/sonner'
 import { ApiError, openUpload } from '@/lib/api'
-import { JOB_OPTION_LABEL, JOB_STATUS_TONE } from '@/lib/dispatch-labels'
+import { JOB_OPTION_LABEL, JOB_STATUS_TONE, jobOptionValue } from '@/lib/dispatch-labels'
 import { fa, money, when } from '@/lib/format'
 import { NO_PROVIDER_PRICE } from '@/lib/provider-labels'
-import { useCatalog } from '@/lib/query'
+import { queryClient, useCatalog } from '@/lib/query'
 import type { ProviderJobDetail } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { providerActions, type ProviderAction } from './job-actions'
-import { useProviderJob, useProviderJobMutations } from './jobs-api'
+import { pjk, useProviderJob, useProviderJobMutations } from './jobs-api'
 import { ProviderError } from './ProviderError'
 import { RejectSheet } from './RejectSheet'
 
@@ -84,7 +84,7 @@ function JobBody({ job }: { job: ProviderJobDetail }) {
               <div className="mt-1 flex flex-wrap gap-1">
                 {Object.entries(l.options).map(([k, v]) => (
                   <span key={k} className="rounded-full bg-line-soft px-2.5 py-1 text-[11.5px]">
-                    {JOB_OPTION_LABEL[k] ?? k}: {typeof v === 'boolean' ? (v ? 'بله' : 'خیر') : k === 'paper' ? paper(String(v)) : typeof v === 'number' ? fa(v) : v}
+                    {JOB_OPTION_LABEL[k] ?? k}: {typeof v === 'boolean' ? (v ? 'بله' : 'خیر') : k === 'paper' ? paper(String(v)) : typeof v === 'number' ? fa(v) : jobOptionValue(k, v)}
                   </span>
                 ))}
               </div>
@@ -109,7 +109,7 @@ function JobBody({ job }: { job: ProviderJobDetail }) {
         <Section title="کنترل کیفیت">
           {job.qc.labels.map((label, i) => (
             <label key={i} className="flex items-center gap-2.5">
-              <input type="checkbox" checked={job.qc!.done[i]} disabled={m.qc.isPending} onChange={(e) => m.qc.mutate({ index: i, done: e.target.checked })} className="size-4" />
+              <input type="checkbox" checked={job.qc!.done[i]} onChange={(e) => m.qc.mutate({ index: i, done: e.target.checked })} className="size-4" />
               <span className={cn(job.qc!.done[i] && 'text-ink')}>{label}</span>
             </label>
           ))}
@@ -153,16 +153,25 @@ function JobBody({ job }: { job: ProviderJobDetail }) {
       {actions.length > 0 && (
         <div className="sticky bottom-0 mt-4 grid gap-2 bg-shell pt-2 pb-1">
           {actions.map((a) => (
-            <Button key={a.status} block className="h-12" variant={a.tone === 'danger' ? 'destructive' : a.tone === 'secondary' ? 'secondary' : 'default'}
-              disabled={busy} aria-disabled={!!a.disabled} onClick={() => act(a)}>
-              {a.label}
-            </Button>
+            <div key={a.status}>
+              <Button block className={cn('h-12', a.disabled && 'opacity-50')} variant={a.disabled ? 'secondary' : a.tone === 'danger' ? 'destructive' : a.tone === 'secondary' ? 'secondary' : 'default'}
+                disabled={busy} aria-disabled={!!a.disabled} onClick={() => act(a)}>
+                {a.label}
+              </Button>
+              {a.disabled && <p className="mt-1 text-center text-[12px] text-muted-2">{a.disabled}</p>}
+            </div>
           ))}
         </div>
       )}
       <RejectSheet open={!!sheet} mode={sheet ?? 'reject'} pending={m.reject.isPending || m.status.isPending} onClose={() => setSheet(null)}
         onSubmit={(code, note) => {
-          const after = () => { setSheet(null); notify('ثبت شد؛ سفارش به دیجیتال سرو برگشت'); navigate('/provider') }
+          const after = () => {
+            setSheet(null)
+            queryClient.removeQueries({ queryKey: pjk.job(job.id) })
+            navigate('/provider')
+            notify('ثبت شد؛ سفارش به دیجیتال سرو برگشت')
+            void queryClient.invalidateQueries({ queryKey: pjk.all })
+          }
           if (sheet === 'reject') m.reject.mutate({ reasonCode: code, ...(note ? { note } : {}) }, { onSuccess: after })
           else m.status.mutate({ status: 'failed', reasonCode: code, ...(note ? { note } : {}) }, { onSuccess: after })
         }} />
