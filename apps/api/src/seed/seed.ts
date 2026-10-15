@@ -7,6 +7,7 @@
  * Run: `pnpm seed` (root) or `pnpm --filter api seed` → `nest build && node dist/seed/seed.js`.
  */
 import 'reflect-metadata';
+import { randomUUID } from 'node:crypto';
 import { Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
@@ -31,6 +32,8 @@ import { Paper } from '../modules/catalog/schemas/paper.schema.js';
 import { SETTINGS_ID, Settings } from '../modules/catalog/schemas/settings.schema.js';
 import { Courier } from '../modules/courier/courier.schema.js';
 import { orderChildren } from '../modules/orders/order-helpers.js';
+import { LedgerEntry } from '../modules/ledger/ledger-entry.schema.js';
+import { maskSheba } from '../modules/ledger/sheba.js';
 import { Order } from '../modules/orders/order.schema.js';
 import { BindingRange } from '../modules/price-book/schemas/binding-range.schema.js';
 import { PriceVersion } from '../modules/price-book/schemas/price-version.schema.js';
@@ -330,6 +333,20 @@ async function main() {
       providerPrice(negin, 'bw|A4|double', 3600, 'pending_approval'),
       providerPrice(negin, 'color|A4|full|glossy200|single', 8000),
     ]);
+    // v4.3 settlement demo (D29, D31): نگین's non-print provider prices (one waiting for approval) and its payout account
+    await model<PriceVersion>(PriceVersion.name).insertMany([
+      providerPrice(negin, 'school|book', 9000),
+      providerPrice(negin, 'school|lined', 300),
+      providerPrice(negin, 'docs|bw|single', 600),
+      providerPrice(negin, 'docs|hardcover', 60000),
+      providerPrice(negin, 'cart|laserBw', 250000),
+      providerPrice(negin, 'flyer|A5|color|glossy|single', 120),
+      providerPrice(negin, 'repair|laser', 400000, 'pending_approval'),
+    ]);
+    const NEGIN_SHEBA = 'IR062960000000100324200001';
+    await Centers.updateOne({ _id: negin }, {
+      $set: { bankAccount: { sheba: NEGIN_SHEBA, holder: 'علی نگینی', bankName: 'بانک نمونه', updatedAt: now, updatedBy: admin._id } },
+    });
 
     await Users.collection.bulkWrite(
       userDates.map((u) => ({ updateOne: { filter: { _id: u._id }, update: { $set: { createdAt: u.createdAt, updatedAt: u.createdAt } } } })),
@@ -416,6 +433,28 @@ async function main() {
       orderDates.map((d) => ({ updateOne: { filter: { code: d.code }, update: { $set: { createdAt: d.createdAt, updatedAt: d.updatedAt } } } })),
     );
 
+    // v4.3 ledger demo for «چاپ نگین»: two counted credits, one «نیازمند تعیین مبلغ» and a payout (on delivered demo orders)
+    const deliveredDemo = (await Orders.find({ status: 'delivered' }, { code: 1 }).sort({ code: 1 }).limit(3).lean()) as { _id: Types.ObjectId; code: string }[];
+    const ago = (days: number) => new Date(now.getTime() - days * 86_400_000);
+    const demoCredit = (o: { _id: Types.ObjectId; code: string } | undefined, amount: number | null, days: number) => o && ({
+      key: `credit:${new Types.ObjectId()}:${String(negin)}:production`, providerId: negin, kind: 'credit', role: 'production',
+      state: amount === null ? 'pending' : 'counted', amount, orderId: o._id, orderCode: o.code, occurredAt: ago(days),
+      ...(amount === null ? {} : { countedAt: ago(days) }),
+      basis: amount === null ? { payoutBasis: null, suggested: 120000, missing: ['چاپ اسناد'] } : { payoutBasis: amount, suggested: null, missing: [] },
+      byRole: 'system',
+    });
+    const paidAt = tehranYmd(ago(6));
+    await model<LedgerEntry>(LedgerEntry.name).insertMany([
+      demoCredit(deliveredDemo[0], 450000, 9),
+      demoCredit(deliveredDemo[1], 280000, 2),
+      demoCredit(deliveredDemo[2], null, 1),
+      {
+        key: `payout:${randomUUID()}`, providerId: negin, kind: 'payout', state: 'counted', amount: -300000,
+        occurredAt: new Date(`${paidAt}T12:00:00+03:30`), countedAt: ago(6),
+        payout: { paidAt, bankRef: 'TRX-1405-0001', sheba: maskSheba(NEGIN_SHEBA), holder: 'علی نگینی' }, createdBy: admin._id, byRole: 'admin',
+      },
+    ].filter(Boolean) as Record<string, unknown>[]);
+
     // redis: caches, sequence, stale OTP state ------------------------------
     const maxCode = Math.max(...ORDERS.map((o) => o.code));
     await redis.del(REDIS_KEYS.dashboard);
@@ -428,7 +467,7 @@ async function main() {
       `Demo: 2 campaigns, ${COURIERS.length} couriers, ${userDates.length} users, ${ORDERS.length} orders ` +
         `(next code ${maxCode + 1}); cleared ${otpKeys} OTP keys`,
     );
-    log.log('Logins — admin 09120000000 · courier 09121111111 (رضا موسوی, 247) · provider 09122222222 (چاپ نگین) · customer 09123456789 (مریم رضایی); pickup point «دفتر مرکزی دیجیتال سرو»; jobs are created when the API starts (reconcile)');
+    log.log('Logins — admin 09120000000 · courier 09121111111 (رضا موسوی, 247) · provider 09122222222 (چاپ نگین) · customer 09123456789 (مریم رضایی); pickup point «دفتر مرکزی دیجیتال سرو»; jobs are created when the API starts (reconcile); نگین has a bank account, non-print provider prices and a demo ledger (/admin/ledger)');
   } finally {
     await app.close();
   }
