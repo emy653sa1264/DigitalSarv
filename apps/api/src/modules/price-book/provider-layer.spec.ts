@@ -579,6 +579,10 @@ describe('compare paging (S8)', () => {
     expect(p1.items.find((r) => r.providerId === A && r.comboKey === KEY)).toMatchObject({ providerPrice: 3500, customerPrice: 4500 });
     const p2 = await svc.compare('bw', undefined, new Date(), 2, 2);
     expect([...new Set(p2.items.map((r) => r.providerId))]).toEqual([C]);
-    expect(versions.find.mock.calls.at(-1)![0]).toEqual({ comboKey: expect.any(RegExp) });
+    const filters = versions.find.mock.calls.slice(-2).map((c) => c[0]);
+    expect(filters.every((q) => q.comboKey instanceof RegExp)).toBe(true);
+    const provFilter = filters.find((q) => q.layer === 'provider')!;
+    expect(provFilter.providerId.$in.map(String).sort()).toEqual([C].map(String));
+    expect(filters.find((q) => q.layer === 'customer')).toEqual({ layer: 'customer', comboKey: expect.any(RegExp) });
   });
 });

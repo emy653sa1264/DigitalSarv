@@ -676,15 +676,20 @@ export class PriceBookService {
   /** §23 view, paged by provider (S8): every combo of `service` x the page's providers; reads only that service's versions (admin only). */
   async compare(service: ComboService, providerId?: string, at = new Date(), page = 1, limit = 20): Promise<Paged<CompareRow>> {
     const centerFilter = providerId ? { _id: this.oid(providerId) } : {};
-    const [papers, ranges, rows, centers, total] = await Promise.all([
+    const prefix = new RegExp(`^${escapeRegex(service)}\|`);
+    const [papers, ranges, customerRows, centers, total] = await Promise.all([
       this.papers.find().sort({ sort: 1, _id: 1 }).lean(),
       this.ranges.find().sort({ minPages: 1 }).lean(),
-      this.versions.find({ comboKey: new RegExp(`^${escapeRegex(service)}\\|`) }).lean() as Promise<Row[]>,
+      this.versions.find({ layer: 'customer', comboKey: prefix }).lean() as Promise<Row[]>,
       this.centers.find(centerFilter, { name: 1, status: 1 }).sort({ _id: 1 }).skip((page - 1) * limit).limit(limit).lean(),
       this.centers.countDocuments(centerFilter),
     ]);
+    // provider layer: only the page's providers, plus the base providers customer markups read (their price feeds the customer price)
+    const ids = new Map<string, unknown>(centers.map((c) => [String(c._id), c._id]));
+    for (const r of customerRows) if (r.baseProviderId) ids.set(String(r.baseProviderId), r.baseProviderId);
+    const providerRows = (await this.versions.find({ layer: 'provider', comboKey: prefix, providerId: { $in: [...ids.values()] as Types.ObjectId[] } }).lean()) as Row[];
+    const rows = [...customerRows, ...providerRows];
     const names = this.names(papers, ranges);
-    const customerRows = rows.filter((r) => r.layer === 'customer');
     const providerPrices = effectiveProviderPrices(rows.filter((r) => r.state === 'published' || r.state === 'disabled'), at);
     const vars = this.varsFor(customerRows, papers, at, providerPrices);
     const pending = new Map<string, Row>();
