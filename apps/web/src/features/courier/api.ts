@@ -53,6 +53,13 @@ export function useMarkDelivered(orderId: string) {
   })
 }
 
+export function useMarkCollected(orderId: string) {
+  return useMutation({
+    mutationFn: () => api.post<Order>(`/courier/orders/${orderId}/collected`),
+    onSuccess: (order) => refreshAfter(order),
+  })
+}
+
 export function useEndShift() {
   return useMutation({
     mutationFn: () => api.post<{ ok: true }>('/courier/shift/end'),

@@ -7,7 +7,7 @@ import { notify } from '@/components/ui/sonner'
 import { ApiError } from '@/lib/api'
 import { fa } from '@/lib/format'
 import { ORDER_STATUS_LABEL, type CourierTask, type Order } from '@/lib/types'
-import { useCourierOrder, useCourierTasks, useMarkDelivered } from './api'
+import { useCourierOrder, useCourierTasks, useMarkCollected, useMarkDelivered } from './api'
 import { ContentRow, PrimaryAction } from './components'
 import { isTaskDone, KIND_LABEL, kindOf, mapEmbedSrc, openMap, useLastTask, type TaskKind } from './utils'
 
@@ -90,6 +90,9 @@ function TaskDetail({ order, kind, task }: { order: Order; kind: TaskKind; task?
   const navigate = useNavigate()
   const delivered = useMarkDelivered(order.id)
   const address = order.pickup?.address || task?.address || ''
+  const collected = useMarkCollected(order.id)
+  const collecting = kind === 'delivery' && order.status === 'packing' && !!task?.from
+  const mapTarget = collecting ? task!.from!.address : address
   const phone = order.pickup?.phone || order.customerPhone || task?.phone || ''
   const slot = task?.slot || order.pickup?.slot
   const done = isTaskDone(kind, order.status)
@@ -108,7 +111,7 @@ function TaskDetail({ order, kind, task }: { order: Order; kind: TaskKind; task?
     <>
       <div className="overflow-hidden rounded-[22px] border border-line bg-blue-soft">
         <iframe
-          src={mapEmbedSrc(address)}
+          src={mapEmbedSrc(mapTarget)}
           title="Google Maps"
           width="100%"
           height={180}
@@ -135,6 +138,21 @@ function TaskDetail({ order, kind, task }: { order: Order; kind: TaskKind; task?
         </div>
       </Panel>
 
+      {collecting && (
+        <Panel className="mt-[11px]">
+          <div className="text-[13px] font-extrabold text-accent">دریافت از مجری</div>
+          <div className="mt-1 text-[15px] font-black">{task!.from!.name}</div>
+          <div className="mt-1 text-[13px] leading-[1.7] text-muted-2">
+            {task!.from!.address} · <a href={`tel:${task!.from!.phone}`} dir="ltr">{fa(task!.from!.phone)}</a>
+          </div>
+        </Panel>
+      )}
+      {kind === 'pickup' && task?.dropoff && (
+        <InfoBanner tone="cyan" className="mt-[11px]">
+          پس از تحویل‌گیری، اقلام را به «{task.dropoff.name}» — {task.dropoff.address} برسانید.
+        </InfoBanner>
+      )}
+
       <div className="mt-[11px] rounded-[22px] bg-accent-soft p-4 text-accent-soft-ink">
         <div className="mb-2.5 text-sm font-extrabold">
           محتوای سفارش · {books > 0 ? `${fa(books)} کتاب` : `${fa(order.services.length)} مورد`}
@@ -149,7 +167,7 @@ function TaskDetail({ order, kind, task }: { order: Order; kind: TaskKind; task?
       </div>
 
       <div className="mt-3.5 flex gap-2.5">
-        <Button variant="night" size="lg" className="h-auto flex-1 px-3 py-4 text-[14.5px]" onClick={() => openMap(address)}>
+        <Button variant="night" size="lg" className="h-auto flex-1 px-3 py-4 text-[14.5px]" onClick={() => openMap(mapTarget)}>
           <MapPin strokeWidth={2.4} />
           گوگل مپ
         </Button>
@@ -167,6 +185,10 @@ function TaskDetail({ order, kind, task }: { order: Order; kind: TaskKind; task?
       ) : kind === 'pickup' ? (
         <PrimaryAction onClick={() => navigate(`/courier/verify/${order.id}`)}>
           {books > 0 ? 'رسیدم — شمارش کتاب‌ها' : 'رسیدم — تحویل‌گیری اقلام'}
+        </PrimaryAction>
+      ) : collecting ? (
+        <PrimaryAction onClick={() => collected.mutate(undefined, { onSuccess: () => notify('دریافت از مجری ثبت شد؛ در مسیر تحویل') })} disabled={collected.isPending}>
+          {collected.isPending ? 'در حال ثبت…' : 'سفارش را از مجری گرفتم'}
         </PrimaryAction>
       ) : (
         <PrimaryAction onClick={markDelivered} disabled={delivered.isPending}>
