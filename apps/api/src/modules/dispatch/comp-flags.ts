@@ -7,7 +7,8 @@ import type { Job } from './job.schema.js';
  * I1: the `compOpen` part of an assign / reassign cas. The departing producer (mid-production / after) gets a case, and
  * the new holder's own open case is closed — a provider that holds the job again is not owed compensation. When both
  * apply, one update cannot `$addToSet` and `$pull` the same path, so the merged list is `$set`, guarded on the value read
- * (a concurrent decision makes the cas a lost race).
+ * (a concurrent decision makes the cas a lost race). P13: the cas also requires that the new holder has no decision in
+ * flight (`compClaimed`), so a job is never given back to a provider while its compensation is being written (409 raced).
  */
 export function compOpenOnGive(job: Pick<Job, 'status' | 'compOpen'>, prev: unknown, next: unknown): {
   guard: Record<string, unknown>; set: Record<string, unknown>; unset: Record<string, 1>; addToSet?: Record<string, unknown>;
@@ -15,9 +16,10 @@ export function compOpenOnGive(job: Pick<Job, 'status' | 'compOpen'>, prev: unkn
   const lost = prev && cancelStage(job.status) !== 'before_production' ? String(prev) : null;
   const cur = [...(job.compOpen ?? [])].map(String);
   const holder = String(next);
-  if (!cur.includes(holder)) return { guard: {}, set: {}, unset: {}, ...(lost ? { addToSet: { compOpen: lost } } : {}) };
+  const notClaimed = { compClaimed: { $ne: holder } };
+  if (!cur.includes(holder)) return { guard: notClaimed, set: {}, unset: {}, ...(lost ? { addToSet: { compOpen: lost } } : {}) };
   const merged = [...new Set([...cur, ...(lost ? [lost] : [])])].filter((x) => x !== holder);
-  return { guard: { compOpen: cur }, set: merged.length ? { compOpen: merged } : {}, unset: merged.length ? {} : { compOpen: 1 } };
+  return { guard: { compOpen: cur, ...notClaimed }, set: merged.length ? { compOpen: merged } : {}, unset: merged.length ? {} : { compOpen: 1 } };
 }
 
 /**

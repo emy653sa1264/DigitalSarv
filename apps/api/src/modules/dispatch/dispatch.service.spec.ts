@@ -581,7 +581,7 @@ describe('M4 final review I1 — compensation never for the current holder', () 
     const id = String((await jobs.ensureJob(s.order as never))!._id);
     await svc.assign(id, { providerId: String(C) } as never, String(ADMIN));
     Object.assign(s.jobsModel.docs[0], { status: 'in_production' });
-    return { ...s, G, id, svc, jobs, actions, entries };
+    return { ...s, G, id, svc, jobs, actions, entries, ledger };
   }
   const queue = async (a: { compensationQueue: (q: object) => Promise<{ items: { providerId: string }[] }> }) => (await a.compensationQueue({})).items.map((i) => i.providerId);
 
@@ -607,6 +607,25 @@ describe('M4 final review I1 — compensation never for the current holder', () 
     expect(await queue(s.actions)).toEqual([]);
     await s.jobs.onOrderDelivered(s.order._id, 'admin');
     expect(s.entries.docs.map((e) => e.cause ?? e.kind)).toEqual(['credit']);
+  });
+  it('P13: giving the job to a provider whose compensation decision is in flight (compClaimed) is a 409 race', async () => {
+    const s = await withComp();
+    await s.jobs.giveBack(await s.jobs.byId(s.id), 'unassigned', { byRole: 'admin', by: String(ADMIN), reason: 'بررسی' } as never);
+    Object.assign(s.jobsModel.docs[0], { compClaimed: [String(C)] });
+    delete s.jobsModel.docs[0].compOpen;
+    await expect(s.svc.assign(s.id, { providerId: String(C) } as never, String(ADMIN))).rejects.toMatchObject({ status: 409 });
+    expect(s.jobsModel.docs[0]).toMatchObject({ status: 'unassigned' });
+    expect(s.jobsModel.docs[0].providerId).toBeUndefined();
+  });
+  it('P13: compensated, given back, delivered — the production credit waits for an amount (suggestion = earned − compensation)', async () => {
+    const s = await withComp();
+    await s.jobs.giveBack(await s.jobs.byId(s.id), 'unassigned', { byRole: 'admin', by: String(ADMIN), reason: 'بررسی' } as never);
+    await s.actions.decideCompensation({ jobId: s.id, providerId: String(C), amount: 500_000, reason: 'کار نیمه‌تمام' }, String(ADMIN));
+    await s.svc.assign(s.id, { providerId: String(C) } as never, String(ADMIN));
+    expect(await s.jobs.onOrderDelivered(s.order._id, 'admin')).toBe(true);
+    const credit = s.entries.docs.find((e) => e.key === `credit:${s.id}:${String(C)}:production`)!;
+    expect(credit).toMatchObject({ state: 'pending', amount: null, basis: { suggested: 1_100_000, note: 'برای این مجری در این سفارش قبلاً جبران خسارت ثبت شده است' } });
+    expect((await s.ledger.balanceOf(String(C))).available).toBe(500_000); // only the compensation until resolved
   });
   it('decide vs deliver race on a stale flag of the holder: exactly one of compensation or credit', async () => {
     const s = await withComp();

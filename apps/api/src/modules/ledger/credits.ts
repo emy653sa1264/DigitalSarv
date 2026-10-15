@@ -20,6 +20,17 @@ export interface CreditDraft { key: string; providerId: string; role: CreditRole
 export const STALE_NOTE = 'تعداد کتاب‌ها پس از تخصیص تغییر کرده است';
 export const NO_SNAPSHOT = 'قیمت مجری برای این سفارش ثبت نشده است';
 export const NO_DELIVERY_FEE = 'هزینه ارسال مجری ثبت نشده است';
+export const COMPENSATED_NOTE = 'برای این مجری در این سفارش قبلاً جبران خسارت ثبت شده است';
+
+/**
+ * P13: the production provider was already compensated on this job, so its credit is never counted automatically —
+ * it becomes pending with the note and `suggested = max(0, earned − compensation)` (null when the earned amount is
+ * unknown); an admin resolves it in «نیازمند تعیین مبلغ».
+ */
+export function afterCompensation(d: CreditDraft, compensation: number): CreditDraft {
+  const earned = d.state === 'counted' ? d.amount : d.basis.suggested;
+  return { ...d, state: 'pending', amount: null, basis: { ...d.basis, suggested: earned == null ? null : Math.max(0, earned - compensation), note: COMPENSATED_NOTE } };
+}
 
 /** The final quantity of a school snapshot line for the order's child; null when the line no longer applies. */
 export function childLineQuantity(comboKey: string, child: PricedChild | undefined): number | null {

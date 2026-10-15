@@ -90,7 +90,7 @@ The runtime image contains only `dist/` and production dependencies. It has no p
 dc run --rm api node dist/seed/seed-base.js
 ```
 
-Run `seed:base` during deploy, before traffic is switched to the new version: it publishes the v4 price book (idempotent, a second run inserts 0 price versions). Upgrades to v4.3 (M4, ledger) run it **after** the new API is up instead — see «Upgrade to M4 (v4.3)» in section 6.
+Run `seed:base` during deploy, before traffic is switched to the new version: it publishes the v4 price book (idempotent, a second run inserts 0 price versions). Upgrades to v4.3 (M4, ledger) also run it after the new API is up — see «Upgrade to M4 (v4.3)» in section 6; an upgrade from before v4 still runs it before the switch as well (the price-book publish).
 
 
 Re-running it is safe (upserts). Admins then edit everything in `/admin/`.
@@ -138,7 +138,7 @@ When a release changes data shape, restore the Mongo backup taken before the upd
 
 ### Upgrade to M4 (v4.3, provider ledger and settlement)
 
-Run the base seed once the new API is live — **after** `dc up -d --build`, not before:
+Run the base seed also after the new API is up — **after** `dc up -d --build` (an upgrade from before v4 still runs it before the switch too, for the price-book publish):
 
 ```bash
 dc up -d --build                                  # as above; wait until /api/health/ready answers

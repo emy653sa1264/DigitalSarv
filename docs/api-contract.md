@@ -1323,6 +1323,10 @@ pulled from `compClaimed`. A claimed case without an entry (a crash in between) 
 `comp:<job>:<provider>` key makes it exactly once; two concurrent decisions write one entry, the other gets 409).
 `seed:base` flags pre-existing cases once: jobs without the `Job.compTracked` marker (set on every job created from v4.3),
 history-based detection, never for a current holder, merged with `$addToSet $each`, walked by an `_id` cursor.
+**No compensation + credit (P13):** an assign / reassign to a provider with a decision in flight (`compClaimed`) is a lost
+race (409), and when a provider compensated on a job later delivers it, its production credit is written **pending** with
+`basis.note` «برای این مجری در این سفارش قبلاً جبران خسارت ثبت شده است» and `suggested = max(0, earned − compensation)`
+(null when the earned amount is unknown); an admin resolves it in «نیازمند تعیین مبلغ».
 `cause` is `cancelled` / `reassigned` / `unassigned` and `stage` the stage the provider lost the job at.
 **Cap (P11):** `payoutBasis` = that provider's latest snapshot `providerSubtotal` (production only; `Job.providerPricing` or
 `Job.pricingHistory`), **plus the delivery fee only if that provider's delivery leg had already started** (the job reached

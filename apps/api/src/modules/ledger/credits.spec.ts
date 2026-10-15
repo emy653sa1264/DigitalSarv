@@ -108,3 +108,13 @@ describe('fix round: per-child suggestion and amount bounds', () => {
     expect(creditDrafts(j, {})[1].basis.suggested).toBe(15000);
   });
 });
+
+describe('P13 afterCompensation', () => {
+  it('a compensated production credit is pending: suggestion = max(0, earned − compensation), null when unknown', async () => {
+    const { afterCompensation, COMPENSATED_NOTE } = await import('./credits.js');
+    const d = { key: 'k', providerId: 'P', role: 'production' as const, basis: { payoutBasis: 90000, suggested: null, missing: [] } };
+    expect(afterCompensation({ ...d, state: 'counted', amount: 90000 }, 30000)).toMatchObject({ state: 'pending', amount: null, basis: { suggested: 60000, note: COMPENSATED_NOTE } });
+    expect(afterCompensation({ ...d, state: 'counted', amount: 20000 }, 30000).basis.suggested).toBe(0);
+    expect(afterCompensation({ ...d, state: 'pending', amount: null }, 30000).basis.suggested).toBeNull();
+  });
+});

@@ -4,7 +4,7 @@ import { Model, Types } from 'mongoose';
 import { CatalogService } from '../catalog/catalog.service.js';
 import { Job } from '../dispatch/job.schema.js';
 import { Order } from '../orders/order.schema.js';
-import { creditDrafts, type CreditJob, type CreditOrder } from './credits.js';
+import { afterCompensation, creditDrafts, type CreditJob, type CreditOrder } from './credits.js';
 import { LedgerAccount } from './ledger-account.schema.js';
 import { LedgerEntry, type LedgerEntryDocument } from './ledger-entry.schema.js';
 import { isAmount, ledgerKey, MAX_AMOUNT, settlementCutoff, slotOf } from './ledger-model.js';
@@ -180,7 +180,12 @@ export class LedgerService {
       if (CREDITABLE.includes(job.status)) {
         const order = await this.orders.findById(job.orderId, { paid: 1, children: 1 }).lean();
         if (!order?.paid) return 0; // COD is marked paid in the delivered update itself; anything else waits
-        for (const d of creditDrafts(job as unknown as CreditJob, order as unknown as CreditOrder)) {
+        const drafts = creditDrafts(job as unknown as CreditJob, order as unknown as CreditOrder);
+        // P13: a production provider compensated on this job earlier gets a pending credit, never compensation + credit
+        const prod = drafts.find((d) => d.role === 'production');
+        const comp = prod ? await this.entries.findOne({ key: ledgerKey.compensation(job._id, prod.providerId) }, { amount: 1 }).lean() : null;
+        for (const raw of drafts) {
+          const d = comp && raw === prod ? afterCompensation(raw, comp.amount ?? 0) : raw;
           const r = await this.insertOnce({
             key: d.key, providerId: new Types.ObjectId(d.providerId), kind: 'credit', state: d.state, amount: d.amount, role: d.role,
             jobId: job._id, orderId: job.orderId, orderCode: job.orderCode, occurredAt: job.deliveredAt ?? now,
