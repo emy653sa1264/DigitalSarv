@@ -20,6 +20,12 @@ export class WalletCredit {
   @Prop({ type: String }) note?: string;
   @Prop({ type: Date }) doneAt?: Date;
   @Prop({ type: Boolean }) keyPulled?: boolean;
+  /** Failed `missing-account` attempts (the sweep stops at MAX_ATTEMPTS). */
+  @Prop({ type: Number, default: 0 }) failures?: number;
+  /** Transient-error backoff: the sweep skips the intent until then. */
+  @Prop({ type: Date }) nextAttemptAt?: Date;
+  /** Rotation for the sweep: the last time it looked at this intent without a marker. */
+  @Prop({ type: Date }) lastSweptAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }

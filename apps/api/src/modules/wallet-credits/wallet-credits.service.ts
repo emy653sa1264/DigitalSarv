@@ -6,7 +6,10 @@ import { DUE_CLOSED } from '../orders/order-money.js';
 import { Order } from '../orders/order.schema.js';
 import { User } from '../users/user.schema.js';
 import { WalletCredit } from './wallet-credit.schema.js';
-import { INSUFFICIENT_NOTE, KEY_KEEP_MS, MARKER_WAIT_MS, MAX_ATTEMPTS, needsOrderMarker, SWEEP_AFTER_MS, walletKey, type WalletCreditCause } from './wallet-credit-model.js';
+import {
+  backoffMs, causeOfKey, INSUFFICIENT_NOTE, KEY_KEEP_MS, MARKER_WAIT_MS, MAX_ATTEMPTS, needsOrderMarker, orderIdOfKey, SWEEP_AFTER_MS, voidedKey, walletKey,
+  type WalletCreditCause,
+} from './wallet-credit-model.js';
 
 export interface PrepareInput {
   key: string; userId: Types.ObjectId | string; orderId: Types.ObjectId | string; orderCode: string;
@@ -15,11 +18,21 @@ export interface PrepareInput {
 export type ApplyResult = 'done' | 'waiting' | 'retry' | 'void' | 'insufficient' | 'missing';
 export interface SweepResult { applied: number; voided: number; pulled: number }
 export type WalletCreditRow = WalletCredit & { _id: Types.ObjectId };
+/** What the order's deciding write left behind: the amount it decided, and who/what the credit is for. */
+interface Marker { amount: number; customerId?: Types.ObjectId; code?: string; orderId: string }
 const oid = (v: Types.ObjectId | string) => (v instanceof Types.ObjectId ? v : new Types.ObjectId(String(v)));
+const BATCH = 200;
 
 /**
- * v4.4 recoverable wallet credits (D34): intent -> deciding order write (pushes the key into `Order.creditKeys`) -> guarded
- * `$inc` (`User.walletCreditKeys` holds the key, so it happens once) -> `done`. Any step may crash; the sweep finishes it.
+ * v4.4 recoverable wallet credits (D34): intent -> deciding order write -> guarded `$inc` -> `done`. Any step may crash;
+ * the sweep finishes it.
+ *
+ * THE RULE FOR EVERY CALLER (cancel, gateway, recount, due): the money compare-and-set on the order must guard on the amount
+ * it prepared (e.g. `chargedAmount`) and push `{ key, amount }` into `Order.creditKeys` in that same write. The wallet always
+ * moves the MARKER's amount (the order decided it); the intent's amount is only a hint and is corrected to match. The user
+ * key (`User.walletCreditKeys`) makes each `$inc` happen once. A void intent never blocks a key (it is renamed), and a marker
+ * revives a credit whose intent was voided or lost.
+ *
  * `apply` never throws: a failure leaves the intent pending (logged at ERROR) for the sweep.
  */
 @Injectable()
@@ -32,22 +45,9 @@ export class WalletCreditsService {
     @InjectModel(Order.name) private readonly orders: Model<Order>,
   ) {}
 
-  /**
-   * Step 1: the intent, before anything decides the money. Idempotent by key and first-writer-wins: the amount of an existing
-   * intent is never overwritten. A stale un-applied intent (no order took it) with another amount is voided under a retired key
-   * and a fresh intent is written, so a later cancel after a recount can never refund the stale amount.
-   */
+  /** Step 1: the intent, before anything decides the money. Idempotent by key, first-writer-wins (the amount is never rewritten). */
   async prepare(i: PrepareInput): Promise<WalletCreditRow> {
     if (!Number.isInteger(i.amount) || i.amount === 0) throw new Error(`wallet credit ${i.key}: amount must be a non-zero integer (got ${i.amount})`);
-    for (let round = 0; round < 3; round++) {
-      const doc = await this.upsert(i);
-      if (doc.state !== 'pending' || doc.amount === i.amount || !needsOrderMarker(doc.cause) || (await this.markerPresent(doc))) return doc;
-      const retired = await this.intents.updateOne(
-        { key: i.key, state: 'pending', amount: doc.amount },
-        { $set: { state: 'void', key: `${i.key}~stale~${String(doc._id)}`, note: `superseded: stale amount ${doc.amount}, no order took it` } },
-      );
-      if (retired.modifiedCount !== 1) return doc; // raced: somebody else settled or replaced it
-    }
     return this.upsert(i);
   }
 
@@ -67,69 +67,87 @@ export class WalletCreditsService {
     return doc;
   }
 
-  /**
-   * Steps 2-3 for one intent. Safe to call any number of times, concurrently, from the request and from the sweep.
-   * `decided` is the amount the caller's order compare-and-set decided: an intent holding another amount is stale and is voided.
-   */
-  async apply(key: string, decided?: number): Promise<ApplyResult> {
+  /** Steps 2-3 for one intent. Safe to call any number of times, concurrently, from the request and from the sweep. */
+  async apply(key: string): Promise<ApplyResult> {
     let doc: WalletCreditRow | null = null;
     try {
       doc = (await this.intents.findOne({ key }).lean()) as WalletCreditRow | null;
-      if (!doc) return 'missing';
+      if (doc?.state === 'done') return 'done';
+      if (doc?.state === 'reversed') return 'void';
+      const orderId = doc?.orderId ? String(doc.orderId) : orderIdOfKey(key);
+      const marker = orderId ? await this.markerOf(orderId, key) : null;
+      if (!doc || doc.state === 'void') {
+        if (!marker) return doc ? (doc.note === INSUFFICIENT_NOTE ? 'insufficient' : 'void') : 'missing';
+        doc = await this.revive(key, marker, doc); // the order carries the credit but the intent was voided or lost
+      }
       if (doc.state === 'done') return 'done';
-      if (doc.state !== 'pending') return doc.note === INSUFFICIENT_NOTE ? 'insufficient' : 'void';
-      if (decided !== undefined && doc.amount !== decided) {
-        await this.intents.updateOne({ key, state: 'pending' }, { $set: { state: 'void', note: `stale amount ${doc.amount}; the order decided ${decided}` } });
-        this.logger.error(`wallet credit ${key}: stored ${doc.amount} but the order decided ${decided} - voided, settle manually`);
-        return 'void';
+      if (doc.state !== 'pending') return 'void';
+      if (marker && doc.amount !== marker.amount) {
+        doc = await this.align(doc, marker.amount);
+        if (doc.state === 'done') return 'done';
+        if (doc.state !== 'pending') return 'void';
       }
       if (doc.cause === 'due_wallet') return await this.finishDue(doc);
-      if (needsOrderMarker(doc.cause) && !(await this.markerPresent(doc))) return 'waiting';
+      if (needsOrderMarker(doc.cause) && !marker) return 'waiting';
       if (!(await this.move(doc))) {
-        this.logger.error(`wallet credit ${doc.key} (${doc.amount} toman, order ${doc.orderCode}): the customer account is missing - settle manually`);
-        await this.failed(doc, new Error('customer account missing'), false);
+        this.logger.error(`wallet credit ${doc.key} (${doc.amount} toman, order ${doc.orderCode}): decided by the order but the customer account is missing - settle manually`);
+        await this.failed(doc, new Error('customer account missing'), 'missing');
         return 'missing';
       }
-      await this.markDone(doc.key);
+      await this.markDone(doc);
       return 'done';
     } catch (err) {
       if (!doc) {
         this.logger.error(`wallet credit ${key} could not be read - the sweep retries: ${(err as Error)?.message}`);
         return 'retry';
       }
-      await this.failed(doc, err);
+      await this.failed(doc, err, 'error');
       return 'retry';
     }
   }
 
   /**
-   * Every minute: pending intents older than `SWEEP_AFTER_MS` are applied (oldest first, bounded, skipping those at the attempt cap);
-   * one no order ever took is voided after `MARKER_WAIT_MS`; user keys of intents settled more than `KEY_KEEP_MS` ago are pulled.
-   * Never throws.
+   * Every minute, two bounded passes. A: pending intents between `SWEEP_AFTER_MS` and `MARKER_WAIT_MS` old, least recently
+   * looked-at first (a marker-less one is stamped so it cannot starve the rest). B: intents older than `MARKER_WAIT_MS`, oldest
+   * first - applied when the order carries them, otherwise voided (key freed; a marker that lands meanwhile revives it). Intents
+   * at the attempt cap or in backoff are skipped. Then user keys settled more than `KEY_KEEP_MS` ago are pulled. Never throws.
    */
   async sweep(now: Date = new Date()): Promise<SweepResult> {
     const out: SweepResult = { applied: 0, voided: 0, pulled: 0 };
+    const t = now.getTime();
+    const eligible = { state: 'pending' as const, attempts: { $lt: MAX_ATTEMPTS }, $or: [{ nextAttemptAt: { $exists: false } }, { nextAttemptAt: { $lte: now } }] };
     try {
-      const rows = (await this.intents
-        .find({ state: 'pending', attempts: { $lt: MAX_ATTEMPTS }, createdAt: { $lt: new Date(now.getTime() - SWEEP_AFTER_MS) } }, { key: 1, createdAt: 1 })
-        .sort({ createdAt: 1 })
-        .limit(200)
-        .lean()) as { key: string; createdAt: Date }[];
-      for (const r of rows) {
+      const young = (await this.intents
+        .find({ ...eligible, createdAt: { $lt: new Date(t - SWEEP_AFTER_MS), $gte: new Date(t - MARKER_WAIT_MS) } })
+        .sort({ lastSweptAt: 1, createdAt: 1 })
+        .limit(BATCH)
+        .lean()) as WalletCreditRow[];
+      for (const r of young) {
         const res = await this.apply(r.key);
         if (res === 'done') out.applied++;
-        else if (res === 'waiting' && now.getTime() - new Date(r.createdAt).getTime() > MARKER_WAIT_MS) {
-          const v = await this.intents.updateOne({ key: r.key, state: 'pending' }, { $set: { state: 'void', note: 'no order took this credit' } });
-          out.voided += v.modifiedCount;
+        else if (res === 'waiting') await this.intents.updateOne({ _id: r._id, state: 'pending' }, { $set: { lastSweptAt: now } });
+      }
+      const old = (await this.intents
+        .find({ ...eligible, createdAt: { $lt: new Date(t - MARKER_WAIT_MS) } })
+        .sort({ createdAt: 1 })
+        .limit(BATCH)
+        .lean()) as WalletCreditRow[];
+      for (const r of old) {
+        const res = await this.apply(r.key);
+        if (res === 'done') out.applied++;
+        else if (res === 'waiting' && (await this.voidIntent(r, 'no order took this credit'))) {
+          out.voided++;
+          // the deciding write may have landed between the check and the void: the marker revives the credit
+          if (r.orderId && (await this.markerOf(String(r.orderId), r.key)) && (await this.apply(r.key)) === 'done') out.applied++;
         }
       }
       const settled = (await this.intents
-        .find({ state: { $in: ['done', 'reversed'] }, keyPulled: { $exists: false }, doneAt: { $lt: new Date(now.getTime() - KEY_KEEP_MS) } }, { key: 1, userId: 1 })
-        .limit(200)
-        .lean()) as { key: string; userId: Types.ObjectId }[];
+        .find({ state: { $in: ['done', 'reversed'] }, keyPulled: { $exists: false }, doneAt: { $lt: new Date(t - KEY_KEEP_MS) } })
+        .limit(BATCH)
+        .lean()) as WalletCreditRow[];
       for (const d of settled) {
         await this.users.updateOne({ _id: d.userId }, { $pull: { walletCreditKeys: d.key } });
-        await this.intents.updateOne({ key: d.key }, { $set: { keyPulled: true } });
+        await this.intents.updateOne({ _id: d._id }, { $set: { keyPulled: true } });
         out.pulled++;
       }
       if (out.applied || out.voided) this.logger.warn(`wallet credits sweep: ${out.applied} applied, ${out.voided} voided`);
@@ -137,6 +155,11 @@ export class WalletCreditsService {
       this.logger.warn(`wallet credits sweep failed: ${(err as Error).message}`);
     }
     return out;
+  }
+
+  /** Intents the sweep gave up on (an admin must settle them) - for the admin dashboard / health. */
+  async cappedCount(): Promise<number> {
+    return this.intents.countDocuments({ state: 'pending', attempts: { $gte: MAX_ATTEMPTS } });
   }
 
   /** The timer: `DISPATCH_SCHEDULER=0` switches it off (e2e); tests call `sweep()` directly. Never throws. */
@@ -148,8 +171,42 @@ export class WalletCreditsService {
 
   // ------------------------------------------------------------ internals
 
-  private async markerPresent(doc: Pick<WalletCreditRow, 'orderId' | 'key'>): Promise<boolean> {
-    return !!(await this.orders.exists({ _id: doc.orderId, creditKeys: doc.key }));
+  /** The order's marker for this key, or null. */
+  private async markerOf(orderId: string, key: string): Promise<Marker | null> {
+    const o = (await this.orders
+      .findOne({ _id: new Types.ObjectId(orderId), creditKeys: { $elemMatch: { key } } }, { customerId: 1, code: 1, creditKeys: { $elemMatch: { key } } })
+      .lean()) as { customerId?: Types.ObjectId; code?: string; creditKeys?: { key: string; amount: number }[] } | null;
+    const m = o?.creditKeys?.find((c) => c.key === key);
+    return m ? { amount: m.amount, customerId: o?.customerId, code: o?.code, orderId } : null;
+  }
+
+  /** Bring a pending intent's amount to the marker's (the order decided it). CAS on _id + state + the old amount. */
+  private async align(doc: WalletCreditRow, amount: number): Promise<WalletCreditRow> {
+    this.logger.warn(`wallet credit ${doc.key}: intent held ${doc.amount}, the order decided ${amount} - using the order's amount`);
+    await this.intents.updateOne({ _id: doc._id, state: 'pending', amount: doc.amount }, { $set: { amount } });
+    const fresh = (await this.intents.findOne({ _id: doc._id }).lean()) as WalletCreditRow | null;
+    if (!fresh) throw new Error(`wallet credit ${doc.key}: intent vanished`);
+    if (fresh.state === 'pending' && fresh.amount !== amount) throw new Error(`wallet credit ${doc.key}: amount changed concurrently`);
+    return fresh;
+  }
+
+  /** A marker exists but the intent is void or gone: make it pending again with the marker's amount. The user key prevents a double. */
+  private async revive(key: string, m: Marker, doc: WalletCreditRow | null): Promise<WalletCreditRow> {
+    this.logger.warn(`wallet credit ${key}: the order carries ${m.amount} toman but the intent was ${doc ? 'void' : 'lost'} - reviving`);
+    if (doc) {
+      await this.intents.updateOne({ _id: doc._id, state: 'void' }, { $set: { state: 'pending', amount: m.amount, note: 'revived: the order carries the credit' } });
+      const fresh = (await this.intents.findOne({ _id: doc._id }).lean()) as WalletCreditRow | null;
+      if (!fresh) throw new Error(`wallet credit ${key}: intent vanished`);
+      return fresh;
+    }
+    if (!m.customerId) throw new Error(`wallet credit ${key}: the order has no customer to credit`);
+    return this.upsert({ key, userId: m.customerId, orderId: m.orderId, orderCode: m.code ?? '', amount: m.amount, cause: causeOfKey(key), note: 'revived: the order carries the credit' });
+  }
+
+  /** A void frees the key in the same update. CAS on _id + state + amount. */
+  private async voidIntent(doc: WalletCreditRow, note: string): Promise<boolean> {
+    const res = await this.intents.updateOne({ _id: doc._id, state: 'pending', amount: doc.amount }, { $set: { state: 'void', key: voidedKey(doc.key, doc._id), note } });
+    return res.modifiedCount === 1;
   }
 
   /** The guarded `$inc`. True when the wallet carries the key (now or from an earlier run). */
@@ -166,16 +223,23 @@ export class WalletCreditsService {
     return !!(await this.users.exists({ _id: doc.userId, walletCreditKeys: doc.key }));
   }
 
-  private async markDone(key: string) {
-    await this.intents.updateOne({ key, state: 'pending' }, { $set: { state: 'done', doneAt: new Date() } });
+  private async markDone(doc: WalletCreditRow) {
+    await this.intents.updateOne({ _id: doc._id, state: 'pending', amount: doc.amount }, { $set: { state: 'done', doneAt: new Date() } });
   }
 
-  private async failed(doc: WalletCreditRow, err: unknown, log = true) {
+  /** `missing` counts toward the cap; a transient error backs off exponentially instead. */
+  private async failed(doc: WalletCreditRow, err: unknown, kind: 'missing' | 'error') {
     const msg = (err as Error)?.message ?? String(err);
-    if (log) this.logger.error(`wallet credit ${doc.key} (${doc.amount} toman, order ${doc.orderCode}, customer ${String(doc.userId)}) failed - the sweep retries: ${msg}`);
+    if (kind === 'error') this.logger.error(`wallet credit ${doc.key} (${doc.amount} toman, order ${doc.orderCode}, customer ${String(doc.userId)}) failed - the sweep retries: ${msg}`);
     try {
-      await this.intents.updateOne({ key: doc.key }, { $inc: { attempts: 1 }, $set: { lastError: msg.slice(0, 500) } });
-      if ((doc.attempts ?? 0) + 1 === MAX_ATTEMPTS) this.logger.error(`wallet credit ${doc.key} (${doc.amount} toman, order ${doc.orderCode}) reached ${MAX_ATTEMPTS} failed attempts - the sweep stops; settle manually`);
+      const update =
+        kind === 'missing'
+          ? { $inc: { attempts: 1 }, $set: { lastError: msg.slice(0, 500) } }
+          : { $inc: { failures: 1 }, $set: { lastError: msg.slice(0, 500), nextAttemptAt: new Date(Date.now() + backoffMs(doc.failures ?? 0)) } };
+      const updated = (await this.intents.findOneAndUpdate({ _id: doc._id, state: 'pending' }, update, { returnDocument: 'after', lean: true })) as WalletCreditRow | null;
+      if (kind === 'missing' && updated && (updated.attempts ?? 0) === MAX_ATTEMPTS) {
+        this.logger.error(`wallet credit ${doc.key} (${doc.amount} toman, order ${doc.orderCode}) reached ${MAX_ATTEMPTS} attempts - the sweep stops; settle manually`);
+      }
     } catch {
       // the intent stays pending either way
     }
@@ -183,26 +247,27 @@ export class WalletCreditsService {
 
   /**
    * D35 (S3): a difference paid from the wallet - debit (guarded on the balance and the key) -> the order takes it (compare-and-set
-   * on the base `chargedAmount` and the total) -> done. When the order can no longer take it, the debit goes back once (`dueback:`).
+   * on the base `chargedAmount` and the total, pushing `{ key, amount }`) -> done. When the order can no longer take it, the debit
+   * goes back once (`dueback:`).
    */
   private async finishDue(doc: WalletCreditRow): Promise<ApplyResult> {
     const due = -doc.amount;
     if (!(await this.move(doc))) {
-      await this.intents.updateOne({ key: doc.key, state: 'pending' }, { $set: { state: 'void', note: INSUFFICIENT_NOTE } });
+      await this.intents.updateOne({ _id: doc._id, state: 'pending' }, { $set: { state: 'void', note: INSUFFICIENT_NOTE } });
       return 'insufficient';
     }
     const base = doc.base ?? 0;
     const took = await this.orders.updateOne(
       { _id: doc.orderId, paid: true, refunded: { $ne: true }, chargedAmount: base, 'quote.total': base + due, status: { $nin: DUE_CLOSED } },
-      { $set: { chargedAmount: base + due }, $push: { creditKeys: doc.key, settlements: { kind: 'due_wallet', amount: due, at: new Date() } }, $inc: { __v: 1 } },
+      { $set: { chargedAmount: base + due }, $push: { creditKeys: { key: doc.key, amount: doc.amount }, settlements: { kind: 'due_wallet', amount: due, at: new Date() } }, $inc: { __v: 1 } },
     );
-    if (took.modifiedCount === 1 || (await this.markerPresent(doc))) {
-      await this.markDone(doc.key);
+    if (took.modifiedCount === 1 || (await this.markerOf(String(doc.orderId), doc.key))) {
+      await this.markDone(doc);
       return 'done';
     }
     const back = walletKey.dueBack(doc.key);
     await this.prepare({ key: back, userId: doc.userId, orderId: doc.orderId!, orderCode: doc.orderCode ?? '', amount: due, cause: 'due_reversal', base });
-    await this.intents.updateOne({ key: doc.key, state: 'pending' }, { $set: { state: 'reversed', doneAt: new Date(), note: 'the order no longer took the payment' } });
+    await this.intents.updateOne({ _id: doc._id, state: 'pending' }, { $set: { state: 'reversed', doneAt: new Date(), note: 'the order no longer took the payment' } });
     this.logger.warn(`order ${doc.orderCode}: wallet payment ${doc.key} of ${due} toman could not be taken - given back`);
     await this.apply(back);
     return 'void';

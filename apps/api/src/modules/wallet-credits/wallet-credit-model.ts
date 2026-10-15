@@ -26,3 +26,29 @@ export const walletKey = {
 
 /** Credits the deciding order write must confirm (its `creditKeys` holds the key) before the wallet moves. */
 export const needsOrderMarker = (cause: WalletCreditCause): boolean => cause !== 'due_wallet' && cause !== 'due_reversal';
+
+/** Transient errors back off exponentially, capped. `errors` = failures so far (0 -> first delay). */
+export const BACKOFF_BASE_MS = 60_000;
+export const BACKOFF_MAX_MS = 30 * 60_000;
+export const backoffMs = (errors: number): number => Math.min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * 2 ** Math.max(0, errors));
+
+/** The order id inside a key (every key type embeds it); null for a key that is not ours. */
+export function orderIdOfKey(key: string): string | null {
+  const parts = key.split(':');
+  const id = parts[0] === 'dueback' ? parts[2] : parts[1];
+  return id && /^[0-9a-f]{24}$/i.test(id) ? id : null;
+}
+
+/** The cause a revived (intent-less) credit had, from its key prefix. */
+export function causeOfKey(key: string): WalletCreditCause {
+  switch (key.split(':')[0]) {
+    case 'cancel': return 'cancel_refund';
+    case 'recount': return 'recount_refund';
+    case 'due': return 'due_wallet';
+    case 'dueback': return 'due_reversal';
+    default: return 'gateway_capture';
+  }
+}
+
+/** Retired key of a void intent: frees the real key for a later, legitimate credit. */
+export const voidedKey = (key: string, id: unknown): string => `${key}~void~${String(id)}`;

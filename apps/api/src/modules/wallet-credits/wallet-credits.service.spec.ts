@@ -8,7 +8,7 @@ function setup(over: { balance?: number; order?: Doc } = {}) {
   const orderId = new Types.ObjectId();
   const intents = fakeModel([], { unique: [['key']] });
   const users = fakeModel([{ _id: userId, walletBalance: over.balance ?? 0 }]);
-  const orders = fakeModel([{ _id: orderId, code: '10500', status: 'registered', paid: true, chargedAmount: 100000, quote: { total: 100000 }, timeline: [], ...over.order }]);
+  const orders = fakeModel([{ _id: orderId, customerId: userId, code: '10500', status: 'registered', paid: true, chargedAmount: 100000, quote: { total: 100000 }, timeline: [], ...over.order }]);
   const svc = new WalletCreditsService(intents as never, users as never, orders as never);
   return { svc, intents, users, orders, user: users.docs[0], order: orders.docs[0], userId, orderId };
 }
@@ -16,7 +16,7 @@ type S = ReturnType<typeof setup>;
 const credit = (s: S, key: string, amount = 50000, cause: WalletCreditCause = 'cancel_refund') =>
   s.svc.prepare({ key, userId: s.userId, orderId: s.orderId, orderCode: '10500', amount, cause });
 /** What the deciding order write does in the same compare-and-set. */
-const mark = (s: S, key: string) => { s.order.creditKeys = [...(s.order.creditKeys ?? []), key]; };
+const mark = (s: S, key: string, amount = 50000) => { s.order.creditKeys = [...(s.order.creditKeys ?? []), { key, amount }]; };
 const later = (ms: number) => new Date(Date.now() + ms);
 const MIN = 60_000;
 
@@ -36,42 +36,121 @@ describe('wallet credit intents (D34)', () => {
     expect(await s.svc.apply(key)).toBe('done');
     expect(s.user.walletBalance).toBe(50000);
   });
-  it('prepare is idempotent by key and never overwrites the amount of an intent an order took (F6)', async () => {
+  it('prepare is idempotent by key and first-writer-wins: the stored amount is never rewritten', async () => {
     const s = setup();
     const key = walletKey.cancel(String(s.orderId));
     await credit(s, key, 45000);
-    await credit(s, key, 45000); // a retried cancel
-    expect(s.intents.docs).toHaveLength(1);
-    mark(s, key);
-    const kept = await credit(s, key, 1); // once the order took it, the stored amount is final
-    expect(kept.amount).toBe(45000);
+    const again = await credit(s, key, 1);
+    expect(again.amount).toBe(45000);
     expect(s.intents.docs).toHaveLength(1);
     expect(s.intents.docs[0].amount).toBe(45000);
   });
-  it('a stale cancel intent (500k, never taken) and a later cancel after a recount (420k) refund 420k exactly once (F6)', async () => {
+  it('ping-pong: P1 reads 500k and stalls, P2 prepares 420k and decides; P1 prepares 500k -> exactly 420k, once (P-W1)', async () => {
+    for (const p2Applies of [true, false]) {
+      const s = setup();
+      const key = walletKey.cancel(String(s.orderId));
+      await credit(s, key, 420000); // P2
+      mark(s, key, 420000); // P2's compare-and-set (guarded on the amount it prepared)
+      await credit(s, key, 500000); // P1, late: first writer wins
+      expect(s.intents.docs).toHaveLength(1);
+      if (p2Applies) expect(await s.svc.apply(key)).toBe('done');
+      else expect(await s.svc.sweep(later(2 * MIN))).toMatchObject({ applied: 1 }); // P2 crashed after its CAS
+      await s.svc.sweep(later(3 * MIN));
+      expect(s.user.walletBalance).toBe(420000);
+      expect(s.user.walletCreditKeys).toEqual([key]);
+    }
+  });
+  it('ping-pong the other way: the intent holds 500k but the order decided 420k -> 420k, once (P-W1)', async () => {
     const s = setup();
     const key = walletKey.cancel(String(s.orderId));
-    await credit(s, key, 500000); // the first cancel died before its compare-and-set
-    const row = await credit(s, key, 420000); // the order was recounted; the customer cancels again
-    expect(row.amount).toBe(420000);
-    expect(s.intents.docs.find((d) => d.key === key)?.amount).toBe(420000);
-    expect(s.intents.docs.filter((d) => d.state === 'void' && d.amount === 500000)).toHaveLength(1);
-    mark(s, key);
-    expect(await s.svc.apply(key, 420000)).toBe('done');
-    expect(await s.svc.apply(key, 420000)).toBe('done');
-    await s.svc.sweep(later(2 * MIN));
+    await credit(s, key, 500000); // P1 wrote first
+    await credit(s, key, 420000); // P2 gets P1's row back
+    mark(s, key, 420000);
+    expect(await s.svc.apply(key)).toBe('done');
+    expect(await s.svc.apply(key)).toBe('done');
     expect(s.user.walletBalance).toBe(420000);
-    expect(s.user.walletCreditKeys).toEqual([key]);
+    expect(s.intents.docs[0]).toMatchObject({ state: 'done', amount: 420000 });
   });
-  it('apply refuses and voids an intent whose amount differs from the one the order decided (F6)', async () => {
+  it('the sweep credits the marker amount, not the intent amount (P-W1)', async () => {
     const s = setup();
     const key = walletKey.cancel(String(s.orderId));
     await credit(s, key, 500000);
+    mark(s, key, 420000);
+    expect(await s.svc.sweep(later(2 * MIN))).toMatchObject({ applied: 1 });
+    expect(s.user.walletBalance).toBe(420000);
+  });
+  it('a stale intent no order took never blocks a later cancel: voided at 24 h, key freed, a new cancel refunds once (C2)', async () => {
+    const s = setup();
+    const key = walletKey.cancel(String(s.orderId));
+    await credit(s, key, 500000); // CAS failed, the caller gave up
+    expect(await s.svc.sweep(later(25 * 60 * MIN))).toMatchObject({ voided: 1 });
+    expect(s.intents.docs[0]).toMatchObject({ state: 'void', key: expect.stringContaining('~void~') });
+    const row = await credit(s, key, 420000);
+    expect(row.amount).toBe(420000);
+    mark(s, key, 420000);
+    expect(await s.svc.apply(key)).toBe('done');
+    await s.svc.sweep(later(26 * 60 * MIN));
+    expect(s.user.walletBalance).toBe(420000);
+  });
+  it('TOCTOU at 24 h: the order write lands just as the sweep voids -> credited exactly once (C2)', async () => {
+    const s = setup();
+    const key = walletKey.cancel(String(s.orderId));
+    await credit(s, key);
+    const real = s.intents.updateOne.getMockImplementation()!;
+    s.intents.updateOne.mockImplementationOnce(async (...a: unknown[]) => { mark(s, key, 50000); return (real as (...x: unknown[]) => unknown)(...a) as never; });
+    await s.svc.sweep(later(25 * 60 * MIN));
+    expect(s.user.walletBalance).toBe(50000);
+    expect(await s.svc.apply(key)).toBe('done'); // the caller's own apply: no double
+    await s.svc.sweep(later(26 * 60 * MIN));
+    expect(s.user.walletBalance).toBe(50000);
+  });
+  it('a marker revives a voided or lost intent and the user key prevents a double (C2, M6)', async () => {
+    const s = setup();
+    const key = walletKey.cancel(String(s.orderId));
+    await credit(s, key);
+    await s.svc.sweep(later(25 * 60 * MIN)); // voided, key renamed
+    mark(s, key, 50000);
+    expect(await s.svc.apply(key)).toBe('done');
+    expect(await s.svc.apply(key)).toBe('done');
+    expect(s.user.walletBalance).toBe(50000);
+    // no intent at all (lost), marker present
+    const t = setup();
+    const k2 = walletKey.cancel(String(t.orderId));
+    mark(t, k2, 30000);
+    expect(await t.svc.apply(k2)).toBe('done');
+    expect(await t.svc.apply(k2)).toBe('done');
+    expect(t.user.walletBalance).toBe(30000);
+  });
+  it('250 old marker-less intents do not block a fresh marked one (I4)', async () => {
+    const s = setup();
+    const old = new Date(Date.now() - 48 * 3_600_000);
+    for (let n = 0; n < 250; n++) {
+      s.intents.docs.push({ _id: new Types.ObjectId(), key: `cancel:${new Types.ObjectId()}`, userId: s.userId, orderId: new Types.ObjectId(), amount: 1000, cause: 'cancel_refund', state: 'pending', attempts: 0, createdAt: new Date(old.getTime() + n), updatedAt: old });
+    }
+    const key = walletKey.cancel(String(s.orderId));
+    await credit(s, key, 50000);
+    mark(s, key, 50000);
+    const first = await s.svc.sweep(later(2 * MIN));
+    expect(first).toMatchObject({ applied: 1, voided: 200 });
+    expect(s.user.walletBalance).toBe(50000);
+    expect(await s.svc.sweep(later(3 * MIN))).toMatchObject({ voided: 50 });
+  });
+  it('transient errors back off exponentially and do not count toward the cap (I3)', async () => {
+    const s = setup();
+    const key = walletKey.cancel(String(s.orderId));
+    await credit(s, key);
     mark(s, key);
-    expect(await s.svc.apply(key, 420000)).toBe('void');
-    expect(s.intents.docs[0]).toMatchObject({ state: 'void' });
+    for (let n = 0; n < 3; n++) s.users.updateOne.mockImplementationOnce(async () => { throw new Error('mongo down'); });
+    for (let n = 0; n < 3; n++) expect(await s.svc.apply(key)).toBe('retry');
+    const d = s.intents.docs[0];
+    expect(d).toMatchObject({ attempts: 0, failures: 3 });
+    const wait = d.nextAttemptAt.getTime() - Date.now();
+    expect(wait).toBeGreaterThan(3.9 * MIN);
+    expect(wait).toBeLessThan(4.1 * MIN);
     expect(await s.svc.sweep(later(2 * MIN))).toMatchObject({ applied: 0 });
     expect(s.user.walletBalance).toBe(0);
+    expect(await s.svc.sweep(later(5 * MIN))).toMatchObject({ applied: 1 });
+    expect(s.user.walletBalance).toBe(50000);
   });
   it('rejects a zero or fractional amount', async () => {
     const s = setup();
@@ -106,7 +185,7 @@ describe('wallet credit intents (D34)', () => {
     s.intents.updateOne.mockImplementationOnce(async () => { throw new Error('connection reset'); });
     expect(await s.svc.apply(key)).toBe('retry');
     expect(s.user.walletBalance).toBe(50000);
-    expect(s.intents.docs[0]).toMatchObject({ state: 'pending', attempts: 1, lastError: expect.stringMatching(/connection reset/) });
+    expect(s.intents.docs[0]).toMatchObject({ state: 'pending', attempts: 0, failures: 1, lastError: expect.stringMatching(/connection reset/) });
     expect(await s.svc.sweep(later(2 * MIN))).toMatchObject({ applied: 1 });
     expect(s.user.walletBalance).toBe(50000);
     expect(s.intents.docs[0].state).toBe('done');
@@ -146,6 +225,7 @@ describe('wallet credit intents (D34)', () => {
     expect(s.intents.findOne.mock.calls.length).toBe(finds); // never even tried
     expect(account.walletBalance).toBe(0);
     expect(s.intents.docs[0].state).toBe('pending');
+    expect(await s.svc.cappedCount()).toBe(1);
   });
   it('a sweep below the cap still retries a missing account that came back (F14)', async () => {
     const s = setup();

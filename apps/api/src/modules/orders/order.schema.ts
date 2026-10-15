@@ -123,6 +123,7 @@ export const OrderDeliverySchema = SchemaFactory.createForClass(OrderDelivery);
 
 /** v4.4 (D35): money settled after checkout — a recount refund, a difference paid from the wallet or in cash at handover. */
 export interface OrderSettlement { kind: 'recount_refund' | 'due_wallet' | 'due_cash'; amount: number; at: Date }
+export interface OrderCreditMarker { key: string; amount: number }
 
 @Schema({ collection: 'orders', timestamps: true, optimisticConcurrency: true })
 export class Order {
@@ -236,9 +237,14 @@ export class Order {
   @Prop({ type: [String], default: undefined, select: false })
   refundedAuthorities?: string[];
 
-  /** Internal (v4.4, D34): wallet-credit keys this order's own writes confirmed (cancel, gateway marker, recount, due). Never serialized. */
-  @Prop({ type: [String], default: undefined, select: false })
-  creditKeys?: string[];
+  /**
+   * Internal (v4.4, D34): the wallet-credit markers this order's own money writes confirmed - `{ key, amount }`. The deciding
+   * compare-and-set of EVERY caller (cancel, gateway, recount, due) must guard on the amount it prepared (e.g. `chargedAmount`)
+   * and push `{ key, amount }` in that same write: the amount in the marker is what the wallet moves, whatever the intent says.
+   * Never serialized.
+   */
+  @Prop({ type: [{ _id: false, key: { type: String, required: true }, amount: { type: Number, required: true } }], default: undefined, select: false })
+  creditKeys?: OrderCreditMarker[];
 
   /** v4.4 (D35): settlements after checkout (customer + admin JSON). */
   @Prop({ type: [{ _id: false, kind: { type: String, enum: ['recount_refund', 'due_wallet', 'due_cash'] }, amount: Number, at: Date }], default: undefined })
