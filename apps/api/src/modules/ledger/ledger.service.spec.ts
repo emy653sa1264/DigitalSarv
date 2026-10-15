@@ -200,7 +200,7 @@ describe('LedgerService rulings', () => {
     const s = setup();
     s.entries.docs.push(counted(100000, new Date('2026-10-14T10:00:00Z')));
     const real = s.entries.updateOne.getMockImplementation()!;
-    s.entries.updateOne.mockImplementation(async (f: Doc, u: Doc, o: never) => {
+    s.entries.updateOne.mockImplementation(async (f: Doc, u: Doc, o?: { upsert?: boolean }) => {
       if (u.$setOnInsert?.slot) throw Object.assign(new Error('E11000'), { code: 11000, keyPattern: { slot: 1 } });
       return real(f, u, o);
     });
@@ -221,5 +221,25 @@ describe('LedgerService rulings', () => {
     expect(s.jobs.docs.find((j) => String(j._id) === String(fresh._id))!.ledgerPending).toBe(true);
     expect(await s.svc.reconcile(2)).toBe(1); // page 2 reaches the newer, creditable job
     expect(s.jobs.docs.find((j) => String(j._id) === String(fresh._id))!.ledgerPending).toBeUndefined();
+  });
+});
+
+describe('M4 final review I2 — the ledger tick self-heals jobs delivered by an older instance', () => {
+  it('flags recent delivered / completed jobs without ledgerAt or ledgerPending, credits them, at most every 10 minutes', async () => {
+    const s = setup({ ledgerPending: undefined, updatedAt: new Date() });
+    delete (s.job as Doc).ledgerPending;
+    const old = { ...s.job, _id: new Types.ObjectId(), updatedAt: new Date(Date.now() - 30 * 86_400_000) }; // the seed backfill's
+    const done = { ...s.job, _id: new Types.ObjectId(), ledgerAt: new Date(), updatedAt: new Date() };
+    const live = { ...s.job, _id: new Types.ObjectId(), status: 'in_production', updatedAt: new Date() };
+    s.jobs.docs.push(old, done, live);
+    expect(await s.svc.reconcile()).toBe(1);
+    expect(s.entries.docs.map((e) => e.key)).toEqual([`credit:${String(s.job._id)}:${String(P)}:production`]);
+    expect(s.job).toMatchObject({ ledgerAt: expect.any(Date) });
+    for (const j of [old, done, live]) expect(j).not.toHaveProperty('ledgerPending');
+    const again = { ...s.job, _id: new Types.ObjectId(), ledgerAt: undefined };
+    delete (again as Doc).ledgerAt;
+    s.jobs.docs.push(again);
+    expect(await s.svc.healUnflagged()).toBe(0); // throttled
+    expect(await s.svc.healUnflagged(new Date(Date.now() + 11 * 60_000))).toBe(1);
   });
 });

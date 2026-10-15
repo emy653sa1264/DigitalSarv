@@ -173,6 +173,11 @@ function evalExpr(e: unknown, row: Doc): unknown {
   const entries = Object.entries(e as Doc);
   if (!entries[0][0].startsWith('$')) return Object.fromEntries(entries.map(([k, v]) => [k, evalExpr(v, row)])); // object literal (e.g. a compound group _id)
   const [op, arg] = entries[0];
+  // `$cond` also has an object form: { if, then, else }
+  if (op === '$cond' && arg && typeof arg === 'object' && !Array.isArray(arg)) {
+    const c = arg as Doc;
+    return evalExpr(c.if, row) ? evalExpr(c.then, row) : evalExpr(c.else, row);
+  }
   const args = (Array.isArray(arg) ? arg : [arg]).map((x) => evalExpr(x, row));
   const n = (i: number) => norm(args[i]) as number;
   switch (op) {
@@ -236,10 +241,17 @@ export function runPipeline(docs: Doc[], pipeline: Doc[], joins: Record<string, 
     } else if (op === '$group') rows = groupStage(rows, arg);
     else if (op === '$addFields' || op === '$set') rows = rows.map((r) => ({ ...r, ...Object.fromEntries(Object.entries(arg as Doc).map(([k, v]) => [k, evalExpr(v, r)])) }));
     else if (op === '$unwind') {
-      const path = String(typeof arg === 'string' ? arg : arg.path).slice(1); // an array field becomes one row per element; missing/empty drops the row
+      // like Mongo: an array field becomes one row per element (a dotted path is set in place); a non-array, non-null
+      // value is one row as is; missing, null or empty drops the row
+      const path = String(typeof arg === 'string' ? arg : arg.path).slice(1);
       rows = rows.flatMap((r) => {
         const list = get(r, path);
-        return Array.isArray(list) ? list.map((el) => ({ ...r, [path]: clone(el) })) : [];
+        if (list == null || (Array.isArray(list) && !list.length)) return [];
+        return (Array.isArray(list) ? list : [list]).map((el) => {
+          const copy = clone(r);
+          setPath(copy, path, clone(el));
+          return copy;
+        });
       });
     }
     else throw new Error(`fake-model: unsupported stage ${op}`);

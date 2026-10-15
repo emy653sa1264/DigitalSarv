@@ -15,6 +15,7 @@ import { maskSheba, normalizeSheba, shebaProblem } from './sheba.js';
 
 /** M4: a payout date at most a year back. */
 const MAX_PAST_DAYS = 366;
+export const BANK_RACED = 'حساب بانکی مجری هم‌زمان تغییر کرد؛ دوباره تلاش کنید';
 const oid = (id: string) => new Types.ObjectId(id);
 
 /** D31: weekly payouts recorded by an admin (never above the balance, R1), their voids, and the payout account (R7). */
@@ -30,7 +31,7 @@ export class PayoutsService {
 
   async record(body: { providerId: string; amount: number; paidAt: string; bankRef: string; note?: string; requestId: string }, by: string): Promise<LedgerEntryView> {
     // M5: an archived or suspended provider is still paid — a balance owed must be paid out
-    const p = await this.reads.findProvider(body.providerId);
+    const p = await this.reads.findProvider(body.providerId, { bank: true });
     if (!isAmount(body.amount, { min: 1 })) throw new BadRequestException(AMOUNT_MSG);
     if (!isYmd(body.paidAt)) throw new BadRequestException('تاریخ باید به‌صورت yyyy-mm-dd باشد');
     if (body.paidAt > tehranYmd()) throw new BadRequestException('تاریخ پرداخت نمی‌تواند در آینده باشد');
@@ -81,11 +82,12 @@ export class PayoutsService {
     if (problem) throw new BadRequestException(problem);
     const holder = body.holder?.trim() ?? '';
     if (holder.length < 2 || holder.length > 80) throw new BadRequestException('نام صاحب حساب را وارد کنید');
-    const prev = await this.reads.findProvider(providerId); // 404 first; also the previous account for the audit row
+    const prev = await this.reads.findProvider(providerId, { bank: true }); // 404 first; also the previous account for the audit row
     const mask = (sheba: string, h: string) => ({ sheba: maskSheba(sheba), holder: h });
     const bankAccount: BankAccount = { sheba: normalizeSheba(body.sheba), holder, bankName: body.bankName?.trim() ?? '', updatedAt: new Date(), updatedBy: oid(by) };
-    const doc = await this.centers.findByIdAndUpdate(providerId, { $set: { bankAccount }, $push: { bankAccountHistory: { at: bankAccount.updatedAt, by: oid(by), old: prev.bankAccount?.sheba ? mask(prev.bankAccount.sheba, prev.bankAccount.holder) : null, new: mask(bankAccount.sheba, holder) } } }, { returnDocument: 'after' });
-    if (!doc) throw new NotFoundException('مجری یافت نشد');
+    // final wave: conditional on the account read above, so the history's `old` is never stale (a concurrent change → 409)
+    const doc = await this.centers.findOneAndUpdate({ _id: oid(providerId), 'bankAccount.sheba': prev.bankAccount?.sheba ?? { $exists: false } }, { $set: { bankAccount }, $push: { bankAccountHistory: { at: bankAccount.updatedAt, by: oid(by), old: prev.bankAccount?.sheba ? mask(prev.bankAccount.sheba, prev.bankAccount.holder) : null, new: mask(bankAccount.sheba, holder) } } }, { returnDocument: 'after' });
+    if (!doc) throw new ConflictException(BANK_RACED);
     await this.notifier.bankChanged(providerId, `${providerId}-${bankAccount.updatedAt.getTime()}`);
     return bankView(bankAccount, false)!; // P12: the response is masked; the full Sheba only appears in the provider account read
   }

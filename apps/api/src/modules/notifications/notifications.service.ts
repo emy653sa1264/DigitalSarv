@@ -27,6 +27,8 @@ export interface DispatchOrder { _id: unknown; code: string; customerId: unknown
 @Injectable()
 export class NotificationsService {
   private readonly logger = new Logger('Notifications');
+  /** I2: events already reported as having no template (one warning per event per process). */
+  private readonly missingWarned = new Set<string>();
 
   constructor(
     @InjectModel(NotificationTemplate.name) private readonly templates: Model<NotificationTemplate>,
@@ -89,8 +91,16 @@ export class NotificationsService {
     try {
       const ids = [...new Set(userIds.filter(Boolean).map(String))];
       if (!ids.length) return;
-      const template = await this.templates.findOne({ event, channel: 'push', on: true });
-      if (!template) return;
+      const template = await this.templates.findOne({ event, channel: 'push' });
+      if (!template) {
+        // a missing template (seed:base not run after an upgrade) silently drops notices such as `bank_account_changed`
+        if (!this.missingWarned.has(event)) {
+          this.missingWarned.add(event);
+          this.logger.warn(`notification template "${event}" is missing — run seed:base; this event is not delivered`);
+        }
+        return;
+      }
+      if (!template.on) return;
       const audience = audienceOf(event);
       const text = template.text + suffix;
       // one recipient at a time: a failed insert for one user never silences the rest

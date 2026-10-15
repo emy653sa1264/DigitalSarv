@@ -23,7 +23,7 @@ describe('Center.bankAccount (v4.3 R7) is hidden by default', () => {
     const schema = CenterSchema.clone();
     toJSONPlugin(schema);
     const M = model('CenterBankJsonSpec', schema);
-    const json = new M({ name: 'x', bankAccount: { sheba: SHEBA, holder: 'h', bankName: 'b', updatedAt: new Date() } }).toJSON() as Record<string, unknown>;
+    const json = new M({ name: 'x', bankAccount: { sheba: SHEBA, holder: 'h', bankName: 'b', updatedAt: new Date() } }).toJSON() as unknown as Record<string, unknown>;
     expect(json).not.toHaveProperty('bankAccount');
     expect(JSON.stringify(json)).not.toContain(SHEBA);
   });

@@ -31,6 +31,8 @@ export function sameRequest(want: Partial<NewEntry>): (e: Partial<LedgerEntry>) 
 }
 
 const CREDITABLE = ['delivered', 'completed'];
+const HEAL_DAYS = 7;
+const HEAL_EVERY_MS = 10 * 60_000;
 const dupOn = (err: unknown, field: string) =>
   (err as { code?: number }).code === 11000 && !!(err as { keyPattern?: Record<string, unknown> }).keyPattern?.[field];
 
@@ -196,6 +198,27 @@ export class LedgerService {
   }
 
   private reconcileCursor: Types.ObjectId | null = null;
+  private healedAt = 0;
+
+  /**
+   * I2 self-heal (R11 without seed timing): a job delivered by a pre-v4.3 instance (the deploy window) has neither
+   * `ledgerAt` nor `ledgerPending`; flag it so the pass below credits it. Bounded to jobs updated in the last
+   * `HEAL_DAYS` (older ones are the `seed:base` backfill's), at most every `HEAL_EVERY_MS` per process. Returns how many.
+   */
+  async healUnflagged(now = new Date()): Promise<number> {
+    if (now.getTime() - this.healedAt < HEAL_EVERY_MS) return 0;
+    this.healedAt = now.getTime();
+    const res = await this.jobs.updateMany(
+      {
+        status: { $in: CREDITABLE as Job['status'][] }, updatedAt: { $gte: new Date(now.getTime() - HEAL_DAYS * 86_400_000) },
+        ledgerAt: { $exists: false }, ledgerPending: { $exists: false },
+      },
+      { $set: { ledgerPending: true } },
+      { timestamps: false },
+    );
+    if (res.modifiedCount) this.logger.warn(`ledger: ${res.modifiedCount} delivered job(s) of an older instance flagged for credit`);
+    return res.modifiedCount;
+  }
 
   /**
    * Safety net (dispatch tick): jobs still flagged `ledgerPending`, one bounded page per run, walked by an `_id` cursor
@@ -204,6 +227,7 @@ export class LedgerService {
    */
   async reconcile(limit = 200): Promise<number> {
     try {
+      await this.healUnflagged();
       const rows = await this.jobs
         .find({ ledgerPending: true, ...(this.reconcileCursor ? { _id: { $gt: this.reconcileCursor } } : {}) }, { _id: 1 })
         .sort({ _id: 1 })

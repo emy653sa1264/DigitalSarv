@@ -36,7 +36,7 @@ export function BankCard({ providerId, bank, history }: { providerId: string; ba
           <div className="text-[12px] font-extrabold text-muted-1">تاریخچه تغییر حساب</div>
           {history.map((h, i) => (
             <div key={`${h.at}-${i}`} className="text-[11.5px] leading-6 text-muted-2">
-              {when(h.at)} · {h.by}
+              {when(h.at)} · {h.by.name || 'مدیر'}
               <div dir="ltr" className="text-start">{h.old ? `${groupSheba(h.old.sheba)} → ` : ''}{groupSheba(h.new.sheba)}</div>
             </div>
           ))}

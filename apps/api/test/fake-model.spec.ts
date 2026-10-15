@@ -73,4 +73,20 @@ describe('fake-model (v4.3 additions)', () => {
     expect(await m.updateOne({ key: 'a' }, { $setOnInsert: { slot: 's9' } }, { upsert: true })).toMatchObject({ matchedCount: 1, upsertedCount: 0 });
     expect(m.docs).toHaveLength(3);
   });
+  it('final wave: $cond object form; $unwind on a dotted path keeps the parent, a scalar is one row, null / empty drop', async () => {
+    const m = fakeModel([
+      { _id: 1, a: { list: [1, 2], keep: 'k' }, v: 5 },
+      { _id: 2, a: { list: 7, keep: 'k' }, v: -1 },
+      { _id: 3, a: { list: [], keep: 'k' } },
+      { _id: 4, a: { keep: 'k' } },
+    ]);
+    const r = await m.aggregate([
+      { $unwind: '$a.list' },
+      { $addFields: { sign: { $cond: { if: { $gt: ['$v', 0] }, then: 'pos', else: 'neg' } } } },
+    ]);
+    expect(r.map((x) => [x._id, x.a, x.sign])).toEqual([
+      [1, { list: 1, keep: 'k' }, 'pos'], [1, { list: 2, keep: 'k' }, 'pos'], [2, { list: 7, keep: 'k' }, 'neg'],
+    ]);
+    expect(r.every((x) => !('a.list' in x))).toBe(true);
+  });
 });

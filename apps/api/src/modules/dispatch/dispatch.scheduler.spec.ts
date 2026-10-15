@@ -111,3 +111,27 @@ describe('DispatchScheduler (D21)', () => {
     await expect(s.sched.tick(NOW)).resolves.toMatchObject({ ledger: 0 });
   });
 });
+
+describe('final wave — boot warning when the ledger is not wired', () => {
+  it('JobsService and DispatchScheduler warn at bootstrap without a LedgerService, and stay quiet with one', () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const prev = process.env.DISPATCH_SCHEDULER;
+    process.env.DISPATCH_SCHEDULER = '0';
+    try {
+      const s = setup();
+      s.jobs.onApplicationBootstrap();
+      s.sched.onApplicationBootstrap();
+      const msgs = warn.mock.calls.map((c) => String(c[0]));
+      expect(msgs.filter((m) => m.includes('LedgerService is not wired'))).toHaveLength(2);
+      warn.mockClear();
+      const ledger = {} as never;
+      new JobsService(s.jobsModel as never, s.orders as never, {} as never, s.notifier as never, undefined, ledger).onApplicationBootstrap();
+      new DispatchScheduler(s.jobsModel as never, fakeModel([]) as never, s.jobs, {} as never, s.notifier as never, ledger).onApplicationBootstrap();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      process.env.DISPATCH_SCHEDULER = prev;
+      if (prev === undefined) delete process.env.DISPATCH_SCHEDULER;
+      warn.mockRestore();
+    }
+  });
+});

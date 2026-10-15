@@ -12,8 +12,13 @@ const holderMsg = { message: 'نام صاحب حساب را وارد کنید' }
 const bankRefMsg = { message: 'شماره پیگیری بانکی را وارد کنید' };
 const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
 
+/** Final wave: the ledger's paged lists bound the search term (a name search over providers). */
+export class LedgerPageQueryDto extends PageQueryDto {
+  @IsOptional() @IsString() @MaxLength(100, { message: 'عبارت جستجو حداکثر ۱۰۰ نویسه است' }) override q?: string = undefined;
+}
+
 // The regex only checks the shape; real calendar validity (isYmd) and range rules are enforced in the services (P6).
-export class LedgerEntriesQueryDto extends PageQueryDto {
+export class LedgerEntriesQueryDto extends LedgerPageQueryDto {
   @IsOptional() @IsIn(LEDGER_KINDS) kind?: LedgerKind;
   @IsOptional() @Matches(YMD, ymdMsg) from?: string;
   @IsOptional() @Matches(YMD, ymdMsg) to?: string;

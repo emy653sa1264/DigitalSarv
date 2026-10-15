@@ -39,6 +39,7 @@ export class DispatchScheduler implements OnApplicationBootstrap {
   }
 
   onApplicationBootstrap() {
+    if (!this.ledger) this.logger.warn('LedgerService is not wired into DispatchScheduler: the ledger safety net (reconcile) does not run');
     if (!this.off) void this.tick();
   }
 

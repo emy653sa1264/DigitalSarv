@@ -90,7 +90,7 @@ The runtime image contains only `dist/` and production dependencies. It has no p
 dc run --rm api node dist/seed/seed-base.js
 ```
 
-Run `seed:base` during deploy, before traffic is switched to the new version: it publishes the v4 price book (idempotent, a second run inserts 0 price versions).
+Run `seed:base` during deploy, before traffic is switched to the new version: it publishes the v4 price book (idempotent, a second run inserts 0 price versions). Upgrades to v4.3 (M4, ledger) run it **after** the new API is up instead — see «Upgrade to M4 (v4.3)» in section 6.
 
 
 Re-running it is safe (upserts). Admins then edit everything in `/admin/`.
@@ -135,6 +135,27 @@ IMAGE_TAG=prev dc up -d --no-build api web
 ```
 
 When a release changes data shape, restore the Mongo backup taken before the update (section 9).
+
+### Upgrade to M4 (v4.3, provider ledger and settlement)
+
+Run the base seed once the new API is live — **after** `dc up -d --build`, not before:
+
+```bash
+dc up -d --build                                  # as above; wait until /api/health/ready answers
+dc run --rm api node dist/seed/seed-base.js       # idempotent; safe to re-run
+```
+
+Why after: from v4.3 on, every delivery flags its job for crediting in the same write. The seed backfills what older
+instances left behind, so it must run when no older instance can still deliver jobs:
+
+- **Ledger backfill (R11):** delivered / completed jobs without `ledgerAt` are flagged once, and the dispatch tick credits
+  them. (The tick also flags jobs of the last 7 days that an older instance delivered, but older ones need the seed.)
+- **Compensation backfill (P10):** jobs that lost work mid-production before v4.3 get their open «جبران خسارت مجری» cases.
+- **Templates:** `payout_recorded`, `payout_voided` and `bank_account_changed` (the provider's security notice when a
+  bank account changes). Without them these notices are not sent, and the API logs
+  `notification template "…" is missing — run seed:base` once per event.
+
+Re-run the same command if an older instance served traffic after the first run (for example, in a rolling deploy).
 
 ## 7. Zarinpal
 

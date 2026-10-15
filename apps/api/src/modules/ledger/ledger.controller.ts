@@ -4,9 +4,8 @@ import type { AuthUser } from '../../common/auth/auth-user.js';
 import { CurrentUser, RequirePermissions, Roles } from '../../common/auth/decorators.js';
 import { JwtAuthGuard, RolesGuard } from '../../common/auth/guards.js';
 import { PermissionsGuard } from '../../common/auth/permissions.guard.js';
-import { PageQueryDto } from '../../common/utils/pagination.js';
 import { CurrentProvider, ProviderScopeGuard } from '../centers/provider-scope.guard.js';
-import { AdjustmentDto, BankAccountDto, CompensationDto, LedgerEntriesQueryDto, PayoutDto, ResolvePendingDto, StatementQueryDto, VoidPayoutDto, WalletQueryDto } from './dto/ledger.dto.js';
+import { AdjustmentDto, BankAccountDto, CompensationDto, LedgerEntriesQueryDto, LedgerPageQueryDto, PayoutDto, ResolvePendingDto, StatementQueryDto, VoidPayoutDto, WalletQueryDto } from './dto/ledger.dto.js';
 import { LedgerActionsService } from './ledger-actions.service.js';
 import { LedgerReadsService } from './ledger-reads.service.js';
 import { PayoutsService } from './payouts.service.js';
@@ -20,7 +19,7 @@ export class AdminLedgerController {
   constructor(private readonly reads: LedgerReadsService, private readonly actions: LedgerActionsService, private readonly payouts: PayoutsService, private readonly wallet: WalletService) {}
 
   @Get('balances') @RequirePermissions('ledger_view')
-  balances(@Query() q: PageQueryDto) { return this.reads.balances(q); }
+  balances(@Query() q: LedgerPageQueryDto) { return this.reads.balances(q); }
 
   /** The full Sheba is shown only to `payout_record`; `ledger_view` alone sees it masked. */
   @Get('providers/:id') @RequirePermissions('ledger_view')
@@ -35,13 +34,13 @@ export class AdminLedgerController {
   statement(@Param('id') id: string, @Query() q: StatementQueryDto) { return this.reads.statement(id, q.cutoff); }
 
   @Get('pending') @RequirePermissions('ledger_view')
-  pending(@Query() q: PageQueryDto) { return this.reads.pending(q); }
+  pending(@Query() q: LedgerPageQueryDto) { return this.reads.pending(q); }
 
   @Post('entries/:id/resolve') @HttpCode(200) @RequirePermissions('ledger_adjust')
   resolve(@Param('id') id: string, @Body() dto: ResolvePendingDto, @CurrentUser() user: AuthUser) { return this.actions.resolve(id, dto, user.id); }
 
   @Get('compensation') @RequirePermissions('ledger_view')
-  compensation(@Query() q: PageQueryDto) { return this.actions.compensationQueue(q); }
+  compensation(@Query() q: LedgerPageQueryDto) { return this.actions.compensationQueue(q); }
 
   @Post('compensation') @RequirePermissions('ledger_adjust')
   decideCompensation(@Body() dto: CompensationDto, @CurrentUser() user: AuthUser) { return this.actions.decideCompensation(dto, user.id); }
@@ -79,5 +78,5 @@ export class ProviderLedgerController {
 
   @Get() summary(@CurrentProvider() providerId: string) { return this.reads.providerSummary(providerId); }
 
-  @Get('entries') entries(@CurrentProvider() providerId: string, @Query() q: PageQueryDto) { return this.reads.providerEntries(providerId, q); }
+  @Get('entries') entries(@CurrentProvider() providerId: string, @Query() q: LedgerPageQueryDto) { return this.reads.providerEntries(providerId, q); }
 }

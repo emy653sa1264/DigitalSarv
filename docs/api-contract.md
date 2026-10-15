@@ -1300,17 +1300,29 @@ manual «اصلاحیه سفارش ۱۰۴۲۱» or «اصلاحیه»; «پرد�
   `delivery.fee` when it names that provider (a fee of 0 creates nothing); unknown fee → pending.
 - A job delivered without a provider creates nothing. `occurredAt` = `Job.deliveredAt`; `countedAt` = when counted.
 - `seed:base` flags delivered/completed jobs without `ledgerAt` once (jobs delivered before v4.3 are credited once, R11).
+  The ledger tick also self-heals (at most every 10 minutes per instance): delivered/completed jobs updated in the last 7 days
+  with neither `ledgerAt` nor `ledgerPending` (delivered by a pre-v4.3 instance during a rolling deploy) are flagged and
+  credited, so no credit depends on when `seed:base` ran. A credit resolved later counts in the week it is resolved (`countedAt`).
 
 ### Compensation («جبران خسارت مجری», D30, R6)
 
-Open cases are tracked on the job: `Job.compOpen` (provider ids, sparse index) gets the provider via `$addToSet` **in the same
+Open cases are tracked on the job: `Job.compOpen` (provider ids, partial index; removed when it becomes empty) gets the provider via `$addToSet` **in the same
 compare-and-set** that creates the case — a cancellation with `cancel.stage` `in_production` / `after_production` (the holder, plus
 a separate delivery provider whose leg had started, i.e. the job was `out_for_delivery`), a producer replaced by an admin's
 reassign or unassign from those stages (a provider's own `failed` / reject / timeout never opens a case). The queue reads only
-flagged jobs (cursor-paged, no cap). The case is closed by `$pull` after the decision entry (`comp:` key) is written (a replay
-still pulls), and when the provider delivers the job (pulled in the delivered write). A flagged provider is **not listed and
-cannot be decided** when it now holds the job and it is `delivered` / `completed`, when the job has `ledgerPending`, or when its
-production credit exists. `seed:base` flags pre-existing cases once (history-based detection, jobs without `compOpen`).
+flagged jobs (cursor-paged, no cap). An assign / reassign **to a provider with an open case closes that case in the same
+compare-and-set** (it holds the job again and is not owed compensation; losing it again mid-production opens a new case), and
+the delivered write pulls the delivering providers. A flagged provider is **not listed and cannot be decided** while it holds
+the job (production or delivery provider, in any status but `cancelled` — a cancelled job keeps `providerId` for the record),
+while the job has `ledgerPending`, or once its production credit exists.
+**Deciding (I1)** first claims the case atomically: one conditional update on the job (the provider is in `compOpen` or
+`compClaimed`, does not hold the job unless it is `cancelled`, no `ledgerPending`) moves the id from `compOpen` to
+`Job.compClaimed`; when it matches nothing the answer is **409 «این مورد دیگر قابل جبران نیست»** (or «برای این مورد قبلاً
+تصمیم گرفته شده است» when the `comp:` entry exists). Then the entry is written through the provider's slot and the id is
+pulled from `compClaimed`. A claimed case without an entry (a crash in between) stays listed and a retry writes it (the
+`comp:<job>:<provider>` key makes it exactly once; two concurrent decisions write one entry, the other gets 409).
+`seed:base` flags pre-existing cases once: jobs without the `Job.compTracked` marker (set on every job created from v4.3),
+history-based detection, never for a current holder, merged with `$addToSet $each`, walked by an `_id` cursor.
 `cause` is `cancelled` / `reassigned` / `unassigned` and `stage` the stage the provider lost the job at.
 **Cap (P11):** `payoutBasis` = that provider's latest snapshot `providerSubtotal` (production only; `Job.providerPricing` or
 `Job.pricingHistory`), **plus the delivery fee only if that provider's delivery leg had already started** (the job reached
@@ -1322,11 +1334,11 @@ reason. A refund after delivery never touches credits; an admin may add a negati
 
 | Method + path | Permission | Body / query → response |
 |---|---|---|
-| `GET /admin/ledger/balances` | `ledger_view` | `?page&limit&q` → `Paged<ProviderBalanceRow>` |
+| `GET /admin/ledger/balances` | `ledger_view` | `?page&limit&q` (`q` ≤ 100 characters, «عبارت جستجو حداکثر ۱۰۰ نویسه است») → `Paged<ProviderBalanceRow>` |
 | `GET /admin/ledger/providers/:id` | `ledger_view` | → `ProviderLedgerAdmin` |
 | `GET /admin/ledger/providers/:id/entries` | `ledger_view` | `?page&limit&kind&from&to` (yyyy-mm-dd, Tehran, by `createdAt`) → `Paged<LedgerEntryView>` (newest first) |
 | `GET /admin/ledger/providers/:id/statement` | `ledger_view` | `?cutoff=yyyy-mm-dd` (default the current cutoff) → `WeeklyStatement` |
-| `PUT /admin/ledger/providers/:id/bank` | `payout_record` | `{ sheba, holder, bankName? }` → `BankAccountView` |
+| `PUT /admin/ledger/providers/:id/bank` | `payout_record` | `{ sheba, holder, bankName? }` → `BankAccountView`; conditional on the account read (a concurrent change → 409 «حساب بانکی مجری هم‌زمان تغییر کرد؛ دوباره تلاش کنید») |
 | `GET /admin/ledger/pending` | `ledger_view` | `?page&limit` → `Paged<LedgerEntryView>` (pending credits, oldest first) |
 | `POST /admin/ledger/entries/:id/resolve` | `ledger_adjust` | `{ amount ≥ 0, reason }` → `LedgerEntryView` |
 | `GET /admin/ledger/compensation` | `ledger_view` | `?page&limit` → `Paged<CompensationItem>` |
@@ -1350,7 +1362,7 @@ LedgerBalance       { available, due, earnedSinceCutoff, pendingCount }
 SettlementInfo      { weekday, cutoff /* yyyy-mm-dd of the cutoff day */, next /* yyyy-mm-dd */ }
 BankAccountView     { sheba, holder, bankName, updatedAt }
 ProviderBalanceRow  { providerId, name, businessName, status, balance: LedgerBalance, lastPayoutAt: string | null, hasBank }
-ProviderLedgerAdmin { provider: { id, name, businessName, status }, balance: LedgerBalance, bank: BankAccountView | null, bankHistory: { at, by, old: { sheba /* masked */, holder } | null, new: { sheba /* masked */, holder } }[] /* newest first */, settlement: SettlementInfo }
+ProviderLedgerAdmin { provider: { id, name, businessName, status }, balance: LedgerBalance, bank: BankAccountView | null, bankHistory: { at, by: { id, name /* «مدیر» when the user is gone */ }, old: { sheba /* masked */, holder } | null, new: { sheba /* masked */, holder } }[] /* newest first */, settlement: SettlementInfo }
 WeeklyStatement     { providerId, from, to /* yyyy-mm-dd, inclusive */, opening, earned, paid, closing, lines: LedgerEntryView[] }
 CompensationItem    { jobId, orderId, orderCode, providerId, providerName, cause, stage: 'in_production' | 'after_production', at, payoutBasis: number | null }
 WalletRow           { from, to, orders, charged, providerCost, courierTasks, courierCost, share }
@@ -1359,7 +1371,7 @@ WalletReport        { from, to, perTaskFee, rows: WalletRow[], total: WalletRow,
 `WeeklyStatement`: `opening` = balance counted before `from`, `earned` = Σ credits/adjustments counted in the week,
 `paid` = −Σ payouts/voids counted in the week, `closing` = opening + earned − paid; `lines` = the week's counted entries.
 CSV columns: «از تاریخ, تا تاریخ, سفارش‌های تحویل‌شده, دریافتی از مشتریان, سهم مجریان, کارهای پیک, دستمزد پیک (برآورد), سهم دیجیتال سرو», one row per
-week and «جمع»; ASCII digits and Gregorian dates; UTF-8 BOM, CRLF; text cells are quoted and a cell starting with `= + - @` is prefixed with `'`.
+week and «جمع»; ASCII digits and Gregorian dates; UTF-8 BOM, CRLF; text cells holding a comma, quote or line break are quoted, and a cell starting with `= + - @`, a tab or a carriage return is prefixed with `'`.
 The range is validated like the other date params (400 «بازه‌ی تاریخ حداکثر ۳۶۶ روز است», «تاریخ شروع نباید بعد از تاریخ پایان باشد»). The report holds no customer or bank data.
 
 **Wallet formula (D32, R9):** `charged` = Σ `chargedAmount` (what was actually charged: total after discounts, including fees; fallback
@@ -1424,10 +1436,11 @@ Provider event `bank_account_changed` («شماره حساب تسویه شما �
 
 400 «مبلغ باید عدد صحیح (تومان) باشد» · «مبلغ پرداخت از مانده حساب مجری بیشتر است» · «ابتدا شماره شبای مجری را ثبت کنید» ·
 «تاریخ پرداخت نمی‌تواند در آینده باشد» · «شماره پیگیری بانکی را وارد کنید» · «تاریخ باید به‌صورت yyyy-mm-dd باشد» · «مبلغ جبران خسارت نمی‌تواند از سهم قابل پرداخت به مجری بیشتر باشد» ·
-«مبلغ اصلاحیه نمی‌تواند صفر باشد» · «دلیل را بنویسید» · «بازه گزارش حداکثر ۳۶۶ روز است» · «تاریخ پایان نباید قبل از تاریخ شروع باشد» ·
+«مبلغ اصلاحیه نمی‌تواند صفر باشد» · «دلیل را بنویسید» · «بازه‌ی تاریخ حداکثر ۳۶۶ روز است» · «تاریخ شروع نباید بعد از تاریخ پایان باشد» · «عبارت جستجو حداکثر ۱۰۰ نویسه است» ·
 «این ترکیب فقط قیمت مجری دارد». 404 «مجری یافت نشد» · «ردیف حساب یافت نشد» · «پرداخت یافت نشد» · «مورد جبران خسارت یافت نشد» ·
 «سفارش یافت نشد». 409 «این مبلغ قبلاً تعیین شده است» · «برای این مورد قبلاً تصمیم گرفته شده است» · «این پرداخت قبلاً باطل شده است» ·
-«این درخواست قبلاً با مقادیر دیگری ثبت شده است» · «حساب مجری هم‌زمان تغییر کرد؛ دوباره تلاش کنید» ·
+«این درخواست قبلاً با مقادیر دیگری ثبت شده است» · «حساب مجری هم‌زمان تغییر کرد؛ دوباره تلاش کنید» · «این مورد دیگر قابل جبران نیست» ·
+«حساب بانکی مجری هم‌زمان تغییر کرد؛ دوباره تلاش کنید» ·
 `DELETE /admin/providers/:id` «این مجری در حساب تسویه سابقه دارد؛ به‌جای حذف آن را غیرفعال کنید».
 
 ### Seed (dev)
@@ -1435,7 +1448,9 @@ Provider event `bank_account_changed` («شماره حساب تسویه شما �
 Demo `seed`: «چاپ نگین» gets non-print provider prices (`school|book` 9,000, `school|lined` 300, `docs|bw|single` 600,
 `docs|hardcover` 60,000, `cart|laserBw` 250,000, `flyer|A5|color|glossy|single` 120; `repair|laser` 400,000 pending
 approval), the bank account `IR062960000000100324200001` «علی نگینی», two counted credits, one pending credit and one
-payout. `seed:base` inserts the two payout templates and flags delivered jobs for crediting (R11).
+payout. `seed:base` inserts the payout / void / bank-change templates and flags delivered jobs for crediting (R11); run it after
+every upgrade to v4.3 (`docs/deploy.md` §6). A provider/admin event without a template logs one warning per event per process
+(«notification template … is missing»); a template switched off stays silent.
 
 ### Admin menu and apps
 

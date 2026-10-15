@@ -34,6 +34,8 @@ describe('settlement calendar (D31, R10 — Tehran)', () => {
     // Saturday 00:30 in Tehran is already the new week; Friday 23:30 still the old one
     expect(settlementCutoff(new Date('2026-10-16T21:00:00Z'), SAT).toISOString()).toBe('2026-10-16T20:30:00.000Z');
     expect(settlementCutoff(new Date('2026-10-16T20:00:00Z'), SAT).toISOString()).toBe('2026-10-09T20:30:00.000Z');
+    // final wave: exactly at Saturday 00:00 Tehran the cutoff is now (the new week starts at the instant)
+    expect(settlementCutoff(new Date('2026-10-16T20:30:00Z'), SAT).toISOString()).toBe('2026-10-16T20:30:00.000Z');
   });
   it('the next settlement is today on the settlement day, otherwise the coming one', () => {
     expect(nextSettlementYmd(new Date('2026-10-17T10:00:00Z'), SAT)).toBe('2026-10-17');

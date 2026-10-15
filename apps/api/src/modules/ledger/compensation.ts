@@ -11,6 +11,8 @@ export interface CompJob {
   providerId?: unknown; deliveryProviderId?: unknown; ledgerPending?: boolean;
   /** P10: provider ids with an open case (set by the cas that creates it). */
   compOpen?: string[];
+  /** I1: claimed by an admin's decision whose entry may not be written yet (still open until the `comp:` entry exists). */
+  compClaimed?: string[];
   cancel?: { at: Date; stage: string; providerId?: unknown; deliveryProviderId?: unknown; legStarted?: boolean };
   history?: { at: Date; action: string; stage?: string; providerId?: unknown; previousProviderId?: unknown; legStarted?: boolean }[];
   providerPricing?: CompSnapshot | null;
@@ -57,12 +59,21 @@ export function compensationCandidates(job: CompJob): CompCandidate[] {
 }
 
 /**
- * P10 + M2: the cases that are open on this job — flagged in `compOpen` by the write that created them, and not for a
- * provider that now holds a delivered / completed job, nor while the ledger still has to process the delivery.
+ * I1: the providers that hold the job now (production or delivery), in any status but `cancelled` — a cancelled job
+ * keeps `providerId` for the record, but nobody holds it any more.
+ */
+export function holdersOf(job: Pick<CompJob, 'status' | 'providerId' | 'deliveryProviderId'>): string[] {
+  return job.status === 'cancelled' ? [] : [job.providerId, job.deliveryProviderId].filter(Boolean).map(String);
+}
+
+/**
+ * P10 + M2 + I1: the cases that are open on this job — flagged in `compOpen` by the write that created them (or claimed
+ * in `compClaimed` and not written yet), never for a provider that holds the job again (any status: it is not owed
+ * compensation; losing it again mid-production opens a new case), nor while the ledger still has to process the delivery.
  */
 export function openCandidates(job: CompJob): CompCandidate[] {
   if (job.ledgerPending) return [];
-  const flagged = new Set((job.compOpen ?? []).map(String));
-  const delivered = job.status === 'delivered' || job.status === 'completed';
-  return compensationCandidates(job).filter((c) => flagged.has(c.providerId) && !(delivered && [job.providerId, job.deliveryProviderId].some((h) => h && String(h) === c.providerId)));
+  const flagged = new Set([...(job.compOpen ?? []), ...(job.compClaimed ?? [])].map(String));
+  const holders = holdersOf(job);
+  return compensationCandidates(job).filter((c) => flagged.has(c.providerId) && !holders.includes(c.providerId));
 }

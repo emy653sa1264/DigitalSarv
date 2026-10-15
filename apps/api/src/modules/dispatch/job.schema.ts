@@ -82,6 +82,13 @@ export class Job {
   @Prop({ type: Date }) ledgerTriedAt?: Date;
   /** v4.3 (P10): provider ids with an open «جبران خسارت» case on this job — added in the cas that creates the case, pulled on decision / delivery. */
   @Prop({ type: [String], default: undefined }) compOpen?: string[];
+  /**
+   * I1: provider ids whose case an admin has claimed (moved out of `compOpen` atomically) but whose `comp:` entry may not
+   * be written yet — a retry after a crash in between still writes it (the entry key is idempotent). Pulled once written.
+   */
+  @Prop({ type: [String], default: undefined }) compClaimed?: string[];
+  /** Final wave: the job's compensation cases are tracked in `compOpen` (set at creation from v4.3, or by the backfill). */
+  @Prop({ type: Boolean }) compTracked?: boolean;
   @Prop({ type: Date, required: true }) orderCreatedAt: Date;
 
   createdAt: Date;
@@ -101,5 +108,7 @@ JobSchema.index({ 'assignment.assignedAt': 1 }, { sparse: true });
 JobSchema.index({ status: 1, updatedAt: -1 });
 JobSchema.index({ updatedAt: -1 });
 JobSchema.index({ mirrorPending: 1, _id: 1 }, { sparse: true });
-JobSchema.index({ ledgerPending: 1, _id: 1 }, { sparse: true });
-JobSchema.index({ compOpen: 1, _id: 1 }, { sparse: true });
+// partial (only flagged jobs are indexed); `_id` first so the reconcile / queue cursors walk them in order
+JobSchema.index({ _id: 1, ledgerPending: 1 }, { name: 'ledger_pending', partialFilterExpression: { ledgerPending: true } });
+JobSchema.index({ _id: 1, compOpen: 1 }, { name: 'comp_open', partialFilterExpression: { compOpen: { $exists: true } } });
+JobSchema.index({ _id: 1, compClaimed: 1 }, { name: 'comp_claimed', partialFilterExpression: { compClaimed: { $exists: true } } });

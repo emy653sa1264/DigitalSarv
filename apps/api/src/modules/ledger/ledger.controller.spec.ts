@@ -19,3 +19,36 @@ describe('AdminLedgerController (D33)', () => {
     expect(routes.sort()).toEqual(Object.keys(ADMIN_LEDGER_PERMISSIONS).sort()); // no route without a permission
   });
 });
+
+describe('final wave — 403 behaviour and query bounds', () => {
+  it('a dispatch_view-only admin is refused on every admin ledger route (Persian 403); ledger_view opens only the reads', async () => {
+    const { Reflector } = await import('@nestjs/core');
+    const { ForbiddenException } = await import('@nestjs/common');
+    const { Types } = await import('mongoose');
+    const { fakeModel } = await import('../../../test/fake-model.js');
+    const [dispatchOnly, viewer] = [new Types.ObjectId(), new Types.ObjectId()];
+    const users = fakeModel([{ _id: dispatchOnly, role: 'admin', permissions: ['dispatch_view'] }, { _id: viewer, role: 'admin', permissions: ['ledger_view'] }]);
+    const guard = new PermissionsGuard(new Reflector(), users as never);
+    const proto = AdminLedgerController.prototype as unknown as Record<string, () => void>;
+    const ctx = (m: string, id: unknown) => ({
+      getHandler: () => proto[m], getClass: () => AdminLedgerController,
+      switchToHttp: () => ({ getRequest: () => ({ user: { id: String(id), role: 'admin' } }) }),
+    }) as never;
+    for (const m of Object.keys(ADMIN_LEDGER_PERMISSIONS)) {
+      await expect(guard.canActivate(ctx(m, dispatchOnly)), m).rejects.toThrow(new ForbiddenException('به این بخش دسترسی ندارید'));
+      const reads = ADMIN_LEDGER_PERMISSIONS[m].includes('ledger_view');
+      if (reads) await expect(guard.canActivate(ctx(m, viewer)), m).resolves.toBe(true);
+      else await expect(guard.canActivate(ctx(m, viewer)), m).rejects.toThrow(ForbiddenException);
+    }
+  });
+  it('the search term of the ledger lists is at most 100 characters', async () => {
+    const { plainToInstance } = await import('class-transformer');
+    const { validate } = await import('class-validator');
+    const { LedgerPageQueryDto, LedgerEntriesQueryDto } = await import('./dto/ledger.dto.js');
+    for (const Dto of [LedgerPageQueryDto, LedgerEntriesQueryDto]) {
+      expect(await validate(plainToInstance(Dto, { q: 'ن'.repeat(100) }))).toHaveLength(0);
+      const errs = await validate(plainToInstance(Dto, { q: 'ن'.repeat(101) }));
+      expect(errs[0].constraints).toEqual({ maxLength: 'عبارت جستجو حداکثر ۱۰۰ نویسه است' });
+    }
+  });
+});

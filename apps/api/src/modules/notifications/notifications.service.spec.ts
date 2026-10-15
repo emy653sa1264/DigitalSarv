@@ -196,3 +196,27 @@ describe('v4.3 ledger notifications (R12)', () => {
     expect(mine.items[0]).toMatchObject({ orderId: '', orderCode: '', url: '/provider/settlement' });
   });
 });
+
+describe('M4 final review I2 — a missing template is reported', () => {
+  it('warns once per event per process when the template is missing; a template switched off stays silent', async () => {
+    const { Logger } = await import('@nestjs/common');
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      const { svc, inbox } = setup();
+      const ref = { url: '/provider/settlement', tag: 'payout' };
+      await svc.notify('payout_recorded', [otherId], ref);
+      await svc.notify('payout_recorded', [otherId], ref);
+      await svc.notify('bank_account_changed', [otherId], ref);
+      expect(inbox.docs).toHaveLength(0);
+      const missing = warn.mock.calls.map((c) => String(c[0])).filter((m) => m.includes('is missing'));
+      expect(missing).toHaveLength(2);
+      expect(missing[0]).toContain('"payout_recorded"');
+      expect(missing[1]).toContain('"bank_account_changed"');
+      warn.mockClear();
+      await svc.notify('qc', [otherId], ref); // exists but off: an admin choice, not a deploy mistake
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

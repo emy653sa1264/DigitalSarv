@@ -834,7 +834,7 @@ export interface LedgerBalance { available: number; due: number; earnedSinceCuto
 export interface SettlementInfo { weekday: number; cutoff: string; next: string }
 /** `sheba` is masked unless the caller holds `payout_record`. */
 export interface BankAccountView { sheba: string; holder: string; bankName: string; updatedAt: string }
-export interface BankChangeView { at: string; by: string; old: { sheba: string; holder: string } | null; new: { sheba: string; holder: string } }
+export interface BankChangeView { at: string; by: { id: string; name: string }; old: { sheba: string; holder: string } | null; new: { sheba: string; holder: string } }
 export interface CreditBasis { payoutBasis: number | null; suggested: number | null; missing: string[]; snapshotAt?: string; note?: string }
 export interface LedgerEntryView {
   id: string; kind: LedgerKind; state: LedgerState; amount: number | null; title: string; providerId: string; providerName?: string

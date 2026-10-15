@@ -40,7 +40,7 @@ export function jobSeed(order: JobSource, s: Pick<DispatchSettings, 'leadHours' 
     childIndexes: (order.children ?? []).map((_, i) => i), lineIndexes: (order.services ?? []).map((_, i) => i),
     priority: order.urgent ? ('urgent' as const) : ('normal' as const), deadline: deadlineFor(createdAt, !!order.urgent, s),
     deliveryMethod: delivery.method, ...(delivery.pickupAt ? { pickupAt: delivery.pickupAt } : {}),
-    releasedProviderIds: [], pricingHistory: [], units, sheets, orderCreatedAt: createdAt, ...quiet,
+    releasedProviderIds: [], pricingHistory: [], units, sheets, orderCreatedAt: createdAt, compTracked: true, ...quiet,
   };
   if (!order.centerId) {
     const history: JobHistoryEntry[] = [{ at: now, action: 'created', status: 'unassigned', byRole: 'system' }];

@@ -15,6 +15,7 @@ import {
 } from './job-model.js';
 import { LedgerService } from '../ledger/ledger.service.js';
 import { Job, JobDocument } from './job.schema.js';
+import { dropEmptyComp } from './comp-flags.js';
 import { JOB_ORDER_STATUSES, isBackfill, jobSeed, orderNeedsJob, type JobSource } from './job-seed.js';
 
 export interface MoveOptions { actor: Actor; byRole: ByRole; by?: string; reason?: string; reasonCode?: RejectReason; providerId?: string; assignmentId?: string }
@@ -74,6 +75,11 @@ export class JobsService {
     @Optional() @InjectModel(Center.name) private readonly centers?: Model<Center>,
     @Optional() private readonly ledger?: LedgerService,
   ) {}
+
+  /** Final wave: a wiring mistake that leaves the ledger out would silently stop provider credits — say so at boot. */
+  onApplicationBootstrap(): void {
+    if (!this.ledger) this.logger.warn('LedgerService is not wired into JobsService: delivered jobs are not credited until the ledger tick runs');
+  }
 
   // ------------------------------------------------------------ creation and reads
 
@@ -274,7 +280,10 @@ export class JobsService {
       throw raced();
     }
     // v4.3: the provider credit (never throws; a flagged job is retried by the tick)
-    if (to === 'delivered') await this.ledger?.creditJob(updated._id);
+    if (to === 'delivered') {
+      await dropEmptyComp(this.jobs, updated._id);
+      await this.ledger?.creditJob(updated._id);
+    }
     if (to !== 'delivered') await this.mirrorOrder(order, ORDER_MIRROR[to], false);
     if (to === 'accepted') await this.notifier.customer('assigned', order);
     if (to === 'ready_for_pickup') {
@@ -419,7 +428,10 @@ export class JobsService {
         ...pullCompOpen(job),
         history: this.entry(job, 'status', 'delivered', { byRole, ...(by ? { by } : {}) }, now),
       });
-      if (updated) await this.ledger?.creditJob(updated._id);
+      if (updated) {
+        await dropEmptyComp(this.jobs, updated._id);
+        await this.ledger?.creditJob(updated._id);
+      }
       return !!updated;
     } catch (err) {
       this.logger.warn(`delivered job of order ${String(orderId)} failed (reconcile retries): ${(err as Error).message}`);

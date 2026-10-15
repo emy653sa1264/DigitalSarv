@@ -18,7 +18,7 @@ export interface SettlementInfo { weekday: number; cutoff: string; next: string 
 export interface BankAccountView { sheba: string; holder: string; bankName: string; updatedAt: string }
 export interface ProviderBalanceRow { providerId: string; name: string; businessName: string; status: string; balance: Balance; lastPayoutAt: string | null; hasBank: boolean }
 export interface ProviderLedgerAdmin { provider: { id: string; name: string; businessName: string; status: string }; balance: Balance; bank: BankAccountView | null; bankHistory: BankChangeView[]; settlement: SettlementInfo }
-export interface BankChangeView { at: string; by: string; old: { sheba: string; holder: string } | null; new: { sheba: string; holder: string } }
+export interface BankChangeView { at: string; by: { id: string; name: string }; old: { sheba: string; holder: string } | null; new: { sheba: string; holder: string } }
 export interface WeeklyStatement { providerId: string; from: string; to: string; opening: number; earned: number; paid: number; closing: number; lines: LedgerEntryView[] }
 export interface ProviderLedgerSelf {
   balance: { available: number; due: number; pendingCount: number };
@@ -31,6 +31,8 @@ export const MAX_RANGE_DAYS = 366;
 const BAD_DATE = 'تاریخ باید به‌صورت yyyy-mm-dd باشد';
 const oid = (id: string) => new Types.ObjectId(id);
 const PROVIDER_FIELDS = { name: 1, businessName: 1, status: 1, bankAccount: 1, userId: 1 };
+/** M1: an admin whose user row is gone. */
+export const ADMIN_FALLBACK = 'مدیر';
 
 /** P6: a real calendar date, `from <= to` and at most 366 days (inclusive) between them. Persian 400 otherwise. */
 export function assertYmdRange(from?: string, to?: string): void {
@@ -41,10 +43,12 @@ export function assertYmdRange(from?: string, to?: string): void {
   }
 }
 
-/** P12: the change history, newest first; Shebas are masked even if a row were stored otherwise. */
-export function bankHistoryView(h?: BankAccountChange[] | null): BankChangeView[] {
+/** P12: the change history, newest first; Shebas are masked even if a row were stored otherwise. M1: the admin by name. */
+export function bankHistoryView(h?: BankAccountChange[] | null, names: Map<string, string> = new Map()): BankChangeView[] {
   const m = (a: { sheba: string; holder: string }) => ({ sheba: maskSheba(a.sheba), holder: a.holder });
-  return [...(h ?? [])].reverse().map((c) => ({ at: new Date(c.at).toISOString(), by: String(c.by), old: c.old ? m(c.old) : null, new: m(c.new) }));
+  return [...(h ?? [])].reverse().map((c) => ({
+    at: new Date(c.at).toISOString(), by: { id: String(c.by), name: names.get(String(c.by)) || ADMIN_FALLBACK }, old: c.old ? m(c.old) : null, new: m(c.new),
+  }));
 }
 
 /** `full` = the whole Sheba (payout_record); otherwise masked (ledger_view only). */
@@ -75,10 +79,17 @@ export class LedgerReadsService {
     return { weekday, cutoff: tehranYmd(settlementCutoff(now, weekday)), next: nextSettlementYmd(now, weekday) };
   }
 
-  /** The bank account is `select:false`; it is read explicitly here. */
-  async findProvider(id: string): Promise<ProviderRow> {
+  /**
+   * The bank account and its history are `select:false`; they are read only when asked for (`bank`: the current account,
+   * `history`: the change log too) — an existence check reads neither.
+   */
+  async findProvider(id: string, read: { bank?: boolean; history?: boolean } = {}): Promise<ProviderRow> {
     assertObjectId(id, 'مجری');
-    const p = (await this.centers.findById(id, PROVIDER_FIELDS).select('+bankAccount +bankAccountHistory').lean()) as ProviderRow | null;
+    const { bankAccount: _b, ...plain } = PROVIDER_FIELDS;
+    const fields = read.bank || read.history ? { ...plain, bankAccount: 1, ...(read.history ? { bankAccountHistory: 1 } : {}) } : plain;
+    const extra = [read.bank || read.history ? '+bankAccount' : '', read.history ? '+bankAccountHistory' : ''].filter(Boolean).join(' ');
+    const q = this.centers.findById(id, fields);
+    const p = (await (extra ? q.select(extra) : q).lean()) as ProviderRow | null;
     if (!p) throw new NotFoundException('مجری یافت نشد');
     return p;
   }
@@ -128,9 +139,14 @@ export class LedgerReadsService {
 
   /** `fullBank` false (the default) masks the Sheba — pass true only for `payout_record` holders. */
   async provider(id: string, fullBank = false): Promise<ProviderLedgerAdmin> {
-    const p = await this.findProvider(id);
-    const [balance, settlement] = await Promise.all([this.ledger.balanceOf(id), this.settlement()]);
-    return { provider: { id, name: p.name, businessName: p.businessName ?? '', status: p.status ?? 'active' }, balance, bank: bankView(p.bankAccount, fullBank), bankHistory: bankHistoryView(p.bankAccountHistory), settlement };
+    const p = await this.findProvider(id, { history: true });
+    const adminIds = [...new Set((p.bankAccountHistory ?? []).map((c) => String(c.by)))];
+    const [balance, settlement, admins] = await Promise.all([
+      this.ledger.balanceOf(id), this.settlement(),
+      adminIds.length ? (this.users.find({ _id: { $in: adminIds.map(oid) } }, { name: 1 }).lean() as Promise<{ _id: unknown; name?: string }[]>) : Promise.resolve([]),
+    ]);
+    const names = new Map(admins.map((u) => [String(u._id), u.name ?? '']));
+    return { provider: { id, name: p.name, businessName: p.businessName ?? '', status: p.status ?? 'active' }, balance, bank: bankView(p.bankAccount, fullBank), bankHistory: bankHistoryView(p.bankAccountHistory, names), settlement };
   }
 
   async entries(id: string, q: Partial<LedgerEntriesQueryDto>): Promise<Paged<LedgerEntryView>> {

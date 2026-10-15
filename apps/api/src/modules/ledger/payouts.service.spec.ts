@@ -13,12 +13,12 @@ const SHEBA = 'IR062960000000100324200001';
 const uuid = (n: number) => `3f2a9c1e-8b7d-4e6f-9a1b-${String(n).padStart(12, '0')}`;
 const credit = (amount: number) => ({ _id: new Types.ObjectId(), key: `credit:${new Types.ObjectId()}`, providerId: P, kind: 'credit', state: 'counted', amount, occurredAt: new Date('2026-10-14T10:00:00Z'), countedAt: new Date('2026-10-14T10:00:00Z'), byRole: 'system', createdAt: new Date() });
 
-function setup({ bank = true, entries = [credit(100000)] as Doc[] } = {}) {
+function setup({ bank = true, entries = [credit(100000)] as Doc[], users = [] as Doc[] } = {}) {
   const e = fakeModel(entries, { unique: [['key'], ['slot']] });
   const centers = fakeModel([{ _id: P, name: 'چاپ نگین', status: 'active', userId: new Types.ObjectId(), ...(bank ? { bankAccount: { sheba: SHEBA, holder: 'علی نگینی', bankName: 'نمونه', updatedAt: new Date() } } : {}) }]);
   const catalog = { getSettings: vi.fn(async () => ({ ledger: { settlementWeekday: 6 } })) };
   const ledger = new LedgerService(e as never, fakeModel([]) as never, fakeModel([]) as never, fakeModel([]) as never, catalog as never);
-  const reads = new LedgerReadsService(e as never, centers as never, fakeModel([]) as never, ledger);
+  const reads = new LedgerReadsService(e as never, centers as never, fakeModel(users) as never, ledger);
   const notifier = { payout: vi.fn(async () => undefined), bankChanged: vi.fn(async () => undefined) };
   const svc = new PayoutsService(e as never, centers as never, ledger, reads, notifier as never);
   return { svc, entries: e, centers, ledger, reads, notifier };
@@ -148,5 +148,37 @@ describe('no full Sheba leaks through the ledger (carry from Task 9)', () => {
     const legacy = { ...s.entries.docs.find((d) => d.kind === 'payout')!, payout: { paidAt: TODAY, bankRef: 'x', sheba: SHEBA, holder: 'h' } };
     const [view] = await s.reads.views([legacy as never]);
     expect(JSON.stringify(view)).not.toContain(SHEBA);
+  });
+});
+
+describe('M4 final review M1 + final wave — bank account audit', () => {
+  const OTHER = 'IR762960000000100324200002';
+  it('M1: the history names the admin (batched), «مدیر» when the user is gone', async () => {
+    const GONE = String(new Types.ObjectId());
+    const s = setup({ bank: false, users: [{ _id: new Types.ObjectId(ADMIN), name: 'مدیر مالی' }] });
+    await s.svc.setBank(String(P), { sheba: SHEBA, holder: 'علی نگینی' }, ADMIN);
+    await s.svc.setBank(String(P), { sheba: OTHER, holder: 'علی نگینی' }, GONE);
+    const view = await s.reads.provider(String(P));
+    expect(view.bankHistory.map((h) => h.by)).toEqual([{ id: GONE, name: 'مدیر' }, { id: ADMIN, name: 'مدیر مالی' }]);
+  });
+  it('setBank is conditional on the account it read: a concurrent change makes it 409 and writes nothing', async () => {
+    const s = setup();
+    const real = s.centers.findOneAndUpdate.getMockImplementation()!;
+    s.centers.findOneAndUpdate.mockImplementationOnce(async (f: Doc, u: Doc, o?: { upsert?: boolean }) => {
+      s.centers.docs[0].bankAccount = { sheba: OTHER, holder: 'دیگری', bankName: '', updatedAt: new Date() }; // another admin won
+      return real(f, u, o);
+    });
+    await expect(s.svc.setBank(String(P), { sheba: SHEBA, holder: 'علی نگینی' }, ADMIN)).rejects.toThrow(new ConflictException('حساب بانکی مجری هم‌زمان تغییر کرد؛ دوباره تلاش کنید'));
+    expect(s.centers.docs[0].bankAccountHistory).toBeUndefined();
+    expect(s.notifier.bankChanged).not.toHaveBeenCalled();
+  });
+  it('an existence check (statement, entries, adjust) never reads the bank account; payouts read it without the history', async () => {
+    const s = setup();
+    await s.reads.statement(String(P));
+    expect((s.centers.findById.mock.calls.at(-1) as unknown[])[1]).not.toHaveProperty('bankAccount');
+    await s.svc.record(body(1000, 11), ADMIN);
+    const fields = (s.centers.findById.mock.calls.at(-1) as unknown[])[1] as Doc;
+    expect(fields).toHaveProperty('bankAccount');
+    expect(fields).not.toHaveProperty('bankAccountHistory');
   });
 });

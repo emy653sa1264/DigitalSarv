@@ -18,7 +18,7 @@ function setup({ jobs = [] as Doc[], entries = [] as Doc[] } = {}) {
   const ledger = new LedgerService(e as never, fakeModel([]) as never, j as never, orders as never, catalog as never);
   const reads = new LedgerReadsService(e as never, centers as never, fakeModel([]) as never, ledger);
   const svc = new LedgerActionsService(e as never, j as never, orders as never, ledger, reads);
-  return { svc, entries: e, ledger, orders };
+  return { svc, entries: e, ledger, orders, jobs: j };
 }
 const pending = () => ({ _id: new Types.ObjectId(), key: 'credit:j:p:production', providerId: P, kind: 'credit', state: 'pending', amount: null, occurredAt: new Date(), byRole: 'system', createdAt: new Date() });
 const cancelledJob = (o: Doc = {}) => ({
@@ -97,11 +97,56 @@ describe('«جبران خسارت مجری» (D30, R6)', () => {
     const s = setup({ jobs: [job] });
     const ids = { jobId: String(job._id), providerId: String(P) };
     await s.svc.decideCompensation({ ...ids, amount: 10, reason: 'x' }, ADMIN);
-    expect((job as { compOpen: string[] }).compOpen).toEqual([]);
-    (job as { compOpen: string[] }).compOpen.push(String(P)); // a crash left the flag behind
+    expect(job).not.toHaveProperty('compOpen'); // emptied flags are removed
+    expect(job).not.toHaveProperty('compClaimed');
+    (job as { compOpen?: string[] }).compOpen = [String(P)]; // a stale flag left behind
     await expect(s.svc.decideCompensation({ ...ids, amount: 10, reason: 'x' }, ADMIN)).rejects.toThrow(ConflictException);
-    expect((job as { compOpen: string[] }).compOpen).toEqual([]);
+    expect(job).not.toHaveProperty('compOpen');
     expect((await s.svc.compensationQueue({})).total).toBe(0);
+  });
+  it('I1: a provider that holds the job again (any status) is not listed; a cancelled job keeps its producer listed', async () => {
+    const held = cancelledJob({ status: 'in_production', cancel: undefined, providerId: P, history: [{ at: new Date(), action: 'unassigned', stage: 'in_production', providerId: P }] });
+    const cancelled = cancelledJob({ providerId: P }); // a cancel keeps providerId on the job for the record
+    const s = setup({ jobs: [held, cancelled] });
+    const q = await s.svc.compensationQueue({});
+    expect(q.items.map((i) => i.jobId)).toEqual([String(cancelled._id)]);
+    await expect(s.svc.decideCompensation({ jobId: String(cancelled._id), providerId: String(P), amount: 1, reason: 'x' }, ADMIN)).resolves.toMatchObject({ amount: 1 });
+  });
+  it('I1: the case is claimed atomically — the job given back to the provider (and delivered) between the read and the claim → 409, no compensation', async () => {
+    const job = cancelledJob({ status: 'unassigned', cancel: undefined, history: [{ at: new Date(), action: 'unassigned', stage: 'in_production', providerId: P }] });
+    const s = setup({ jobs: [job] });
+    const real = s.jobs.updateOne.getMockImplementation()!;
+    s.jobs.updateOne.mockImplementation(async (f: Doc, u: Doc, o?: { upsert?: boolean }) => {
+      if (u.$addToSet?.compClaimed) Object.assign(job, { status: 'delivered', providerId: P, ledgerPending: true, compOpen: [] }); // give + deliver land first
+      return real(f, u, o);
+    });
+    await expect(s.svc.decideCompensation({ jobId: String(job._id), providerId: String(P), amount: 10, reason: 'x' }, ADMIN))
+      .rejects.toThrow(new ConflictException('این مورد دیگر قابل جبران نیست'));
+    expect(s.entries.docs).toHaveLength(0);
+  });
+  it('I1: a crash between the claim and the entry — the case stays listed and a retry writes it once', async () => {
+    const job = cancelledJob();
+    const s = setup({ jobs: [job] });
+    const ids = { jobId: String(job._id), providerId: String(P) };
+    const slot = vi.spyOn(s.ledger, 'withSlot').mockRejectedValueOnce(new Error('connection reset'));
+    await expect(s.svc.decideCompensation({ ...ids, amount: 10, reason: 'x' }, ADMIN)).rejects.toThrow('connection reset');
+    expect(job).toMatchObject({ compClaimed: [String(P)] });
+    expect(job).not.toHaveProperty('compOpen');
+    expect((await s.svc.compensationQueue({})).total).toBe(1);
+    slot.mockRestore();
+    await expect(s.svc.decideCompensation({ ...ids, amount: 20, reason: 'x' }, ADMIN)).resolves.toMatchObject({ amount: 20 });
+    expect(s.entries.docs).toHaveLength(1);
+    expect(job).not.toHaveProperty('compClaimed');
+    expect((await s.svc.compensationQueue({})).total).toBe(0);
+    await expect(s.svc.decideCompensation({ ...ids, amount: 20, reason: 'x' }, ADMIN)).rejects.toThrow(new ConflictException('برای این مورد قبلاً تصمیم گرفته شده است'));
+  });
+  it('I1: two concurrent decisions on one case — exactly one entry', async () => {
+    const job = cancelledJob();
+    const s = setup({ jobs: [job] });
+    const ids = { jobId: String(job._id), providerId: String(P) };
+    const r = await Promise.allSettled([s.svc.decideCompensation({ ...ids, amount: 10, reason: 'x' }, ADMIN), s.svc.decideCompensation({ ...ids, amount: 20, reason: 'y' }, ADMIN)]);
+    expect(r.filter((x) => x.status === 'fulfilled')).toHaveLength(1);
+    expect(s.entries.docs).toHaveLength(1);
   });
   it('M2: a provider that now holds the delivered job, or a ledger-pending job, is neither listed nor decidable', async () => {
     const delivered = cancelledJob({ status: 'delivered', cancel: undefined, providerId: P, history: [{ at: new Date(), action: 'unassigned', stage: 'in_production', providerId: P }] });

@@ -447,6 +447,21 @@ describe('bulk per layer (§33)', () => {
     expect((await current(svc, 'provider', B))?.unitPrice).toBe(3700);
     expect((await current(svc, 'customer'))?.unitPrice).toBe(9000);
   });
+  it('final wave: a provider-layer bulk on the cartridge service changes only that provider’s cart combos (provider-only)', async () => {
+    const { svc, by, A, B } = setup();
+    await svc.create(prov(A, 400000, { comboKey: 'cart|laserBw' }), by);
+    await svc.create(prov(A, 500000, { comboKey: 'cart|laserColor' }), by);
+    await svc.create(prov(B, 450000, { comboKey: 'cart|laserBw' }), by);
+    await svc.create(prov(A, 3500), by);
+    const body = { layer: 'provider' as const, providerId: A, filter: { service: 'cart' as never }, op: 'inc_pct' as const, value: 10 };
+    const pre = await svc.bulkPreview(body);
+    expect(pre.rows.map((r) => [r.comboKey, r.current, r.next])).toEqual([['cart|laserBw', 400000, 440000], ['cart|laserColor', 500000, 550000]]);
+    expect((await svc.bulkApply({ ...body, reason: 'گرانی تونر' }, by)).created).toBe(2);
+    const price = async (pid: string, k: string) => (await svc.matrix('provider', 'cart' as never, new Date(), pid)).find((r) => r.comboKey === k)?.current?.unitPrice;
+    expect(await price(A, 'cart|laserBw')).toBe(440000);
+    expect(await price(B, 'cart|laserBw')).toBe(450000);
+    expect((await current(svc, 'provider', A))?.unitPrice).toBe(3500); // bw untouched
+  });
   it('needs the provider for the provider layer', async () => {
     const { svc } = setup();
     await expect(svc.bulkPreview({ layer: 'provider', filter: {}, op: 'replace', value: 1 })).rejects.toThrow(/مجری را انتخاب کنید/);

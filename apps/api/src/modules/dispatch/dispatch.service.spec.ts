@@ -559,3 +559,64 @@ describe('M3 final review — reassign during production', () => {
     expect(s.jobsModel.docs[0].compOpen).toBeUndefined();
   });
 });
+
+describe('M4 final review I1 — compensation never for the current holder', () => {
+  async function withComp() {
+    const { LedgerService } = await import('../ledger/ledger.service.js');
+    const { LedgerReadsService } = await import('../ledger/ledger-reads.service.js');
+    const { LedgerActionsService } = await import('../ledger/ledger-actions.service.js');
+    const s = setup();
+    const G = new Types.ObjectId();
+    s.centers.docs.push({ ...s.centers.docs[2], _id: G, name: 'آزمون G', userId: new Types.ObjectId() });
+    const entries = fakeModel([], { unique: [['key'], ['slot']] });
+    const catalog = { getSettings: vi.fn(async () => ({ dispatch: { ...DEFAULT_DISPATCH }, ledger: { settlementWeekday: 6 } })) };
+    const ledger = new LedgerService(entries as never, fakeModel([]) as never, s.jobsModel as never, s.orders as never, catalog as never);
+    const jobs = new JobsService(s.jobsModel as never, s.orders as never, catalog as never, s.notifier as never, undefined, ledger);
+    const svc = new DispatchService(
+      s.jobsModel as never, s.orders as never, s.centers as never, (s.svc as unknown as { users: unknown }).users as never, fakeModel([]) as never, s.versions as never, fakeModel([]) as never,
+      fakeModel([{ _id: new Types.ObjectId(), key: 'glossy200', name: 'گلاسه ۲۰۰ گرم' }]) as never, jobs, catalog as never, s.notifier as never,
+    );
+    const reads = new LedgerReadsService(entries as never, s.centers as never, fakeModel([]) as never, ledger);
+    const actions = new LedgerActionsService(entries as never, s.jobsModel as never, s.orders as never, ledger, reads);
+    const id = String((await jobs.ensureJob(s.order as never))!._id);
+    await svc.assign(id, { providerId: String(C) } as never, String(ADMIN));
+    Object.assign(s.jobsModel.docs[0], { status: 'in_production' });
+    return { ...s, G, id, svc, jobs, actions, entries };
+  }
+  const queue = async (a: { compensationQueue: (q: object) => Promise<{ items: { providerId: string }[] }> }) => (await a.compensationQueue({})).items.map((i) => i.providerId);
+
+  it('P→Q→P: the provider holding the job again is pulled in the reassign cas and never listed; delivery credits it once', async () => {
+    const s = await withComp();
+    await s.svc.reassign(s.id, { providerId: String(s.G), reason: 'تغییر', confirmMissingPrice: true } as never, String(ADMIN));
+    expect(await queue(s.actions)).toEqual([String(C)]);
+    Object.assign(s.jobsModel.docs[0], { status: 'in_production' });
+    await s.svc.reassign(s.id, { providerId: String(C), reason: 'بازگشت' } as never, String(ADMIN));
+    expect(s.jobsModel.docs[0].compOpen).toEqual([String(s.G)]); // C pulled, G flagged — in one write
+    expect(await queue(s.actions)).toEqual([String(s.G)]);
+    await expect(s.actions.decideCompensation({ jobId: s.id, providerId: String(C), amount: 1, reason: 'x' }, String(ADMIN))).rejects.toThrow();
+    expect(await s.jobs.onOrderDelivered(s.order._id, 'admin')).toBe(true);
+    const keys = s.entries.docs.map((e) => e.key);
+    expect(keys).toEqual([`credit:${s.id}:${String(C)}:production`]);
+  });
+  it('unassign P → assign P again: the queue is empty and delivery gives one credit only', async () => {
+    const s = await withComp();
+    await s.jobs.giveBack(await s.jobs.byId(s.id), 'unassigned', { byRole: 'admin', by: String(ADMIN), reason: 'بررسی' } as never);
+    expect(await queue(s.actions)).toEqual([String(C)]);
+    await s.svc.assign(s.id, { providerId: String(C) } as never, String(ADMIN));
+    expect(s.jobsModel.docs[0]).not.toHaveProperty('compOpen');
+    expect(await queue(s.actions)).toEqual([]);
+    await s.jobs.onOrderDelivered(s.order._id, 'admin');
+    expect(s.entries.docs.map((e) => e.cause ?? e.kind)).toEqual(['credit']);
+  });
+  it('decide vs deliver race on a stale flag of the holder: exactly one of compensation or credit', async () => {
+    const s = await withComp();
+    s.jobsModel.docs[0].compOpen = [String(C)]; // e.g. a deploy-window backfill flagged the holder
+    const r = await Promise.allSettled([
+      s.actions.decideCompensation({ jobId: s.id, providerId: String(C), amount: 1000, reason: 'x' }, String(ADMIN)),
+      s.jobs.onOrderDelivered(s.order._id, 'admin'),
+    ]);
+    expect(r[0].status).toBe('rejected');
+    const mine = s.entries.docs.filter((e) => String(e.providerId) === String(C)).map((e) => e.kind);
+    expect(mine).toEqual(['credit']);
+  });
+});

@@ -5,6 +5,7 @@ import { assertObjectId } from '../../common/utils/object-id.js';
 import { pageParams, type Paged } from '../../common/utils/pagination.js';
 import { toAsciiDigits } from '../../common/utils/phone.js';
 import { Job } from '../dispatch/job.schema.js';
+import { dropEmptyComp } from '../dispatch/comp-flags.js';
 import { Order } from '../orders/order.schema.js';
 import { openCandidates, type CompCandidate, type CompJob } from './compensation.js';
 import type { EntryRow, LedgerEntryView } from './ledger-json.js';
@@ -20,8 +21,9 @@ export interface CompensationItem {
 
 export const AMOUNT_MSG = 'مبلغ باید عدد صحیح (تومان) باشد';
 const DECIDED = 'برای این مورد قبلاً تصمیم گرفته شده است';
+export const NOT_COMPENSABLE = 'این مورد دیگر قابل جبران نیست';
 const BATCH = 200;
-const JOB_FIELDS = { orderId: 1, orderCode: 1, status: 1, providerId: 1, deliveryProviderId: 1, ledgerPending: 1, compOpen: 1, cancel: 1, history: 1, providerPricing: 1, pricingHistory: 1 };
+const JOB_FIELDS = { orderId: 1, orderCode: 1, status: 1, providerId: 1, deliveryProviderId: 1, ledgerPending: 1, compOpen: 1, compClaimed: 1, cancel: 1, history: 1, providerPricing: 1, pricingHistory: 1 };
 const oid = (id: string) => new Types.ObjectId(id);
 export function needReason(reason: string | undefined): string {
   const r = reason?.trim();
@@ -72,7 +74,10 @@ export class LedgerActionsService {
     const open: (CompCandidate & { jobId: string })[] = [];
     let after: Types.ObjectId | undefined;
     for (;;) {
-      const filter: QueryFilter<Job> = { compOpen: { $exists: true, $ne: [] }, ...(jobId ? { _id: jobId } : after ? { _id: { $gt: after } } : {}) };
+      const filter: QueryFilter<Job> = {
+        $or: [{ compOpen: { $exists: true, $ne: [] } }, { compClaimed: { $exists: true, $ne: [] } }],
+        ...(jobId ? { _id: jobId } : after ? { _id: { $gt: after } } : {}),
+      };
       const jobs = (await this.jobs.find(filter, JOB_FIELDS).sort({ _id: 1 }).limit(BATCH).lean()) as unknown as (CompJob & { _id: Types.ObjectId })[];
       const candidates = jobs.flatMap((j) => openCandidates(j).map((c) => ({ ...c, jobId: String(j._id) })));
       if (candidates.length) {
@@ -93,9 +98,38 @@ export class LedgerActionsService {
       .sort((x, y) => y.at.localeCompare(x.at));
   }
 
-  /** Close the case on the job (bookkeeping, idempotent): the entry is the decision, the flag only drives the queue. */
+  /** Close the case on the job (bookkeeping, idempotent): the entry is the decision, the flags only drive the queue. */
   private async closeCase(jobId: string, providerId: string): Promise<void> {
-    await this.jobs.updateOne({ _id: oid(jobId), compOpen: providerId }, { $pull: { compOpen: providerId } }, { timestamps: false });
+    await this.jobs.updateOne(
+      { _id: oid(jobId), $or: [{ compOpen: providerId }, { compClaimed: providerId }] },
+      { $pull: { compOpen: providerId, compClaimed: providerId } },
+      { timestamps: false },
+    );
+    await dropEmptyComp(this.jobs, oid(jobId));
+  }
+
+  /**
+   * I1: claim the case atomically before the entry is written — only while it is flagged (open, or claimed by a decision
+   * whose entry a crash never wrote), the provider does not hold the job (any status but cancelled) and the ledger is not
+   * processing a delivery. The claim moves the id from `compOpen` to `compClaimed`; nothing else ever adds to
+   * `compClaimed`, so a delivery or a re-assignment landing first makes the claim match nothing.
+   */
+  private async claimCase(jobId: string, providerId: string): Promise<boolean> {
+    const pid = oid(providerId);
+    const res = await this.jobs.updateOne(
+      {
+        _id: oid(jobId), ledgerPending: { $ne: true },
+        $and: [
+          { $or: [{ compOpen: providerId }, { compClaimed: providerId }] },
+          { $or: [{ status: 'cancelled' }, { providerId: { $ne: pid }, deliveryProviderId: { $ne: pid } }] },
+        ],
+      },
+      { $pull: { compOpen: providerId }, $addToSet: { compClaimed: providerId } },
+      { timestamps: false },
+    );
+    if (!res.matchedCount) return false;
+    await dropEmptyComp(this.jobs, oid(jobId));
+    return true;
   }
 
   /** D30: 0 ≤ amount ≤ the provider's payout basis (any amount ≥ 0 when unpriced), once per job + provider. */
@@ -115,6 +149,10 @@ export class LedgerActionsService {
       throw new NotFoundException('مورد جبران خسارت یافت نشد');
     }
     if (c.payoutBasis !== null && body.amount > c.payoutBasis) throw new BadRequestException('مبلغ جبران خسارت نمی‌تواند از سهم قابل پرداخت به مجری بیشتر باشد');
+    if (!(await this.claimCase(body.jobId, body.providerId))) {
+      if (await this.entries.exists({ key })) throw new ConflictException(DECIDED);
+      throw new ConflictException(NOT_COMPENSABLE);
+    }
     const now = new Date();
     const { created } = await this.ledger.withSlot(body.providerId, key, () => ({
       providerId: oid(body.providerId), kind: 'adjustment', cause: 'compensation', compCause: c.cause, state: 'counted', amount: body.amount,

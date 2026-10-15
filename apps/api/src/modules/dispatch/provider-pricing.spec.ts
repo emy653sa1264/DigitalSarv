@@ -98,6 +98,22 @@ describe('provider price of a job (§52–53)', () => {
     expect(q.missing).toEqual([{ serviceIndex: 1, comboKey: null, label: 'چاپ اسناد' }]);
     expect(q.subtotal).toBeNull();
   });
+  it.each([
+    ['flyer', { mode: 'ready', qty: 500, ink: 'color', size: 'A5', paper: 'glossy' }],
+    ['cart', { brand: 'HP', model: '85A', cartType: 'laserBw', count: 1 }],
+    ['repair', { brand: 'HP', model: 'M402', problem: 'گیر کاغذ' }],
+    ['docs', { pages: 40, copies: 2, ink: 'bw', sides: 'single', binding: 'hardcover' }],
+  ])('final wave: an unpriced %s line is «missing» and the subtotal is null', (kind, spec) => {
+    const q = providerQuote({ services: [{ kind, label: 'سرویس آزمون', spec }] }, {}, labelOf);
+    expect(q.lines).toEqual([]);
+    expect(q.missing.length).toBeGreaterThan(0);
+    expect(q.missing.every((m) => m.serviceIndex === 0 && m.label.startsWith('سرویس آزمون: '))).toBe(true);
+    expect(q.subtotal).toBeNull();
+  });
+  it('final wave: an extra combo key gets a Persian label, never the raw key', () => {
+    expect(labelOf('extra|x')).not.toBe('extra|x');
+    expect(labelOf('extra|x')).toMatch(/[؀-ۿ]/);
+  });
   it('the snapshot carries the child count (R5)', () => {
     const quote = { lines: [], missing: [], subtotal: 1000, childCount: 2 };
     expect(pricingSnapshot({ providerId: 'P', quote, at: new Date('2026-10-16T08:00:00Z'), delivery: null, confirmedMissing: false }).childCount).toBe(2);
