@@ -256,9 +256,13 @@ export function customerFulfillmentLabel(s: JobStatus): string {
 
 // ---------------------------------------------------------------- provider price snapshot (§40, §53)
 
-export interface ProviderPricingLine { serviceIndex: number; comboKey: string; label: string; versionId: string; version: number; unitPrice: number; quantity: number; subtotal: number }
+/** One provider-priced line: a service line (`serviceIndex`) or a school child's line (`childIndex` + `childName`, R5). */
+export interface ProviderPricingLine {
+  serviceIndex?: number; childIndex?: number; childName?: string;
+  comboKey: string; label: string; versionId: string; version: number; unitPrice: number; quantity: number; subtotal: number;
+}
 export interface ProviderPricingMissing { serviceIndex?: number; childIndex?: number; comboKey: string | null; label: string }
-export interface ProviderQuote { lines: ProviderPricingLine[]; missing: ProviderPricingMissing[]; subtotal: number | null }
+export interface ProviderQuote { lines: ProviderPricingLine[]; missing: ProviderPricingMissing[]; subtotal: number | null; childCount?: number }
 export interface ProviderPricingSnapshot {
   providerId: string;
   snapshotAt: string;
@@ -270,6 +274,8 @@ export interface ProviderPricingSnapshot {
   /** provider_payout_basis (M4): providerSubtotal + the delivery fee when the production provider delivers. */
   payoutBasis: number | null;
   confirmedMissing: boolean;
+  /** v4.3: the order's school children at assignment (R5: a different count at delivery makes the credit pending). */
+  childCount?: number;
 }
 
 // ---------------------------------------------------------------- job → order provider mirror (Q20)

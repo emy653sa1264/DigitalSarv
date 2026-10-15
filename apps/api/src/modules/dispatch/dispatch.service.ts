@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types, type QueryFilter } from 'mongoose';
 import type { DeliveryMethod, JobStatus, PickupAt } from '../../common/constants.js';
@@ -10,6 +10,7 @@ import { faDigits } from '../../common/utils/fa.js';
 import { assertObjectId } from '../../common/utils/object-id.js';
 import { deliveryOf } from '../orders/delivery-rules.js';
 import { CatalogService } from '../catalog/catalog.service.js';
+import { Extra } from '../catalog/schemas/extra.schema.js';
 import { Paper } from '../catalog/schemas/paper.schema.js';
 import { Center } from '../centers/center.schema.js';
 import type { ProviderService, ProviderStatus } from '../centers/provider-model.js';
@@ -75,6 +76,7 @@ export class DispatchService {
     private readonly jobs: JobsService,
     private readonly catalog: CatalogService,
     private readonly notifier: DispatchNotifier,
+    @Optional() @InjectModel(Extra.name) private readonly extras?: Model<Extra>,
   ) {}
 
   /** §67 per-provider counters (default: the last 30 Tehran days). */
@@ -214,9 +216,15 @@ export class DispatchService {
   }
 
   async labelOf(): Promise<{ labelOf: (k: string) => string; paperNames: Map<string, string> }> {
-    const [papers, ranges] = await Promise.all([this.papers.find().lean(), this.ranges.find().lean()]);
+    const [papers, ranges, extras] = await Promise.all([
+      this.papers.find().lean(), this.ranges.find().lean(),
+      this.extras ? this.extras.find({}, { key: 1, label: 1 }).lean() : Promise.resolve([] as { key: string; label: string }[]),
+    ]);
     const paperNames = new Map(papers.map((p) => [p.key, p.name]));
-    const names = { papers: paperNames, ranges: new Map(ranges.map((r) => [String(r._id), { minPages: r.minPages, maxPages: r.maxPages }])) };
+    const names = {
+      papers: paperNames, ranges: new Map(ranges.map((r) => [String(r._id), { minPages: r.minPages, maxPages: r.maxPages }])),
+      extras: new Map(extras.map((x) => [x.key, x.label])),
+    };
     return { labelOf: (k) => providerLineLabel(k, names), paperNames };
   }
 
