@@ -19,7 +19,7 @@ import { StatementCard } from './StatementCard'
 export function ProviderLedgerSheet({ providerId, onClose }: { providerId?: string; onClose: () => void }) {
   return (
     <Sheet open={!!providerId} onOpenChange={(o) => !o && onClose()}>
-      <SheetContent data-role="admin" side="right" className="w-full gap-0 overflow-y-auto border-line bg-shell p-0 sm:max-w-[640px]">
+      <SheetContent data-role="admin" side="right" className="w-full min-w-0 gap-0 overflow-x-hidden overflow-y-auto border-line bg-shell p-0 sm:max-w-[640px]">
         {providerId && <Detail id={providerId} />}
       </SheetContent>
     </Sheet>
@@ -37,7 +37,7 @@ function Detail({ id }: { id: string }) {
   return (
     <>
       <SheetHeader className="border-b border-line bg-white px-5 pt-5 pb-4">
-        <SheetTitle className="text-xl font-black">{d ? d.provider.name : 'مجری'}</SheetTitle>
+        <SheetTitle className="text-xl font-black break-words">{d ? d.provider.name : 'مجری'}</SheetTitle>
         <SheetDescription className="text-[13px] text-muted-2">{d ? `تسویه بعدی: ${jalaliYmd(d.settlement.next)}` : 'در حال بارگذاری…'}</SheetDescription>
         {d && (
           <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -47,7 +47,8 @@ function Detail({ id }: { id: string }) {
           </div>
         )}
       </SheetHeader>
-      <div className="grid gap-4 p-5">
+      {/* minmax(0,1fr): no card (chip scroller, Sheba, stats) may widen the sheet beyond the viewport */}
+      <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4 p-5 [&>*]:min-w-0">
         {query.isPending ? <LoadingBlock rows={4} /> : query.isError ? <ErrorState error={query.error} onRetry={() => void query.refetch()} /> : (
           <>
             <Kpis d={query.data} />
@@ -70,11 +71,11 @@ function Kpis({ d }: { d: ProviderLedgerAdmin }) {
     { label: 'نیازمند تعیین مبلغ', value: `${fa(d.balance.pendingCount)} مورد`, tone: TONES.amber },
   ]
   return (
-    <div className="grid gap-2.5 sm:grid-cols-3">
+    <div className="grid grid-cols-[minmax(0,1fr)] gap-2.5 sm:grid-cols-3">
       {tiles.map((t) => (
-        <div key={t.label} className="rounded-[20px] p-4" style={{ background: t.tone.soft, color: t.tone.ink }}>
+        <div key={t.label} className="min-w-0 rounded-[20px] p-4" style={{ background: t.tone.soft, color: t.tone.ink }}>
           <div className="text-[12.5px] opacity-80">{t.label}</div>
-          <div className="mt-1 text-[20px] font-black">{t.value}</div>
+          <div className="mt-1 text-[20px] font-black break-words">{t.value}</div>
         </div>
       ))}
     </div>

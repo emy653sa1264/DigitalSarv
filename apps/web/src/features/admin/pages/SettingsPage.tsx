@@ -5,6 +5,7 @@ import { Input } from '@/components/ui/input'
 import { notify, toast } from '@/components/ui/sonner'
 import { fa, jalali, toEnDigits } from '@/lib/format'
 import type { AdminSettings, ChecklistSettings, CourierPaySettings, DispatchSettings, LedgerSettings, OpsSettings, PickupPoint, QcListKey } from '@/lib/types'
+import { WEEKDAYS } from '@/lib/provider-labels'
 import { cn } from '@/lib/utils'
 import { useAdminSettings, useSettingsMutation, type SettingsPatch } from '../api'
 import { AddButton, AdminSelect, MoveButtons, NumInput, RowInput } from '../components/controls'
@@ -15,16 +16,6 @@ import { DispatchCard, dispatchProblem } from './settings/DispatchCard'
 import { LedgerCard } from './settings/LedgerCard'
 import { PickupPointsCard, pointsProblem } from './settings/PickupPointsCard'
 
-/** Persian week order → JS `getDay()` (0 Sunday … 6 Saturday). */
-const WEEKDAYS: { day: number; label: string }[] = [
-  { day: 6, label: 'شنبه' },
-  { day: 0, label: 'یکشنبه' },
-  { day: 1, label: 'دوشنبه' },
-  { day: 2, label: 'سه‌شنبه' },
-  { day: 3, label: 'چهارشنبه' },
-  { day: 4, label: 'پنجشنبه' },
-  { day: 5, label: 'جمعه' },
-]
 
 type ChecklistTab = QcListKey | 'pickup'
 const CHECKLIST_TABS: { key: ChecklistTab; label: string }[] = [

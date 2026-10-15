@@ -64,3 +64,41 @@ export const PRICE_SERVICE_LABEL: Record<PriceComboService, string> = {
 }
 export const PRINT_PRICE_SERVICES: PriceComboService[] = ['bw', 'color', 'spiral', 'addon']
 export const PROVIDER_ONLY_SERVICES: PriceComboService[] = ['school', 'docs', 'flyer', 'cart', 'repair', 'extra']
+
+const SIDE_FA: Record<string, string> = { single: 'یک‌رو', double: 'دورو' }
+const DOC_INK_FA: Record<string, string> = { bw: 'سیاه‌وسفید', color: 'رنگی', mixed: 'ترکیبی' }
+const FLYER_INK_FA: Record<string, string> = { color: 'تمام‌رنگی', mono: 'سیاه‌وسفید' }
+const FLYER_PAPER_FA: Record<string, string> = { glossy: 'گلاسه', plain: 'تحریر' }
+const CART_FA: Record<string, string> = { laserBw: 'لیزری سیاه', laserColor: 'لیزری رنگی', inkjet: 'جوهرافشان' }
+const DEVICE_FA: Record<string, string> = { laser: 'لیزری', inkjet: 'جوهرافشان', mfp: 'چندکاره', copier: 'فتوکپی', other: 'سایر' }
+
+/**
+ * The label of a provider-only combo key (D29) when no cached matrix row has it — the same wording as the API's
+ * `comboLabel`; undefined for a key of another shape (the caller falls back to the service label). Extras show their key.
+ */
+export function providerComboLabel(key: string): string | undefined {
+  const [kind, ...p] = key.split('|')
+  const all = (m: Record<string, string>, v?: string) => (v !== undefined ? m[v] : undefined)
+  switch (kind) {
+    case 'school':
+      return p[0] === 'book' ? 'فنری کتاب مدرسه · هر کتاب' : p[0] === 'lined' ? 'فنری کتاب مدرسه · هر برگ خط‌دار' : undefined
+    case 'docs': {
+      if (p.length === 1 && p[0] === 'hardcover') return 'پایان‌نامه · صحافی گالینگور · هر نسخه'
+      const [ink, side] = [all(DOC_INK_FA, p[0]), all(SIDE_FA, p[1])]
+      return p.length === 2 && ink && side ? `پایان‌نامه · چاپ ${ink} · ${side} · هر صفحه` : undefined
+    }
+    case 'flyer': {
+      if (p.length === 1 && p[0] === 'design') return 'تراکت · طراحی'
+      const [ink, paper, side] = [all(FLYER_INK_FA, p[1]), all(FLYER_PAPER_FA, p[2]), all(SIDE_FA, p[3])]
+      return p.length === 4 && ink && paper && side ? `تراکت · ${p[0]} · ${ink} · ${paper} · ${side} · هر برگ` : undefined
+    }
+    case 'cart':
+      return p.length === 1 && CART_FA[p[0]] ? `شارژ کارتریج · ${CART_FA[p[0]]}` : undefined
+    case 'repair':
+      return p.length === 1 && DEVICE_FA[p[0]] ? `تعمیر پرینتر · ${DEVICE_FA[p[0]]}` : undefined
+    case 'extra':
+      return p.length === 1 && p[0] ? `خدمات اضافی · ${p[0]}` : undefined
+    default:
+      return undefined
+  }
+}

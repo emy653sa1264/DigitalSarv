@@ -19,7 +19,8 @@ export function WalletTab() {
   const [from, setFrom] = useState(() => addDaysYmd(tehranYmd(), -27))
   const [to, setTo] = useState(() => tehranYmd())
   // Only the obvious cases are guarded here; the 366-day limit is the server's Persian 400, shown by the query view.
-  const problem = !from || !to ? 'بازه را انتخاب کنید' : to < from ? 'تاریخ پایان نباید قبل از تاریخ شروع باشد' : null
+  const problem = !from || !to ? 'بازه را انتخاب کنید' : to < from ? 'تاریخ شروع نباید بعد از تاریخ پایان باشد' : null
+  const isDefault = from === addDaysYmd(tehranYmd(), -27) && to === tehranYmd()
   const query = useWallet(from, to, !problem)
   const [busy, setBusy] = useState(false)
   const exportCsv = async () => {
@@ -33,12 +34,15 @@ export function WalletTab() {
     }
   }
   return (
-    <div className="grid gap-4">
+    <div className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-4 [&>*]:min-w-0">
       <AdminCard>
         <div className="flex flex-wrap items-end gap-3">
           <Field label="از تاریخ"><Input type="date" dir="ltr" value={from} max={to || undefined} onChange={(e) => setFrom(e.target.value)} /></Field>
           <Field label="تا تاریخ"><Input type="date" dir="ltr" value={to} max={tehranYmd()} onChange={(e) => setTo(e.target.value)} /></Field>
           <Button variant="outline" disabled={!!problem || busy} onClick={() => void exportCsv()}><Download className="size-4" />{busy ? 'در حال دریافت…' : 'خروجی CSV'}</Button>
+          {isDefault ? <span className="pb-2 text-[12px] font-bold text-muted-2">۲۸ روز اخیر</span> : (
+            <Button variant="ghost" size="sm" onClick={() => { setFrom(addDaysYmd(tehranYmd(), -27)); setTo(tehranYmd()) }}>۲۸ روز اخیر</Button>
+          )}
         </div>
         {problem && <div className="mt-2 text-[12.5px] font-bold text-pink-dark">{problem}</div>}
       </AdminCard>
@@ -46,7 +50,7 @@ export function WalletTab() {
         <QueryView query={query} rows={4}>
           {(r) => (
             <>
-              <div className="grid gap-2.5 sm:grid-cols-4">
+              <div className="grid grid-cols-[minmax(0,1fr)] gap-2.5 sm:grid-cols-4">
                 <Kpi label="دریافتی از مشتریان" value={money(r.total.charged)} tone="blue" />
                 <Kpi label="سهم مجریان" value={money(r.total.providerCost)} tone="violet" />
                 <Kpi label="دستمزد پیک (برآورد)" value={money(r.total.courierCost)} tone="amber" />
@@ -89,9 +93,9 @@ function Row({ w, fee, total }: { w: WalletRow; fee: number; total?: boolean }) 
 
 function Kpi({ label, value, tone }: { label: string; value: string; tone: keyof typeof TONES }) {
   return (
-    <div className="rounded-[20px] p-4" style={{ background: TONES[tone].soft, color: TONES[tone].ink }}>
+    <div className="min-w-0 rounded-[20px] p-4" style={{ background: TONES[tone].soft, color: TONES[tone].ink }}>
       <div className="text-[12.5px] opacity-80">{label}</div>
-      <div className="mt-1 text-[20px] font-black">{value}</div>
+      <div className="mt-1 text-[20px] font-black break-words">{value}</div>
     </div>
   )
 }

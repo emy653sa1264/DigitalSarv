@@ -46,7 +46,7 @@ export function CompensationTab() {
       </QueryView>
       {deciding && (
         <AmountDialog key={`${deciding.jobId}-${deciding.providerId}`} title={`جبران خسارت — سفارش ${fa(deciding.orderCode)}`}
-          description={`${deciding.providerName} · ${COMP_CAUSE_LABEL[deciding.cause]} (${COMP_STAGE_LABEL[deciding.stage]})`}
+          description={`${deciding.providerName || '—'} · ${COMP_CAUSE_LABEL[deciding.cause]} (${COMP_STAGE_LABEL[deciding.stage]})`}
           initial={0} max={deciding.payoutBasis} zeroLabel="بدون جبران (مورد بسته می‌شود)" submitLabel="ثبت تصمیم" pending={compensate.isPending} onClose={() => setDeciding(null)}
           onSubmit={(amount, reason) => compensate.mutate(
             { jobId: deciding.jobId, providerId: deciding.providerId, amount, reason },

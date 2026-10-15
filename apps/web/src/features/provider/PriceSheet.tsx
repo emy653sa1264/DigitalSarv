@@ -44,6 +44,8 @@ function SheetBody({ row, onDone }: { row: ProviderPriceRow; onDone: () => void 
   const [when, setWhen] = useState<'now' | 'later'>('now')
   const [day, setDay] = useState(tomorrowTehran)
   const [reason, setReason] = useState('')
+  // shown under the field as soon as the value is unusable (a typed 0, a negative or a fraction), not only on submit
+  const priceProblem = price === null ? null : !Number.isInteger(price) || price <= 0 ? 'قیمت باید عدد صحیح و بیشتر از صفر باشد' : null
 
   const send = () => {
     if (price === 0) return toast.error('قیمت باید بیشتر از صفر باشد')
@@ -74,7 +76,9 @@ function SheetBody({ row, onDone }: { row: ProviderPriceRow; onDone: () => void 
           <label className="grid gap-1.5 text-[13px] font-extrabold">
             قیمت جدید هر برگ / هر مورد (تومان)
             <Input inputMode="numeric" value={price === null ? '' : fa(price)} onChange={(e) => setPrice(e.target.value.trim() === '' ? null : toNum(e.target.value))}
+              aria-invalid={!!priceProblem} aria-describedby={priceProblem ? 'price-problem' : undefined}
               className="bg-white text-center text-base font-black" placeholder="مثلاً ۳٬۵۰۰" />
+            {priceProblem && <span id="price-problem" className="text-[12px] font-bold text-pink-dark">{priceProblem}</span>}
           </label>
           <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="زمان اعمال">
             <Chip size="sm" role="radio" aria-checked={when === 'now'} selected={when === 'now'} onClick={() => setWhen('now')}>بلافاصله پس از تأیید</Chip>
@@ -90,7 +94,7 @@ function SheetBody({ row, onDone }: { row: ProviderPriceRow; onDone: () => void 
             توضیح
             <Textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="مثلاً: افزایش قیمت کاغذ" className="bg-white" />
           </label>
-          <Button size="lg" block disabled={submit.isPending} onClick={send}>{submit.isPending ? 'در حال ارسال…' : 'ارسال برای تأیید'}</Button>
+          <Button size="lg" block disabled={submit.isPending || !!priceProblem} onClick={send}>{submit.isPending ? 'در حال ارسال…' : 'ارسال برای تأیید'}</Button>
         </div>
       )}
 

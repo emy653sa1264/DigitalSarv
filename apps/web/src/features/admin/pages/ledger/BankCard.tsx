@@ -18,14 +18,14 @@ export function BankCard({ providerId, bank, history }: { providerId: string; ba
   const [open, setOpen] = useState(false)
   return (
     <AdminCard>
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex min-w-0 items-center justify-between gap-2">
         <CardTitle>حساب بانکی</CardTitle>
         {canEdit && <Button size="sm" variant="outline" onClick={() => setOpen(true)}>{bank ? 'ویرایش' : 'ثبت حساب'}</Button>}
       </div>
       {bank ? (
         <div className="mt-3 grid gap-1 text-[13px]">
-          <div dir="ltr" className="text-start font-bold tracking-wide">{groupSheba(bank.sheba)}</div>
-          <div className="text-muted-1">{bank.holder}{bank.bankName ? ` · ${bank.bankName}` : ''}</div>
+          <div dir="ltr" className="text-start font-bold tracking-wide break-all">{groupSheba(bank.sheba)}</div>
+          <div className="break-words text-muted-1">{bank.holder}{bank.bankName ? ` · ${bank.bankName}` : ''}</div>
           <div className="text-[11.5px] text-muted-2">آخرین تغییر: {when(bank.updatedAt)}</div>
         </div>
       ) : (
@@ -37,7 +37,7 @@ export function BankCard({ providerId, bank, history }: { providerId: string; ba
           {history.map((h, i) => (
             <div key={`${h.at}-${i}`} className="text-[11.5px] leading-6 text-muted-2">
               {when(h.at)} · {h.by.name || 'مدیر'}
-              <div dir="ltr" className="text-start">{h.old ? `${groupSheba(h.old.sheba)} → ` : ''}{groupSheba(h.new.sheba)}</div>
+              <div dir="ltr" className="text-start break-all">{h.old ? `${groupSheba(h.old.sheba)} → ` : ''}{groupSheba(h.new.sheba)}</div>
             </div>
           ))}
         </div>

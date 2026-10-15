@@ -23,7 +23,7 @@ export function EntriesCard({ providerId }: { providerId: string }) {
   return (
     <AdminCard>
       <CardTitle>گردش حساب</CardTitle>
-      <div className="no-scrollbar -mx-1 mt-3 flex gap-1.5 overflow-x-auto px-1 pb-1">
+      <div className="no-scrollbar -mx-1 mt-3 flex max-w-full min-w-0 gap-1.5 overflow-x-auto px-1 pb-1">
         {KINDS.map((k) => (
           <Chip key={k} size="sm" selected={kind === k} onClick={() => { setKind(k); setPage(1) }} className="shrink-0 whitespace-nowrap">
             {k === 'all' ? 'همه' : LEDGER_KIND_LABEL[k]}
@@ -33,7 +33,7 @@ export function EntriesCard({ providerId }: { providerId: string }) {
       <QueryView query={query} rows={4} isEmpty={(d) => d.items.length === 0} empty={{ title: 'ردیفی ثبت نشده است' }}>
         {(d) => (
           <>
-            <div className="mt-3 grid gap-2">
+            <div className="mt-3 grid grid-cols-[minmax(0,1fr)] gap-2">
               {d.items.map((e) => <EntryLine key={e.id} e={e} onVoid={canVoid && e.kind === 'payout' && !e.voided ? () => setVoiding(e) : undefined} />)}
             </div>
             <Pager page={d.page} limit={d.limit} total={d.total} onPage={setPage} />
@@ -63,13 +63,13 @@ function EntryLine({ e, onVoid }: { e: LedgerEntryView; onVoid?: () => void }) {
   const tone = TONES[LEDGER_KIND_TONE[e.kind]]
   const suggested = e.basis?.suggested
   return (
-    <div className="rounded-[16px] border border-line-soft p-3">
-      <div className="flex flex-wrap items-center gap-2">
+    <div className="min-w-0 rounded-[16px] border border-line-soft p-3">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
         <Tag bg={tone.soft} fg={tone.ink}>{LEDGER_KIND_LABEL[e.kind]}</Tag>
-        <span className="min-w-0 flex-1 truncate text-[13.5px] font-bold">{e.title}</span>
+        <span className="min-w-0 flex-1 truncate text-[13.5px] font-bold" title={e.title}>{e.title}</span>
         <span className={e.state === 'pending' ? 'font-bold text-amber-dark' : 'font-black'}>{e.state === 'pending' ? 'در انتظار تعیین مبلغ' : signedMoney(e.amount ?? 0)}</span>
       </div>
-      <div className="mt-1 text-[11.5px] leading-6 text-muted-2">
+      <div className="mt-1 text-[11.5px] leading-6 break-words text-muted-2">
         {when(e.occurredAt)}
         {e.createdBy?.name ? ` · ${e.createdBy.name}` : ''}
         {e.payout ? ` · پیگیری ${fa(e.payout.bankRef)}` : ''}

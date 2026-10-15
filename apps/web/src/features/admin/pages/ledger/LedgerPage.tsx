@@ -39,7 +39,7 @@ export function LedgerPage() {
   return (
     <>
       <PageHeader title="تسویه مجریان" subtitle="سهم هر مجری از سفارش‌های تحویل‌شده، پرداخت‌های هفتگی و سهم دیجیتال سرو" />
-      <div className="no-scrollbar -mx-1 mb-4 flex gap-1.5 overflow-x-auto px-1 pb-1" role="tablist" aria-label="بخش">
+      <div className="no-scrollbar -mx-1 mb-4 flex max-w-full min-w-0 gap-1.5 overflow-x-auto px-1 pb-1" role="tablist" aria-label="بخش">
         {TABS.map((t) => (
           <Chip key={t.key} size="sm" role="tab" aria-selected={tab === t.key} selected={tab === t.key} className="shrink-0 whitespace-nowrap"
             onClick={() => set('tab', t.key === 'balances' ? undefined : t.key)}>

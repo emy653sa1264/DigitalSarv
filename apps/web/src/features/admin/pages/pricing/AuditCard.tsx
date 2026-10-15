@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { jalali } from '@/lib/format'
-import { PRICE_SERVICE_LABEL } from '@/lib/provider-labels'
+import { PRICE_SERVICE_LABEL, providerComboLabel } from '@/lib/provider-labels'
 import type { MatrixRow, PriceComboService } from '@/lib/types'
 import { useCenters } from '../../api'
 import { QueryView } from '../../components/kit'
@@ -27,8 +27,8 @@ export function AuditCard() {
   // Labels come from whatever matrices are already cached; otherwise the raw key is shown.
   const labels = new Map<string, string>()
   for (const [, rows] of qc.getQueriesData<MatrixRow[]>({ queryKey: [...pk.all, 'matrix'] })) for (const r of rows ?? []) labels.set(r.comboKey, r.label)
-  // Provider-only combos (D29) may not be cached: fall back to the service label instead of the raw key.
-  const labelOf = (k: string) => labels.get(k) ?? PRICE_SERVICE_LABEL[k.split('|')[0] as PriceComboService]
+  // Provider-only combos (D29) may not be cached: parse the key for the full label, then the service label, never the raw key first.
+  const labelOf = (k: string) => labels.get(k) ?? providerComboLabel(k) ?? PRICE_SERVICE_LABEL[k.split('|')[0] as PriceComboService]
 
   return (
     <QueryView query={query} rows={5} isEmpty={(d) => d.items.length === 0} empty={{ title: 'هنوز تغییری ثبت نشده است' }}>

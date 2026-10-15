@@ -25,7 +25,7 @@ export function PendingTab({ onOpenProvider }: { onOpenProvider: (providerId: st
   const missing = (e: LedgerEntryView) => [...(e.basis?.missing ?? []), e.basis?.note].filter(Boolean).join('، ')
   return (
     <div className="grid gap-3">
-      <InfoBanner>این سفارش‌ها تحویل شده‌اند اما قیمت مجری برای همه اقلامشان ثبت نبود؛ تا مبلغ را تعیین نکنید در مانده مجری حساب نمی‌شوند.</InfoBanner>
+      <InfoBanner>این سفارش‌ها تحویل شده‌اند اما قیمت مجری برای همه اقلامشان ثبت نبود؛ تا مبلغ را تعیین نکنید در مانده مجری حساب نمی‌شوند. مبلغ تعیین‌شده در صورت‌حساب هفته‌ای می‌آید که آن را تعیین می‌کنید، نه هفته تحویل.</InfoBanner>
       <QueryView query={query} rows={4} isEmpty={(d) => d.items.length === 0} empty={{ title: 'موردی برای تعیین مبلغ نیست' }}>
         {(d) => (
           <AdminTable columns={COLUMNS} minWidth={900} head={['سفارش', 'مجری', 'اقلام بدون قیمت', 'مبلغ پیشنهادی', '']}
