@@ -1,7 +1,8 @@
 /**
  * In-memory stand-in for the subset of a Mongoose Model the services use: Mongo-style filters
  * (dotted paths, $in/$nin/$ne/$exists/$lt/$lte/$gt/$gte/$elemMatch/$or) and updates
- * ($set/$unset/$inc/$push/$pull/$addToSet, $setOnInsert on upserts). Each update matches and applies without an await in between, so it is
+ * ($set/$unset/$inc/$push/$pull/$addToSet, $setOnInsert on upserts), aggregate stages $match/$sort/$limit/$lookup/$group
+ * ($sum/$max) and opt-in unique indexes (`fakeModel(docs, { unique })`, E11000 like Mongo). Each update matches and applies without an await in between, so it is
  * atomic like a real findOneAndUpdate — concurrency tests can rely on it. Test-only helper.
  */
 import { Types } from 'mongoose';
@@ -165,6 +166,32 @@ function sorted(rows: Doc[], spec?: Doc): Doc[] {
   });
 }
 
+/** `$group` with `_id: '$field' | null` and `$sum` (`'$field'` or a constant) / `$max` accumulators. */
+function groupStage(rows: Doc[], spec: Doc): Doc[] {
+  const { _id: idSpec, ...acc } = spec;
+  const pathOf = (e: unknown) => (typeof e === 'string' && e.startsWith('$') ? e.slice(1) : null);
+  const groups = new Map<string, { id: unknown; rows: Doc[] }>();
+  for (const r of rows) {
+    const p = pathOf(idSpec);
+    const id = p ? (get(r, p) ?? null) : (idSpec ?? null);
+    const k = String(norm(id));
+    if (!groups.has(k)) groups.set(k, { id, rows: [] });
+    groups.get(k)!.rows.push(r);
+  }
+  return [...groups.values()].map(({ id, rows: rs }) => {
+    const out: Doc = { _id: id };
+    for (const [name, a] of Object.entries(acc as Record<string, Doc>)) {
+      const [fn, expr] = Object.entries(a)[0];
+      const p = pathOf(expr);
+      const val = (r: Doc) => (p ? get(r, p) : expr);
+      if (fn === '$sum') out[name] = rs.reduce((t, r) => t + (typeof val(r) === 'number' ? (val(r) as number) : 0), 0);
+      else if (fn === '$max') out[name] = rs.map(val).filter((v) => v != null).reduce<unknown>((m, v) => (m == null || (norm(v) as number) > (norm(m) as number) ? v : m), null);
+      else throw new Error(`fake-model: unsupported accumulator ${fn}`);
+    }
+    return out;
+  });
+}
+
 /** Pipeline stages $match, $lookup (localField/foreignField), $sort, $limit over docs; `from` is resolved through `joins`. */
 export function runPipeline(docs: Doc[], pipeline: Doc[], joins: Record<string, { docs: Doc[] }>): Doc[] {
   let rows: Doc[] = docs.map((d) => clone(d));
@@ -177,13 +204,23 @@ export function runPipeline(docs: Doc[], pipeline: Doc[], joins: Record<string, 
       const other = joins[arg.from];
       if (!other) throw new Error(`fake-model: $lookup from "${arg.from}" is not in joins`);
       rows = rows.map((r) => ({ ...r, [arg.as]: other.docs.filter((o) => eq(get(o, arg.foreignField), get(r, arg.localField))).map((o) => clone(o)) }));
-    } else throw new Error(`fake-model: unsupported stage ${op}`);
+    } else if (op === '$group') rows = groupStage(rows, arg);
+    else throw new Error(`fake-model: unsupported stage ${op}`);
   }
   return rows;
 }
 
-export function fakeModel(docs: Doc[] = []) {
+export interface FakeOptions {
+  /** Unique indexes as field lists; a document missing a field is not indexed (like a partial index). */
+  unique?: string[][];
+}
+
+export function fakeModel(docs: Doc[] = [], opts: FakeOptions = {}) {
   const joins: Record<string, { docs: Doc[] }> = {};
+  const assertUnique = (d: Doc) => {
+    const fields = (opts.unique ?? []).find((fs) => fs.every((f) => get(d, f) != null) && docs.some((x) => x !== d && fs.every((f) => eq(get(x, f), get(d, f)))));
+    if (fields) throw Object.assign(new Error(`E11000 duplicate key error (${fields.join(', ')})`), { code: 11000, keyPattern: Object.fromEntries(fields.map((f) => [f, 1])) });
+  };
   const first = (filter: Doc) => docs.find((d) => matches(d, filter));
   const removeWhere = (filter: Doc, many: boolean) => {
     let deletedCount = 0;
@@ -199,8 +236,9 @@ export function fakeModel(docs: Doc[] = []) {
   const insertFromUpsert = (filter: Doc, update: Doc) => {
     const now = new Date();
     const d: Doc = { _id: new Types.ObjectId(), createdAt: now, updatedAt: now, ...clone(equalityFields(filter)) };
-    docs.push(d);
     applyUpdate(d, { ...update, $set: { ...((update.$setOnInsert as Doc) ?? {}), ...((update.$set as Doc) ?? {}) } });
+    assertUnique(d);
+    docs.push(d);
     return d;
   };
   const updateOne = async (filter: Doc, update: Doc, options?: { upsert?: boolean }) => {
@@ -218,6 +256,7 @@ export function fakeModel(docs: Doc[] = []) {
   const create = async (doc: Doc) => {
     const now = new Date();
     const d = { _id: new Types.ObjectId(), createdAt: now, updatedAt: now, ...clone(doc) };
+    assertUnique(d);
     docs.push(d);
     return out(d);
   };

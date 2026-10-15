@@ -78,6 +78,8 @@ export class Job {
   @Prop({ type: Boolean }) ledgerPending?: boolean;
   /** v4.3: when the ledger processed the delivered job (credits written, or nothing to credit). */
   @Prop({ type: Date }) ledgerAt?: Date;
+  /** v4.3: last time reconcile tried (and failed to finish) a flagged job — diagnostics; the scan cursor is by `_id`. */
+  @Prop({ type: Date }) ledgerTriedAt?: Date;
   @Prop({ type: Date, required: true }) orderCreatedAt: Date;
 
   createdAt: Date;

@@ -38,3 +38,23 @@ describe('fake-model (v4.2 additions)', () => {
     await expect(m.updateOne({ _id: 1 }, { $set: { 'a.c': 1 }, $setOnInsert: { d: 1 } }, { upsert: true })).resolves.toMatchObject({ matchedCount: 1 });
   });
 });
+
+describe('fake-model (v4.3 additions)', () => {
+  it('$group sums and maxes by a field (or null) and counts with $sum: 1', async () => {
+    const m = fakeModel([{ p: 'a', n: 2, at: 1 }, { p: 'a', n: 3, at: 5 }, { p: 'b', n: 4, at: 2 }]);
+    expect(await m.aggregate([{ $group: { _id: '$p', total: { $sum: '$n' }, last: { $max: '$at' }, count: { $sum: 1 } } }])).toEqual([
+      { _id: 'a', total: 5, last: 5, count: 2 }, { _id: 'b', total: 4, last: 2, count: 1 },
+    ]);
+    expect(await m.aggregate([{ $match: { p: 'a' } }, { $group: { _id: null, total: { $sum: '$n' } } }])).toEqual([{ _id: null, total: 5 }]);
+  });
+  it('opt-in unique indexes: create and upsert throw E11000 with the keyPattern; a missing value is not indexed', async () => {
+    const m = fakeModel([], { unique: [['key'], ['slot']] });
+    await m.create({ key: 'a', slot: 's1' });
+    await m.create({ key: 'b' });
+    await m.create({ key: 'c' });
+    await expect(m.create({ key: 'a' })).rejects.toMatchObject({ code: 11000, keyPattern: { key: 1 } });
+    await expect(m.updateOne({ key: 'd' }, { $setOnInsert: { slot: 's1' } }, { upsert: true })).rejects.toMatchObject({ code: 11000, keyPattern: { slot: 1 } });
+    expect(await m.updateOne({ key: 'a' }, { $setOnInsert: { slot: 's9' } }, { upsert: true })).toMatchObject({ matchedCount: 1, upsertedCount: 0 });
+    expect(m.docs).toHaveLength(3);
+  });
+});
