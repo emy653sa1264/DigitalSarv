@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import { canRecordPayouts } from '../../common/permissions.js';
 import { addDaysYmd, isYmd, tehranDayStart, tehranYmd } from '../../common/utils/dates.js';
 import { assertObjectId } from '../../common/utils/object-id.js';
 import { escapeRegex, pageParams, type Paged } from '../../common/utils/pagination.js';
@@ -73,8 +74,7 @@ export class LedgerReadsService {
   /** Only `payout_record` (or a super-admin, who has no stored permission list) sees the full Sheba. */
   async canSeeFullBank(userId: string): Promise<boolean> {
     const u = (await this.users.findById(userId, { role: 1, permissions: 1 }).lean()) as { role?: string; permissions?: string[] } | null;
-    if (!u || u.role !== 'admin') return false;
-    return !u.permissions || u.permissions.includes('payout_record');
+    return canRecordPayouts(u);
   }
 
   /** Every provider (or a name search) with its balance — highest due first; paged in memory (providers are few). */

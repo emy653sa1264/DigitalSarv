@@ -1,5 +1,6 @@
 import type { Types } from 'mongoose';
 import type { CreditBasis, LedgerEntry, PayoutInfo } from './ledger-entry.schema.js';
+import { maskSheba } from './sheba.js';
 import { entryTitle, type AdjustmentCause, type CompCause, type CreditRole, type LedgerKind, type LedgerState } from './ledger-model.js';
 
 export type EntryRow = LedgerEntry & { _id: Types.ObjectId };
@@ -26,7 +27,7 @@ export function entryView(e: EntryRow, ctx: ViewCtx): LedgerEntryView {
     ...(e.orderId ? { orderId: String(e.orderId) } : {}), ...(e.orderCode ? { orderCode: e.orderCode } : {}), ...(e.jobId ? { jobId: String(e.jobId) } : {}),
     ...(e.role ? { role: e.role } : {}), ...(e.cause ? { cause: e.cause } : {}), ...(e.compCause ? { compCause: e.compCause } : {}),
     occurredAt: iso(e.occurredAt), ...(e.countedAt ? { countedAt: iso(e.countedAt) } : {}), ...(e.reason ? { reason: e.reason } : {}),
-    ...(e.basis ? { basis: e.basis } : {}), ...(e.payout ? { payout: e.payout } : {}), ...(e.voidOf ? { voidOf: String(e.voidOf) } : {}),
+    ...(e.basis ? { basis: e.basis } : {}), ...(e.payout ? { payout: { ...e.payout, ...(e.payout.sheba ? { sheba: maskSheba(e.payout.sheba) } : {}) } } : {}), ...(e.voidOf ? { voidOf: String(e.voidOf) } : {}),
     voided: ctx.voided.has(String(e._id)),
     ...(e.createdBy ? { createdBy: who(e.createdBy, ctx.users) } : {}), byRole: e.byRole,
     ...(e.resolution ? { resolution: { by: e.resolution.by ? who(e.resolution.by, ctx.users) : null, at: iso(e.resolution.at), reason: e.resolution.reason } } : {}),

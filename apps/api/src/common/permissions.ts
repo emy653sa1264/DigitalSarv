@@ -14,3 +14,8 @@ export type Permission = (typeof PERMISSIONS)[number];
 export function canViewProviderPrices(user: { role?: string; permissions?: string[] | null } | null | undefined): boolean {
   return !!user && user.role === 'admin' && (!user.permissions || user.permissions.includes('provider_price_view'));
 }
+
+/** Admin who may record payouts/voids, set bank accounts and see the full Sheba (an admin without `permissions` has all of them). */
+export function canRecordPayouts(user: { role?: string; permissions?: string[] | null } | null | undefined): boolean {
+  return !!user && user.role === 'admin' && (!user.permissions || user.permissions.includes('payout_record'));
+}

@@ -1,19 +1,20 @@
-import { Body, Controller, Get, HttpCode, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
 import type { AuthUser } from '../../common/auth/auth-user.js';
 import { CurrentUser, RequirePermissions, Roles } from '../../common/auth/decorators.js';
 import { JwtAuthGuard, RolesGuard } from '../../common/auth/guards.js';
 import { PermissionsGuard } from '../../common/auth/permissions.guard.js';
 import { PageQueryDto } from '../../common/utils/pagination.js';
-import { AdjustmentDto, CompensationDto, LedgerEntriesQueryDto, ResolvePendingDto, StatementQueryDto } from './dto/ledger.dto.js';
+import { AdjustmentDto, BankAccountDto, CompensationDto, LedgerEntriesQueryDto, PayoutDto, ResolvePendingDto, StatementQueryDto, VoidPayoutDto } from './dto/ledger.dto.js';
 import { LedgerActionsService } from './ledger-actions.service.js';
 import { LedgerReadsService } from './ledger-reads.service.js';
+import { PayoutsService } from './payouts.service.js';
 
 /** «تسویه مجریان» (contract v4.3 «Admin endpoints»; D33 permissions). */
 @Controller('admin/ledger')
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Roles('admin')
 export class AdminLedgerController {
-  constructor(private readonly reads: LedgerReadsService, private readonly actions: LedgerActionsService) {}
+  constructor(private readonly reads: LedgerReadsService, private readonly actions: LedgerActionsService, private readonly payouts: PayoutsService) {}
 
   @Get('balances') @RequirePermissions('ledger_view')
   balances(@Query() q: PageQueryDto) { return this.reads.balances(q); }
@@ -44,4 +45,13 @@ export class AdminLedgerController {
 
   @Post('adjustments') @RequirePermissions('ledger_adjust')
   adjust(@Body() dto: AdjustmentDto, @CurrentUser() user: AuthUser) { return this.actions.adjust(dto, user.id); }
+
+  @Post('payouts') @RequirePermissions('payout_record')
+  recordPayout(@Body() dto: PayoutDto, @CurrentUser() user: AuthUser) { return this.payouts.record(dto, user.id); }
+
+  @Post('payouts/:id/void') @HttpCode(200) @RequirePermissions('payout_record')
+  voidPayout(@Param('id') id: string, @Body() dto: VoidPayoutDto, @CurrentUser() user: AuthUser) { return this.payouts.void(id, dto.reason, user.id); }
+
+  @Put('providers/:id/bank') @RequirePermissions('payout_record')
+  setBank(@Param('id') id: string, @Body() dto: BankAccountDto, @CurrentUser() user: AuthUser) { return this.payouts.setBank(id, dto, user.id); }
 }
