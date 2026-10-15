@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
-import { isYmd, tehranYmd } from '../../common/utils/dates.js';
+import { addDaysYmd, isYmd, tehranYmd } from '../../common/utils/dates.js';
 import { assertObjectId } from '../../common/utils/object-id.js';
 import { Center, type BankAccount } from '../centers/center.schema.js';
 import { AMOUNT_MSG, needReason } from './ledger-actions.service.js';
@@ -13,6 +13,8 @@ import { bankView, LedgerReadsService, type BankAccountView } from './ledger-rea
 import { LedgerService, sameRequest, type NewEntry } from './ledger.service.js';
 import { maskSheba, normalizeSheba, shebaProblem } from './sheba.js';
 
+/** M4: a payout date at most a year back. */
+const MAX_PAST_DAYS = 366;
 const oid = (id: string) => new Types.ObjectId(id);
 
 /** D31: weekly payouts recorded by an admin (never above the balance, R1), their voids, and the payout account (R7). */
@@ -27,10 +29,12 @@ export class PayoutsService {
   ) {}
 
   async record(body: { providerId: string; amount: number; paidAt: string; bankRef: string; note?: string; requestId: string }, by: string): Promise<LedgerEntryView> {
+    // M5: an archived or suspended provider is still paid — a balance owed must be paid out
     const p = await this.reads.findProvider(body.providerId);
     if (!isAmount(body.amount, { min: 1 })) throw new BadRequestException(AMOUNT_MSG);
     if (!isYmd(body.paidAt)) throw new BadRequestException('تاریخ باید به‌صورت yyyy-mm-dd باشد');
     if (body.paidAt > tehranYmd()) throw new BadRequestException('تاریخ پرداخت نمی‌تواند در آینده باشد');
+    if (body.paidAt < addDaysYmd(tehranYmd(), -MAX_PAST_DAYS)) throw new BadRequestException('تاریخ پرداخت نمی‌تواند بیش از ۳۶۶ روز قبل باشد');
     const bankRef = body.bankRef?.trim();
     if (!bankRef) throw new BadRequestException('شماره پیگیری بانکی را وارد کنید');
     const bank = p.bankAccount;
@@ -77,9 +81,12 @@ export class PayoutsService {
     if (problem) throw new BadRequestException(problem);
     const holder = body.holder?.trim() ?? '';
     if (holder.length < 2 || holder.length > 80) throw new BadRequestException('نام صاحب حساب را وارد کنید');
+    const prev = await this.reads.findProvider(providerId); // 404 first; also the previous account for the audit row
+    const mask = (sheba: string, h: string) => ({ sheba: maskSheba(sheba), holder: h });
     const bankAccount: BankAccount = { sheba: normalizeSheba(body.sheba), holder, bankName: body.bankName?.trim() ?? '', updatedAt: new Date(), updatedBy: oid(by) };
-    const doc = await this.centers.findByIdAndUpdate(providerId, { $set: { bankAccount } }, { returnDocument: 'after' });
+    const doc = await this.centers.findByIdAndUpdate(providerId, { $set: { bankAccount }, $push: { bankAccountHistory: { at: bankAccount.updatedAt, by: oid(by), old: prev.bankAccount?.sheba ? mask(prev.bankAccount.sheba, prev.bankAccount.holder) : null, new: mask(bankAccount.sheba, holder) } } }, { returnDocument: 'after' });
     if (!doc) throw new NotFoundException('مجری یافت نشد');
-    return bankView(bankAccount)!;
+    await this.notifier.bankChanged(providerId, `${providerId}-${bankAccount.updatedAt.getTime()}`);
+    return bankView(bankAccount, false)!; // P12: the response is masked; the full Sheba only appears in the provider account read
   }
 }

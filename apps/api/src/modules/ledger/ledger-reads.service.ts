@@ -5,7 +5,7 @@ import { canRecordPayouts } from '../../common/permissions.js';
 import { addDaysYmd, isYmd, tehranDayStart, tehranYmd } from '../../common/utils/dates.js';
 import { assertObjectId } from '../../common/utils/object-id.js';
 import { escapeRegex, pageParams, type Paged } from '../../common/utils/pagination.js';
-import { Center, type BankAccount } from '../centers/center.schema.js';
+import { Center, type BankAccount, type BankAccountChange } from '../centers/center.schema.js';
 import { User } from '../users/user.schema.js';
 import type { LedgerEntriesQueryDto } from './dto/ledger.dto.js';
 import { entryView, type EntryRow, type LedgerEntryView } from './ledger-json.js';
@@ -17,9 +17,10 @@ import { maskSheba } from './sheba.js';
 export interface SettlementInfo { weekday: number; cutoff: string; next: string }
 export interface BankAccountView { sheba: string; holder: string; bankName: string; updatedAt: string }
 export interface ProviderBalanceRow { providerId: string; name: string; businessName: string; status: string; balance: Balance; lastPayoutAt: string | null; hasBank: boolean }
-export interface ProviderLedgerAdmin { provider: { id: string; name: string; businessName: string; status: string }; balance: Balance; bank: BankAccountView | null; settlement: SettlementInfo }
+export interface ProviderLedgerAdmin { provider: { id: string; name: string; businessName: string; status: string }; balance: Balance; bank: BankAccountView | null; bankHistory: BankChangeView[]; settlement: SettlementInfo }
+export interface BankChangeView { at: string; by: string; old: { sheba: string; holder: string } | null; new: { sheba: string; holder: string } }
 export interface WeeklyStatement { providerId: string; from: string; to: string; opening: number; earned: number; paid: number; closing: number; lines: LedgerEntryView[] }
-export type ProviderRow = { _id: Types.ObjectId; name: string; businessName?: string; status?: string; bankAccount?: BankAccount; userId?: Types.ObjectId };
+export type ProviderRow = { bankAccountHistory?: BankAccountChange[]; _id: Types.ObjectId; name: string; businessName?: string; status?: string; bankAccount?: BankAccount; userId?: Types.ObjectId };
 
 export const MAX_RANGE_DAYS = 366;
 const BAD_DATE = 'تاریخ باید به‌صورت yyyy-mm-dd باشد';
@@ -33,6 +34,12 @@ export function assertYmdRange(from?: string, to?: string): void {
     if (from > to) throw new BadRequestException('تاریخ شروع نباید بعد از تاریخ پایان باشد');
     if (addDaysYmd(from, MAX_RANGE_DAYS) <= to) throw new BadRequestException('بازه‌ی تاریخ حداکثر ۳۶۶ روز است');
   }
+}
+
+/** P12: the change history, newest first; Shebas are masked even if a row were stored otherwise. */
+export function bankHistoryView(h?: BankAccountChange[] | null): BankChangeView[] {
+  const m = (a: { sheba: string; holder: string }) => ({ sheba: maskSheba(a.sheba), holder: a.holder });
+  return [...(h ?? [])].reverse().map((c) => ({ at: new Date(c.at).toISOString(), by: String(c.by), old: c.old ? m(c.old) : null, new: m(c.new) }));
 }
 
 /** `full` = the whole Sheba (payout_record); otherwise masked (ledger_view only). */
@@ -66,7 +73,7 @@ export class LedgerReadsService {
   /** The bank account is `select:false`; it is read explicitly here. */
   async findProvider(id: string): Promise<ProviderRow> {
     assertObjectId(id, 'مجری');
-    const p = (await this.centers.findById(id, PROVIDER_FIELDS).select('+bankAccount').lean()) as ProviderRow | null;
+    const p = (await this.centers.findById(id, PROVIDER_FIELDS).select('+bankAccount +bankAccountHistory').lean()) as ProviderRow | null;
     if (!p) throw new NotFoundException('مجری یافت نشد');
     return p;
   }
@@ -110,7 +117,7 @@ export class LedgerReadsService {
   async provider(id: string, fullBank = false): Promise<ProviderLedgerAdmin> {
     const p = await this.findProvider(id);
     const [balance, settlement] = await Promise.all([this.ledger.balanceOf(id), this.settlement()]);
-    return { provider: { id, name: p.name, businessName: p.businessName ?? '', status: p.status ?? 'active' }, balance, bank: bankView(p.bankAccount, fullBank), settlement };
+    return { provider: { id, name: p.name, businessName: p.businessName ?? '', status: p.status ?? 'active' }, balance, bank: bankView(p.bankAccount, fullBank), bankHistory: bankHistoryView(p.bankAccountHistory), settlement };
   }
 
   async entries(id: string, q: Partial<LedgerEntriesQueryDto>): Promise<Paged<LedgerEntryView>> {

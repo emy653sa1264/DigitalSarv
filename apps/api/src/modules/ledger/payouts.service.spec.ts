@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { Types } from 'mongoose';
-import { tehranYmd } from '../../common/utils/dates.js';
+import { addDaysYmd, tehranYmd } from '../../common/utils/dates.js';
 import { fakeModel, type Doc } from '../../../test/fake-model.js';
 import { LedgerReadsService } from './ledger-reads.service.js';
 import { LedgerService } from './ledger.service.js';
@@ -19,7 +19,7 @@ function setup({ bank = true, entries = [credit(100000)] as Doc[] } = {}) {
   const catalog = { getSettings: vi.fn(async () => ({ ledger: { settlementWeekday: 6 } })) };
   const ledger = new LedgerService(e as never, fakeModel([]) as never, fakeModel([]) as never, fakeModel([]) as never, catalog as never);
   const reads = new LedgerReadsService(e as never, centers as never, fakeModel([]) as never, ledger);
-  const notifier = { payout: vi.fn(async () => undefined) };
+  const notifier = { payout: vi.fn(async () => undefined), bankChanged: vi.fn(async () => undefined) };
   const svc = new PayoutsService(e as never, centers as never, ledger, reads, notifier as never);
   return { svc, entries: e, centers, ledger, reads, notifier };
 }
@@ -92,12 +92,50 @@ describe('bank account (D31, R7)', () => {
   it('normalizes and validates the Sheba; an invalid one changes nothing', async () => {
     const s = setup({ bank: false });
     const v = await s.svc.setBank(String(P), { sheba: '۰۶۲۹۶۰۰۰۰۰۰۰۱۰۰۳۲۴۲۰۰۰۰۱', holder: ' علی نگینی ', bankName: 'نمونه' }, ADMIN);
-    expect(v).toMatchObject({ sheba: SHEBA, holder: 'علی نگینی', bankName: 'نمونه' });
+    expect(v).toMatchObject({ sheba: `IR${'•'.repeat(20)}0001`, holder: 'علی نگینی', bankName: 'نمونه' }); // P12: masked response
     expect(s.centers.docs[0].bankAccount).toMatchObject({ sheba: SHEBA, holder: 'علی نگینی', updatedBy: expect.anything() });
     await expect(s.svc.setBank(String(P), { sheba: 'IR062960000000100324200002', holder: 'x y' }, ADMIN)).rejects.toThrow(new BadRequestException('شماره شبا معتبر نیست؛ رقم‌های آن را بررسی کنید'));
     await expect(s.svc.setBank(String(P), { sheba: SHEBA, holder: 'x' }, ADMIN)).rejects.toThrow(new BadRequestException('نام صاحب حساب را وارد کنید'));
     expect(s.centers.docs[0].bankAccount.sheba).toBe(SHEBA);
     await expect(s.svc.setBank(String(new Types.ObjectId()), { sheba: SHEBA, holder: 'علی نگینی' }, ADMIN)).rejects.toThrow(new NotFoundException('مجری یافت نشد'));
+  });
+});
+
+describe('bank account history (P12)', () => {
+  const OTHER = 'IR762960000000100324200002';
+  it('two changes make two masked history rows and two notices', async () => {
+    const s = setup({ bank: false });
+    await s.svc.setBank(String(P), { sheba: SHEBA, holder: 'علی نگینی' }, ADMIN);
+    const second = await s.svc.setBank(String(P), { sheba: OTHER, holder: 'علی نگینی' }, ADMIN).catch((e: Error) => e);
+    if (second instanceof Error) throw second;
+    const hist = s.centers.docs[0].bankAccountHistory;
+    expect(hist).toHaveLength(2);
+    expect(hist[0]).toMatchObject({ old: null, new: { sheba: `IR${'•'.repeat(20)}0001`, holder: 'علی نگینی' } });
+    expect(hist[1].old.sheba).toBe(`IR${'•'.repeat(20)}0001`);
+    expect(s.notifier.bankChanged).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(hist)).not.toContain(SHEBA);
+    expect(JSON.stringify(second)).not.toContain(OTHER);
+    const view = await s.reads.provider(String(P), true);
+    expect(view.bankHistory).toHaveLength(2);
+    expect(JSON.stringify(view.bankHistory)).not.toContain(OTHER);
+  });
+});
+
+describe('payout guards (M3-M5)', () => {
+  it('same requestId with a different bankRef is 409', async () => {
+    const s = setup();
+    await s.svc.record(body(1000, 5), ADMIN);
+    await expect(s.svc.record(body(1000, 5, { bankRef: 'TRX-2' }), ADMIN)).rejects.toThrow(ConflictException);
+  });
+  it('paidAt more than 366 days back is a 400; exactly 366 is allowed', async () => {
+    const s = setup();
+    await expect(s.svc.record(body(1, 6, { paidAt: addDaysYmd(TODAY, -367) }), ADMIN)).rejects.toThrow(new BadRequestException('تاریخ پرداخت نمی‌تواند بیش از ۳۶۶ روز قبل باشد'));
+    await expect(s.svc.record(body(1, 7, { paidAt: addDaysYmd(TODAY, -366) }), ADMIN)).resolves.toBeDefined();
+  });
+  it('a suspended provider with a balance can still be paid (M5)', async () => {
+    const s = setup();
+    s.centers.docs[0].status = 'suspended';
+    await expect(s.svc.record(body(1000, 8), ADMIN)).resolves.toBeDefined();
   });
 });
 

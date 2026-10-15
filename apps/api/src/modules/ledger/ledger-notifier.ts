@@ -16,11 +16,20 @@ export class LedgerNotifier {
     @InjectModel(Center.name) private readonly centers: Model<Center>,
   ) {}
 
+  /** P12: the provider is told whenever its payout account changes (no amount). */
+  async bankChanged(providerId: string, entryId: unknown): Promise<void> {
+    await this.send('bank_account_changed', providerId, `bank-${String(entryId)}`, '');
+  }
+
   async payout(event: LedgerEvent, providerId: string, amount: number, entryId: unknown): Promise<void> {
+    await this.send(event, providerId, `payout-${String(entryId)}`, ` — ${fa(amount)} تومان`);
+  }
+
+  private async send(event: LedgerEvent, providerId: string, tag: string, suffix: string): Promise<void> {
     try {
       const c = await this.centers.findById(providerId, { userId: 1 }).lean();
       if (!c?.userId) return;
-      await this.notifications.notify(event, [c.userId], { url: '/provider/settlement', tag: `payout-${String(entryId)}` }, ` — ${fa(amount)} تومان`);
+      await this.notifications.notify(event, [c.userId], { url: '/provider/settlement', tag }, suffix);
     } catch (err) {
       this.logger.warn(`${event} for provider ${providerId} failed: ${(err as Error).message}`);
     }

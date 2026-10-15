@@ -57,7 +57,7 @@ describe('LedgerReadsService (admin)', () => {
     expect(await svc.provider(String(A), true)).toEqual({
       provider: { id: String(A), name: 'چاپ نگین', businessName: 'چاپ و تکثیر نگین', status: 'active' },
       balance: { available: 100000, earnedSinceCutoff: 0, due: 100000, pendingCount: 0 },
-      bank: { sheba: 'IR062960000000100324200001', holder: 'علی نگینی', bankName: 'نمونه', updatedAt: '2026-10-01T08:00:00.000Z' },
+      bank: { sheba: 'IR062960000000100324200001', holder: 'علی نگینی', bankName: 'نمونه', updatedAt: '2026-10-01T08:00:00.000Z' }, bankHistory: [],
       settlement: { weekday: 6, cutoff: '2026-10-17', next: '2026-10-24' },
     });
     await expect(svc.provider(String(new Types.ObjectId()))).rejects.toThrow(new NotFoundException('مجری یافت نشد'));

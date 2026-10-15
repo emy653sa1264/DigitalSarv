@@ -139,6 +139,7 @@ export const NOTIFICATIONS = [
   // v4.3 settlement (D19, R12): provider «سرو مجری»; the amount is appended
   { event: 'payout_recorded', channel: 'push', text: 'پرداخت تسویه برای شما ثبت شد.', on: true },
   { event: 'payout_voided', channel: 'push', text: 'یک پرداخت تسویه باطل شد.', on: true },
+  { event: 'bank_account_changed', channel: 'push', text: 'شماره حساب تسویه شما تغییر کرد؛ اگر این تغییر از طرف شما درخواست نشده، با دیجیتال سرو تماس بگیرید.', on: true },
 ] as const;
 
 export const ZONES = [

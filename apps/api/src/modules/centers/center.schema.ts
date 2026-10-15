@@ -34,6 +34,7 @@ const CapacitySchema = new MongooseSchema(
 );
 
 /** v4.3: the provider's payout account (Sheba normalized and checksum-validated, R7). */
+export interface BankAccountChange { at: Date; by: Types.ObjectId; old: { sheba: string; holder: string } | null; new: { sheba: string; holder: string } }
 export interface BankAccount { sheba: string; holder: string; bankName: string; updatedAt: Date; updatedBy?: Types.ObjectId }
 
 /** A print centre = a provider («مجری», v4.1 D1). v1 fields are kept unchanged. */
@@ -70,6 +71,9 @@ export class Center {
 
   // ---- v4.3 settlement (D31, R7): written only by PUT /admin/ledger/providers/:id/bank; never selected by default (read with .select("+bankAccount"))
   @Prop({ type: MongooseSchema.Types.Mixed, select: false }) bankAccount?: BankAccount;
+
+  /** P12: append-only audit of bank account changes (masked Shebas only). */
+  @Prop({ type: [MongooseSchema.Types.Mixed], select: false }) bankAccountHistory?: BankAccountChange[];
 
   createdAt: Date;
   updatedAt: Date;

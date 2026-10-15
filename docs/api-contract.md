@@ -1350,7 +1350,7 @@ LedgerBalance       { available, due, earnedSinceCutoff, pendingCount }
 SettlementInfo      { weekday, cutoff /* yyyy-mm-dd of the cutoff day */, next /* yyyy-mm-dd */ }
 BankAccountView     { sheba, holder, bankName, updatedAt }
 ProviderBalanceRow  { providerId, name, businessName, status, balance: LedgerBalance, lastPayoutAt: string | null, hasBank }
-ProviderLedgerAdmin { provider: { id, name, businessName, status }, balance: LedgerBalance, bank: BankAccountView | null, settlement: SettlementInfo }
+ProviderLedgerAdmin { provider: { id, name, businessName, status }, balance: LedgerBalance, bank: BankAccountView | null, bankHistory: { at, by, old: { sheba /* masked */, holder } | null, new: { sheba /* masked */, holder } }[] /* newest first */, settlement: SettlementInfo }
 WeeklyStatement     { providerId, from, to /* yyyy-mm-dd, inclusive */, opening, earned, paid, closing, lines: LedgerEntryView[] }
 CompensationItem    { jobId, orderId, orderCode, providerId, providerName, cause, stage: 'in_production' | 'after_production', at, payoutBasis: number | null }
 WalletRow           { from, to, orders, charged, providerCost, courierTasks, courierCost, share }
@@ -1414,6 +1414,7 @@ Super-admins have all; shown in «کارکنان و دسترسی‌ها» as «�
 Provider events `payout_recorded` («پرداخت تسویه برای شما ثبت شد.» + « — ۱٬۲۰۰٬۰۰۰ تومان») and `payout_voided`
 («یک پرداخت تسویه باطل شد.» + amount), inbox + web push, url `/provider/settlement`. Inbox rows of these events have no
 order: `orderId: ''`, `orderCode: ''` in `UserNotification`.
+Provider event `bank_account_changed` («شماره حساب تسویه شما تغییر کرد؛ اگر این تغییر از طرف شما درخواست نشده، با دیجیتال سرو تماس بگیرید.», no amount) is sent on every `PUT /admin/ledger/providers/:id/bank`; the change is also appended (masked Shebas only) to the centre's `bankAccountHistory`. The `PUT` response is the masked `BankAccountView`; `paidAt` of a payout may be at most 366 days in the past («تاریخ پرداخت نمی‌تواند بیش از ۳۶۶ روز قبل باشد»).
 
 ### Errors
 
