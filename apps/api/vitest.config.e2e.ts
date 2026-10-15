@@ -10,5 +10,7 @@ export default defineConfig({
     include: ['**/*.e2e-spec.ts'],
     // a cold AppModule start (Mongo indexes, seed) can exceed the 10 s default
     hookTimeout: 30000,
+    // both files reuse the test providers and the demo customer's wallet: run them one after another
+    fileParallelism: false,
   },
 });

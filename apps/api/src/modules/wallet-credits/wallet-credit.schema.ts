@@ -40,9 +40,10 @@ export class WalletCredit {
 export type WalletCreditDocument = HydratedDocument<WalletCredit>;
 export const WalletCreditSchema = SchemaFactory.createForClass(WalletCredit);
 WalletCreditSchema.index({ state: 1, createdAt: 1 });
-WalletCreditSchema.index({ state: 1, doneAt: 1 }, { partialFilterExpression: { keyPulled: { $exists: false } }, name: 'settled_keys' });
+// MongoDB partial indexes cannot express `$exists: false`: a plain index serves the key-pull sweep (state + doneAt).
+WalletCreditSchema.index({ state: 1, doneAt: 1 }, { name: 'settled_keys' });
 WalletCreditSchema.index({ state: 1, voidedAt: 1 }, { partialFilterExpression: { origKey: { $exists: true } }, name: 'voided_origkey' });
-WalletCreditSchema.index({ doneAt: 1 }, { partialFilterExpression: { state: 'reversed', givenBack: { $exists: false } }, name: 'reversed_open' });
+// reversed-and-not-given-back credits: served by settled_keys (state + doneAt); a partial index cannot express `$exists: false`.
 // serves dueRequest (one customer's due:<orderId>:<requestId> keys)
 WalletCreditSchema.index({ userId: 1, key: 1 }, { name: 'user_key' });
 WalletCreditSchema.index({ state: 1, lastSweptAt: 1, createdAt: 1 }, { name: 'sweep_rotation' });

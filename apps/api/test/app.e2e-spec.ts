@@ -258,7 +258,7 @@ describe.skipIf(!servicesUp)('API (e2e)', () => {
 
   it('three provider prices coexist and the compare view shows margins (§23, §87)', async () => {
     const admin = await login('09120000000');
-    const rows = (await http().get('/api/admin/price-book/compare?service=bw').set(authH(admin)).expect(200)).body as any[];
+    const rows = (await http().get('/api/admin/price-book/compare?service=bw').set(authH(admin)).expect(200)).body.items as any[]; // paged since M5 (Task 9)
     const a4 = rows.filter((r) => r.comboKey === 'bw|A4|single');
     const byName = new Map(a4.map((r) => [r.providerName, r]));
     expect(byName.get('چاپ نگین')?.providerPrice).toBe(3500);
