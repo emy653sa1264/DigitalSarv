@@ -309,8 +309,8 @@ marked `<…>` comes from `.env.production` or the provider's panel, never from 
 
 - [ ] Back up first (`./deploy/backup.sh`) and copy the backup off the server.
 - [ ] **Before** deploying v4.4, list the paid orders waiting on a recount approval that were recounted before v4.4 (they have no
-  `chargedAmount`, so v4.4 cannot tell a difference that was charged from one that was not). Read-only, in mongosh:
-  `db.orders.find({ status: 'awaiting_approval', paid: true, chargedAmount: { $exists: false } }, { code: 1, payMethod: 1, paidVia: 1, 'quote.total': 1, 'payment.amount': 1, refunded: 1 })`.
+  `chargedAmount` — missing or null, which `chargedAmount: null` matches — so v4.4 cannot tell a difference that was charged from one that was not). Read-only, in mongosh:
+  `db.orders.find({ status: 'awaiting_approval', paid: true, chargedAmount: null }, { code: 1, payMethod: 1, paidVia: 1, 'quote.total': 1, 'payment.amount': 1, refunded: 1 })`.
   Settle each by hand before approving it in «سفارش‌ها» (compare what was paid with the new total; refund a lower total from
   «کیف پول» or collect a higher one at handover) and note it on the order. An empty result means nothing to do.
 - [ ] `dc up -d --build`, then wait for `curl -fsS https://<domain>/api/health/ready` (200; 503 means Mongo or Redis is down).
@@ -343,11 +343,12 @@ marked `<…>` comes from `.env.production` or the provider's panel, never from 
 
 **Support notes (v4.4)**
 
-- A difference due after a recount («مابه‌التفاوت») is collected in cash only by the courier, whose task shows the amount. A
-  provider cannot mark such an order «تحویل شد» (409 «برای این سفارش مابه‌التفاوت باقی است؛ تحویل را پشتیبانی ثبت می‌کند»; the
-  provider never sees the amount). For a provider or in-person handover, support takes the cash or has the customer pay
-  from the wallet, then marks it delivered in «سفارش‌ها» → the order → «تحویل شد» and confirms «مبلغ … نقدی دریافت شد» (the
-  dispatch center answers the same 409 with the amount and needs that confirmation too; use the order sheet).
+- Cash at the door is taken only by the courier, whose task shows the amount: an **unpaid COD** total or a difference due after a
+  recount («مابه‌التفاوت»). A provider cannot mark such an order «تحویل شد» — neither a provider delivery nor a pickup at the
+  provider's shop (409 «برای این سفارش مابه‌التفاوت باقی است؛ تحویل را پشتیبانی ثبت می‌کند»; the provider never sees the amount).
+  Those handovers are closed by an admin: collect the cash first (or have the customer pay a difference from the wallet), then
+  «سفارش‌ها» → the order → «تحویل شد» and confirm «مبلغ … نقدی دریافت شد». If the amount changed meanwhile the sheet reloads and
+  asks again with the new amount. (The dispatch center answers the same 409 and has no confirm dialog; use the order sheet.)
 - A slow, ambiguous checkout that the customer resubmits can leave **two paid orders** for one basket. Cancel the extra one
   from «سفارش‌ها»; its amount goes back to the customer's wallet (not to the card).
 
