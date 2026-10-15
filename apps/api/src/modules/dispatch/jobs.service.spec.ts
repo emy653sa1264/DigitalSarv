@@ -497,3 +497,43 @@ describe('v4.3 ledger hook (D27, Review Focus 2)', () => {
     expect(s.jobs.docs[0]).toMatchObject({ status: 'delivered', ledgerPending: true });
   });
 });
+
+describe('v4.3 fix round 1 — open compensation cases flagged on the job (P10, M2)', () => {
+  it('a cancel during production flags the holder in the same write; before production flags nobody', async () => {
+    const a = setup();
+    await heldBy(a, 'in_production');
+    await a.svc.cancelForOrder(a.orders.docs[0] as never, 'admin');
+    expect(a.jobs.docs[0]).toMatchObject({ status: 'cancelled', compOpen: [String(P)], cancel: { stage: 'in_production' } });
+    const b = setup();
+    await heldBy(b, 'accepted');
+    await b.svc.cancelForOrder(b.orders.docs[0] as never, 'admin');
+    expect(b.jobs.docs[0].status).toBe('cancelled');
+    expect(b.jobs.docs[0].compOpen).toBeUndefined();
+  });
+  it('a cancel while a separate delivery provider is out delivering flags both, and records that the leg started', async () => {
+    const D = new Types.ObjectId();
+    const s = setup();
+    await heldBy(s, 'out_for_delivery');
+    Object.assign(s.jobs.docs[0], { deliveryMethod: 'provider', deliveryProviderId: D });
+    await s.svc.cancelForOrder(s.orders.docs[0] as never, 'admin');
+    expect(s.jobs.docs[0].compOpen.sort()).toEqual([String(P), String(D)].sort());
+    expect(s.jobs.docs[0].cancel).toMatchObject({ stage: 'after_production', legStarted: true, deliveryProviderId: D });
+  });
+  it('an admin unassign from production flags the departing provider; a provider’s own failure does not', async () => {
+    const a = setup();
+    const id = await heldBy(a, 'in_production');
+    await a.svc.giveBack(await a.svc.byId(id), 'unassigned', { byRole: 'admin', reason: 'تغییر' });
+    expect(a.jobs.docs[0].compOpen).toEqual([String(P)]);
+    const b = setup();
+    const id2 = await heldBy(b, 'in_production');
+    await b.svc.giveBack(await b.svc.byId(id2), 'failed', { byRole: 'provider', providerId: String(P), reasonCode: 'other', reason: 'x' });
+    expect(b.jobs.docs[0].compOpen).toBeUndefined();
+  });
+  it('M2: delivery pulls the delivering provider from compOpen in the same write', async () => {
+    const s = setup();
+    await heldBy(s, 'ready');
+    Object.assign(s.jobs.docs[0], { compOpen: [String(P), 'other'], deliveryMethod: 'courier' });
+    await s.svc.onOrderDelivered(s.orders.docs[0]._id, 'admin');
+    expect(s.jobs.docs[0]).toMatchObject({ status: 'delivered', compOpen: ['other'] });
+  });
+});

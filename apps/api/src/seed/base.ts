@@ -17,6 +17,8 @@ import { Settings, SETTINGS_ID } from '../modules/catalog/schemas/settings.schem
 import { Center } from '../modules/centers/center.schema.js';
 import { providerBackfill } from '../modules/centers/provider-model.js';
 import { Job } from '../modules/dispatch/job.schema.js';
+import { backfillCompOpen } from '../modules/ledger/compensation-backfill.js';
+import { LedgerEntry } from '../modules/ledger/ledger-entry.schema.js';
 import { CmsSection } from '../modules/cms/cms-section.schema.js';
 import { NotificationTemplate } from '../modules/notifications/notification-template.schema.js';
 import { BindingRange } from '../modules/price-book/schemas/binding-range.schema.js';
@@ -134,6 +136,9 @@ export async function seedBase(app: INestApplicationContext, log = new Logger('S
       { timestamps: false },
     )
   ).modifiedCount;
+
+  // v4.3 (P10): open «جبران خسارت» cases of jobs that lost work before `Job.compOpen` existed are flagged once
+  counts.compensationBackfill = await backfillCompOpen(model(Job.name) as never, model(LedgerEntry.name) as never);
 
   // v4 papers: backfill the old ones once (only while `colorPrint` is missing), then insert the new ones
   const Papers = model<Paper>(Paper.name);

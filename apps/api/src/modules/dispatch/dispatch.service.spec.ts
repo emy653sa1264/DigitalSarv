@@ -546,5 +546,16 @@ describe('M3 final review — reassign during production', () => {
     await s.svc.reassign(id, { providerId: String(G), reason: 'تغییر', confirmMissingPrice: true } as never, String(ADMIN));
     expect(s.orders.docs[0].qc).toEqual([false]);
     expect(s.orders.docs[0].status).toBe('qc');
+    // P10: the departing producer's compensation case is flagged in the same write
+    expect(s.jobsModel.docs[0].compOpen).toEqual([String(C)]);
+  });
+  it('P10: a reassign before production flags nobody', async () => {
+    const s = setup();
+    const G = new Types.ObjectId();
+    s.centers.docs.push({ ...s.centers.docs[2], _id: G, name: 'آزمون G', userId: new Types.ObjectId() });
+    const id = await withJob(s);
+    await s.svc.assign(id, { providerId: String(C) } as never, String(ADMIN));
+    await s.svc.reassign(id, { providerId: String(G), reason: 'تغییر', confirmMissingPrice: true } as never, String(ADMIN));
+    expect(s.jobsModel.docs[0].compOpen).toBeUndefined();
   });
 });

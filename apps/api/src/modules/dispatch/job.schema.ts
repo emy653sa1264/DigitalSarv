@@ -80,6 +80,8 @@ export class Job {
   @Prop({ type: Date }) ledgerAt?: Date;
   /** v4.3: last time reconcile tried (and failed to finish) a flagged job — diagnostics; the scan cursor is by `_id`. */
   @Prop({ type: Date }) ledgerTriedAt?: Date;
+  /** v4.3 (P10): provider ids with an open «جبران خسارت» case on this job — added in the cas that creates the case, pulled on decision / delivery. */
+  @Prop({ type: [String], default: undefined }) compOpen?: string[];
   @Prop({ type: Date, required: true }) orderCreatedAt: Date;
 
   createdAt: Date;
@@ -100,3 +102,4 @@ JobSchema.index({ status: 1, updatedAt: -1 });
 JobSchema.index({ updatedAt: -1 });
 JobSchema.index({ mirrorPending: 1, _id: 1 }, { sparse: true });
 JobSchema.index({ ledgerPending: 1, _id: 1 }, { sparse: true });
+JobSchema.index({ compOpen: 1, _id: 1 }, { sparse: true });

@@ -28,7 +28,7 @@ import { dispatchDetail, dispatchRow, type DispatchJobDetail, type DispatchJobRo
 import { DISPATCH_TABS, HELD, LIVE, cancelStage, deliveryStatusFilter, dispatchTabFilter, type DispatchTab, type ProviderQuote } from './job-model.js';
 import { performanceRange, performanceRows, type ProviderPerformance } from './performance.js';
 import { Job, type JobDocument } from './job.schema.js';
-import { JobsService, raced } from './jobs.service.js';
+import { JobsService, deliveryLegStarted, raced } from './jobs.service.js';
 import { pricingSnapshot, providerLineLabel, providerQuote } from './provider-pricing.js';
 
 export interface EligibilityRow {
@@ -382,7 +382,7 @@ export class DispatchService {
     const prev = job.providerId;
     const oldDp = job.deliveryProviderId;
     const history = this.jobs.entry({ providerId: p._id, deliveryProviderId: delivery.deliveryProviderId }, action, 'assigned', { byRole: 'admin', by, reason: dto.reason }, now, {
-      ...(prev ? { previousProviderId: prev, stage: cancelStage(job.status) } : {}), ...(overriding ? { override: true } : {}),
+      ...(prev ? { previousProviderId: prev, stage: cancelStage(job.status), ...(deliveryLegStarted(job) && String(job.deliveryProviderId) === String(prev) ? { legStarted: true } : {}) } : {}), ...(overriding ? { override: true } : {}),
     });
     const updated = await this.jobs.cas(job, 'assigned', {
       extraGuard: prev ? { providerId: prev } : { providerId: { $exists: false } },
@@ -393,7 +393,8 @@ export class DispatchService {
         ...(delivery.deliveryProviderId ? { deliveryProviderId: delivery.deliveryProviderId } : {}), ...(delivery.pickupAt ? { pickupAt: delivery.pickupAt } : {}),
       },
       unset: { ...(delivery.deliveryProviderId ? {} : { deliveryProviderId: 1 }), ...(delivery.orderDelivery.providerShop ? {} : { providerShop: 1 }) },
-      ...(prev ? { addToSet: { releasedProviderIds: prev } } : {}),
+      // P10: a producer replaced mid-production / after opens a compensation case in the same cas
+      ...(prev ? { addToSet: { releasedProviderIds: prev, ...(cancelStage(job.status) !== 'before_production' ? { compOpen: String(prev) } : {}) } } : {}),
       inc: { attempts: 1 }, push: { pricingHistory: snapshot }, history,
     });
     if (!updated) throw raced();

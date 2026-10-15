@@ -22,7 +22,7 @@ export interface GiveBackOptions { byRole: ByRole; by?: string; reason?: string;
 /** What `cas` needs: who acts (selects the holder guard), extra guards, the field changes and the history entry. */
 export interface CasSpec {
   actor?: Actor; extraGuard?: Record<string, unknown>; set?: Record<string, unknown>; unset?: Record<string, 1>;
-  addToSet?: Record<string, unknown>; inc?: Record<string, number>;
+  addToSet?: Record<string, unknown>; pull?: Record<string, unknown>; inc?: Record<string, number>;
   /** Provider fields change (assignment, delivery, give-back): bump `rev` so the order mirror is ordered. Other moves never do. */
   mirror?: boolean; push?: Record<string, unknown>; history: JobHistoryEntry;
 }
@@ -38,6 +38,16 @@ const flowOf = (job: Pick<Job, 'deliveryMethod' | 'pickupAt'>): FlowCtx => ({ me
 const flowGuardOf = (job: Pick<Job, 'deliveryMethod' | 'pickupAt'>): Record<string, unknown> => ({
   ...(job.deliveryMethod ? { deliveryMethod: job.deliveryMethod } : {}), pickupAt: job.pickupAt ?? null,
 });
+
+/** P11: the delivery leg has started — the job is out for delivery with a delivering provider. */
+export const deliveryLegStarted = (job: Pick<Job, 'status' | 'deliveryMethod' | 'deliveryProviderId'>): boolean =>
+  job.status === 'out_for_delivery' && job.deliveryMethod === 'provider' && !!job.deliveryProviderId;
+
+/** M2: a provider that delivers the job no longer has an open compensation case on it (same cas as the delivery). */
+function pullCompOpen(job: Pick<Job, 'providerId' | 'deliveryProviderId'>): { pull?: Record<string, unknown> } {
+  const ids = [job.providerId, job.deliveryProviderId].filter(Boolean).map(String);
+  return ids.length ? { pull: { compOpen: { $in: ids } } } : {};
+}
 
 function stampsFor(to: JobStatus, now: Date): Record<string, Date | boolean> {
   if (to === 'accepted') return { 'assignment.acceptedAt': now };
@@ -184,7 +194,7 @@ export class JobsService {
       ...spec.extraGuard,
     };
     const paths = [
-      'status', ...Object.keys(spec.set ?? {}), ...Object.keys(spec.unset ?? {}), ...Object.keys(spec.addToSet ?? {}),
+      'status', ...Object.keys(spec.set ?? {}), ...Object.keys(spec.unset ?? {}), ...Object.keys(spec.addToSet ?? {}), ...Object.keys(spec.pull ?? {}),
       ...(spec.mirror ? ['rev', 'mirrorPending'] : []), ...Object.keys(spec.inc ?? {}), 'history', ...Object.keys(spec.push ?? {}),
     ];
     // dev assertion: one path in two operators (or twice, or as parent and child: `a` vs `a.b`) is a Mongo conflict error
@@ -198,6 +208,7 @@ export class JobsService {
         $set: { status: to, ...spec.set, ...(spec.mirror ? { mirrorPending: true } : {}) },
         ...(spec.unset ? { $unset: spec.unset } : {}),
         ...(spec.addToSet ? { $addToSet: spec.addToSet } : {}),
+        ...(spec.pull ? { $pull: spec.pull } : {}),
         ...(spec.mirror || spec.inc ? { $inc: { ...spec.inc, ...(spec.mirror ? { rev: 1 } : {}) } } : {}),
         $push: { ...spec.push, history: spec.history },
       },
@@ -253,7 +264,7 @@ export class JobsService {
     const now = new Date();
     if (to === 'delivered') await this.mirrorOrder(order, 'delivered', true);
     const action: JobAction = to === 'accepted' ? 'accepted' : to === 'completed' ? 'completed' : 'status';
-    const updated = await this.cas(job, to, { actor: o.actor, extraGuard: flowGuardOf(job), set: stampsFor(to, now), history: this.entry(job, action, to, o, now) });
+    const updated = await this.cas(job, to, { actor: o.actor, extraGuard: flowGuardOf(job), set: stampsFor(to, now), ...(to === 'delivered' ? pullCompOpen(job) : {}), history: this.entry(job, action, to, o, now) });
     if (!updated) {
       // the order is delivered already (moved first): a job the order follow-up / reconcile delivered meanwhile is the answer
       if (to === 'delivered') {
@@ -324,9 +335,10 @@ export class JobsService {
       extraGuard: { providerId },
       set: reset,
       unset: { providerId: 1, assignment: 1, deliveryProviderId: 1, providerPricing: 1, providerShop: 1 },
-      addToSet: { releasedProviderIds: providerId },
+      // P10: an admin taking the job away mid-production / after opens a compensation case (a provider's own `failed` never does)
+      addToSet: { releasedProviderIds: providerId, ...(kind === 'unassigned' && cancelStage(job.status) !== 'before_production' ? { compOpen: String(providerId) } : {}) },
       mirror: true,
-      history: this.entry(job, kind, status, o, now, { stage: cancelStage(job.status) }),
+      history: this.entry(job, kind, status, o, now, { stage: cancelStage(job.status), ...(deliveryLegStarted(job) && String(job.deliveryProviderId) === String(providerId) ? { legStarted: true } : {}) }),
     });
     if (!updated) throw raced();
     await this.mirrorProvider(updated);
@@ -366,8 +378,13 @@ export class JobsService {
         if (!job || !LIVE.includes(job.status)) return false;
         const now = new Date();
         const stage = cancelStage(job.status);
+        // P10: work was lost mid-production / after — the holder (and a delivery provider whose leg had started) gets a compensation case
+        const leg = deliveryLegStarted(job);
+        const dp = leg && String(job.deliveryProviderId) !== String(job.providerId ?? '') ? job.deliveryProviderId : undefined;
+        const open = stage === 'before_production' ? [] : [job.providerId, dp].filter(Boolean).map(String);
         const updated = await this.cas(job, 'cancelled', {
-          set: { cancel: { at: now, stage, ...(job.providerId ? { providerId: job.providerId } : {}), byRole } },
+          set: { cancel: { at: now, stage, ...(job.providerId ? { providerId: job.providerId } : {}), ...(dp ? { deliveryProviderId: dp } : {}), ...(leg ? { legStarted: true } : {}), byRole } },
+          ...(open.length ? { addToSet: { compOpen: { $each: open } } } : {}),
           history: this.entry(job, 'cancelled', 'cancelled', { byRole, ...(by ? { by } : {}) }, now, { stage }),
         });
         if (!updated) continue;
@@ -399,6 +416,7 @@ export class JobsService {
         actor,
         ...(actor !== 'admin' ? { extraGuard: flowGuardOf(job) } : {}),
         set: { deliveredAt: now, ledgerPending: true, ...(job.readyAt ? {} : { readyAt: now }) },
+        ...pullCompOpen(job),
         history: this.entry(job, 'status', 'delivered', { byRole, ...(by ? { by } : {}) }, now),
       });
       if (updated) await this.ledger?.creditJob(updated._id);

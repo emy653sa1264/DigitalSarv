@@ -23,7 +23,7 @@ function setup({ jobs = [] as Doc[], entries = [] as Doc[] } = {}) {
 const pending = () => ({ _id: new Types.ObjectId(), key: 'credit:j:p:production', providerId: P, kind: 'credit', state: 'pending', amount: null, occurredAt: new Date(), byRole: 'system', createdAt: new Date() });
 const cancelledJob = (o: Doc = {}) => ({
   _id: new Types.ObjectId(), orderId: new Types.ObjectId(), orderCode: '10421', status: 'cancelled', history: [], updatedAt: new Date(),
-  cancel: { at: new Date('2026-10-18T10:00:00Z'), stage: 'in_production', providerId: P }, providerPricing: { providerId: String(P), payoutBasis: 90000 }, ...o,
+  cancel: { at: new Date('2026-10-18T10:00:00Z'), stage: 'in_production', providerId: P }, providerPricing: { providerId: String(P), providerSubtotal: 90000, delivery: null }, compOpen: [String(P)], ...o,
 });
 
 describe('resolve a pending credit (D28, R2)', () => {
@@ -80,6 +80,48 @@ describe('«جبران خسارت مجری» (D30, R6)', () => {
     const job = cancelledJob({ status: 'delivered', cancel: undefined, history: [{ at: new Date(), action: 'unassigned', stage: 'in_production', providerId: P }] });
     const s = setup({ jobs: [job], entries: [{ _id: new Types.ObjectId(), key: `credit:${String(job._id)}:${String(P)}:production`, providerId: P, kind: 'credit', state: 'counted', amount: 1, occurredAt: new Date(), countedAt: new Date(), byRole: 'system' }] });
     expect((await s.svc.compensationQueue({})).total).toBe(0);
+  });
+  it('P10: only jobs flagged compOpen are read — an old case beyond 1000 newer jobs is still listed (no silent cap)', async () => {
+    const old = cancelledJob({ updatedAt: new Date('2020-01-01') });
+    const newer = Array.from({ length: 1005 }, () => cancelledJob());
+    const unflagged = cancelledJob({ compOpen: undefined });
+    const s = setup({ jobs: [old, ...newer, unflagged] });
+    const q = await s.svc.compensationQueue({ limit: 100 });
+    expect(q.total).toBe(1006);
+    expect((await s.svc.compensationQueue({ page: 11, limit: 100 })).items).toHaveLength(6);
+    const all = (await s.svc.compensationQueue({ limit: 100 })).items.map((i) => i.jobId);
+    expect(all).not.toContain(String(unflagged._id));
+  });
+  it('P10: deciding pulls the provider from compOpen; a replay finds the entry, still pulls, and answers 409', async () => {
+    const job = cancelledJob();
+    const s = setup({ jobs: [job] });
+    const ids = { jobId: String(job._id), providerId: String(P) };
+    await s.svc.decideCompensation({ ...ids, amount: 10, reason: 'x' }, ADMIN);
+    expect((job as { compOpen: string[] }).compOpen).toEqual([]);
+    (job as { compOpen: string[] }).compOpen.push(String(P)); // a crash left the flag behind
+    await expect(s.svc.decideCompensation({ ...ids, amount: 10, reason: 'x' }, ADMIN)).rejects.toThrow(ConflictException);
+    expect((job as { compOpen: string[] }).compOpen).toEqual([]);
+    expect((await s.svc.compensationQueue({})).total).toBe(0);
+  });
+  it('M2: a provider that now holds the delivered job, or a ledger-pending job, is neither listed nor decidable', async () => {
+    const delivered = cancelledJob({ status: 'delivered', cancel: undefined, providerId: P, history: [{ at: new Date(), action: 'unassigned', stage: 'in_production', providerId: P }] });
+    const pendingJob = cancelledJob({ ledgerPending: true });
+    const s = setup({ jobs: [delivered, pendingJob] });
+    expect((await s.svc.compensationQueue({})).total).toBe(0);
+    for (const j of [delivered, pendingJob]) {
+      await expect(s.svc.decideCompensation({ jobId: String(j._id), providerId: String(P), amount: 1, reason: 'x' }, ADMIN)).rejects.toThrow(new NotFoundException('مورد جبران خسارت یافت نشد'));
+    }
+  });
+  it('M5 (P11): the cap is the production subtotal, plus the delivery fee only when the leg had started', async () => {
+    const snap = { providerId: String(P), providerSubtotal: 90000, delivery: { providerId: String(P), fee: 20000 } };
+    const notStarted = cancelledJob({ providerPricing: snap });
+    const started = cancelledJob({ providerPricing: snap, cancel: { at: new Date('2026-10-18T10:00:00Z'), stage: 'after_production', providerId: P, legStarted: true } });
+    const s = setup({ jobs: [notStarted, started] });
+    const items = (await s.svc.compensationQueue({})).items;
+    expect(items.find((i) => i.jobId === String(notStarted._id))!.payoutBasis).toBe(90000);
+    expect(items.find((i) => i.jobId === String(started._id))!.payoutBasis).toBe(110000);
+    await expect(s.svc.decideCompensation({ jobId: String(notStarted._id), providerId: String(P), amount: 100000, reason: 'x' }, ADMIN)).rejects.toThrow(BadRequestException);
+    await expect(s.svc.decideCompensation({ jobId: String(started._id), providerId: String(P), amount: 110000, reason: 'x' }, ADMIN)).resolves.toMatchObject({ amount: 110000 });
   });
   it('a negative or fractional amount and an empty reason are refused', async () => {
     const job = cancelledJob();

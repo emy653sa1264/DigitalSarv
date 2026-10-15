@@ -162,6 +162,8 @@ export interface JobHistoryEntry {
   deliveryFee?: number;
   /** The previous provider's stage when the job was taken away / cancelled (M4). */
   stage?: CancelStage;
+  /** The departing provider's own delivery leg had already started (job was out_for_delivery) — adds the fee to its compensation cap (P11). */
+  legStarted?: boolean;
 }
 
 export interface AssignmentRecord {

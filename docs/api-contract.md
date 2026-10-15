@@ -1303,13 +1303,20 @@ manual «اصلاحیه سفارش ۱۰۴۲۱» or «اصلاحیه»; «پرد�
 
 ### Compensation («جبران خسارت مجری», D30, R6)
 
-Candidates (one per job + provider): a `cancelled` job whose `cancel.stage` is `in_production` / `after_production` (the
-holder, `cause: 'cancelled'`); a provider that lost the job by `reassigned` (its `previousProviderId`) or `unassigned` (its
-`providerId`) with `stage` `in_production` / `after_production`. Not listed once decided (`comp:` key exists) or when the
-same provider delivered the job (production credit exists). `payoutBasis` = that provider's latest snapshot `payoutBasis`
-(`Job.providerPricing` or `Job.pricingHistory`), null when unpriced. The decision is an adjustment
-`cause: 'compensation'`, `0 ≤ amount ≤ payoutBasis` (any amount ≥ 0 when null), with a reason. A refund after delivery never
-touches credits; an admin may add a negative manual adjustment.
+Open cases are tracked on the job: `Job.compOpen` (provider ids, sparse index) gets the provider via `$addToSet` **in the same
+compare-and-set** that creates the case — a cancellation with `cancel.stage` `in_production` / `after_production` (the holder, plus
+a separate delivery provider whose leg had started, i.e. the job was `out_for_delivery`), a producer replaced by an admin's
+reassign or unassign from those stages (a provider's own `failed` / reject / timeout never opens a case). The queue reads only
+flagged jobs (cursor-paged, no cap). The case is closed by `$pull` after the decision entry (`comp:` key) is written (a replay
+still pulls), and when the provider delivers the job (pulled in the delivered write). A flagged provider is **not listed and
+cannot be decided** when it now holds the job and it is `delivered` / `completed`, when the job has `ledgerPending`, or when its
+production credit exists. `seed:base` flags pre-existing cases once (history-based detection, jobs without `compOpen`).
+`cause` is `cancelled` / `reassigned` / `unassigned` and `stage` the stage the provider lost the job at.
+**Cap (P11):** `payoutBasis` = that provider's latest snapshot `providerSubtotal` (production only; `Job.providerPricing` or
+`Job.pricingHistory`), **plus the delivery fee only if that provider's delivery leg had already started** (the job reached
+`out_for_delivery` with that provider delivering; recorded as `cancel.legStarted` / the history entry's `legStarted`); null when
+unpriced. The decision is an adjustment `cause: 'compensation'`, `0 ≤ amount ≤ payoutBasis` (any amount ≥ 0 when null), with a
+reason. A refund after delivery never touches credits; an admin may add a negative manual adjustment.
 
 ### Admin endpoints (`/admin/ledger`, role admin)
 
