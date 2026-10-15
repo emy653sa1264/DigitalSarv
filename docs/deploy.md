@@ -308,6 +308,11 @@ marked `<…>` comes from `.env.production` or the provider's panel, never from 
 **Deploy (section 6)**
 
 - [ ] Back up first (`./deploy/backup.sh`) and copy the backup off the server.
+- [ ] **Before** deploying v4.4, list the paid orders waiting on a recount approval that were recounted before v4.4 (they have no
+  `chargedAmount`, so v4.4 cannot tell a difference that was charged from one that was not). Read-only, in mongosh:
+  `db.orders.find({ status: 'awaiting_approval', paid: true, chargedAmount: { $exists: false } }, { code: 1, payMethod: 1, paidVia: 1, 'quote.total': 1, 'payment.amount': 1, refunded: 1 })`.
+  Settle each by hand before approving it in «سفارش‌ها» (compare what was paid with the new total; refund a lower total from
+  «کیف پول» or collect a higher one at handover) and note it on the order. An empty result means nothing to do.
 - [ ] `dc up -d --build`, then wait for `curl -fsS https://<domain>/api/health/ready` (200; 503 means Mongo or Redis is down).
 - [ ] Run `dc run --rm api node dist/seed/seed-base.js` **after** the new API answers (sections 4 and 6, «Upgrade to M4» and
   «Upgrade to M5»). A second run must change nothing. Never run the demo `seed` on the server.
@@ -335,6 +340,16 @@ marked `<…>` comes from `.env.production` or the provider's panel, never from 
 - [ ] Place a small real payment and cancel the order: the amount returns to the wallet, and the `walletCredits` check above
   is 0.
 - [ ] Go through section 11 «Security checklist».
+
+**Support notes (v4.4)**
+
+- A difference due after a recount («مابه‌التفاوت») is collected in cash only by the courier, whose task shows the amount. A
+  provider cannot mark such an order «تحویل شد» (409 «برای این سفارش مابه‌التفاوت باقی است؛ تحویل را پشتیبانی ثبت می‌کند»; the
+  provider never sees the amount). For a provider or in-person handover, support takes the cash or has the customer pay
+  from the wallet, then marks it delivered in «سفارش‌ها» → the order → «تحویل شد» and confirms «مبلغ … نقدی دریافت شد» (the
+  dispatch center answers the same 409 with the amount and needs that confirmation too; use the order sheet).
+- A slow, ambiguous checkout that the customer resubmits can leave **two paid orders** for one basket. Cancel the extra one
+  from «سفارش‌ها»; its amount goes back to the customer's wallet (not to the card).
 
 ## Reference: what nginx does (`deploy/nginx/default.conf`)
 

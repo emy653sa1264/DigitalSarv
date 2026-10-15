@@ -57,6 +57,10 @@ Zarinpal merchant ID, Kavenegar API key + OTP template, production domain + TLS,
 - Low findings of the M5 security review:
   - The courier's order responses (`/courier/*`, `GET /orders/:id` for the assigned courier) are the full order document as before v4.4, so they now also carry `settlements` (amounts of recount refunds / differences). The courier already saw `quote` and `chargedAmount` and needs the amount to collect; no customer-private field beyond that. A courier-specific projection is a follow-up.
   - `POST /admin/staff` with a phone whose account changes role between the read and the guarded write answers with that account as it is (the write is guarded on `role: 'customer'`, so nothing is escalated); it could be a 409 instead.
+- M5 final review:
+  - M4 (known): a per-layer 403/404 probe for every permission × layer of the price-book routes (see the known limitation below).
+  - M6: a slow, ambiguous checkout that is resubmitted can create two paid orders; support cancels one (refund to the wallet, `docs/deploy.md` §12 «Support notes»). An idempotent checkout key across resubmits is a follow-up.
+  - F-I2 (fixed): a difference due is never marked collected on a non-courier handover — the provider gets 409 `DUE_OUTSTANDING`, the admin confirms the cash (`confirmCashCollected`). The dispatch center has no confirm dialog yet (it shows the 409 with the amount; the order sheet does it) — a follow-up.
 - Known limitations (documented, not fixed):
   - Per-layer 403/404 equivalence of the price-book routes is tested for the unknown-id cases (S9) only, not for every permission × layer combination (optional test of Task 8).
   - Orders delivered before provider dispatch (v4.2) have no job, so they never get a provider credit and are not listed in «نیازمند تعیین مبلغ» (by design).
