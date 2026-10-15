@@ -7,7 +7,7 @@ import { CatalogService } from '../catalog/catalog.service.js';
 import { Extra } from '../catalog/schemas/extra.schema.js';
 import { Paper } from '../catalog/schemas/paper.schema.js';
 import { User } from '../users/user.schema.js';
-import { CART_TYPE_KEYS, COLOR_TYPES, comboKey, DOC_INKS, FLYER_INKS, FLYER_PAPERS, FLYER_SIZES, isProviderOnly, parseCombo, PRINT_ADDONS, PRINT_SIZES, REPAIR_DEVICE_KEYS, SIDES, singleSideKey, type ComboOptions, type ComboService } from './combo.js';
+import { CART_TYPE_KEYS, COLOR_TYPES, comboKey, DOC_INKS, FLYER_INKS, FLYER_PAPERS, FLYER_SIZES, isProviderOnly, parseCombo, PRINT_ADDONS, PRINT_SIZES, REPAIR_DEVICE_KEYS, SIDES, doubleSideKey, singleSideKey, type ComboOptions, type ComboService } from './combo.js';
 import { bulkValue, type BulkOp } from './bulk.js';
 import { Center } from '../centers/center.schema.js';
 import { comboWithinCapabilities, type Capability, type ProviderStatus } from '../centers/provider-model.js';
@@ -246,19 +246,19 @@ export class PriceBookService {
   }
 
   async publish(id: string, reason: string, by: string, confirmNegativeMargin = false): Promise<VersionView> {
-    const before = await this.findVersion(id);
+    const before = await this.versionFor(id, by, 'publish');
     await this.assertCan(by, layerPermission(before.layer, 'publish'));
     return this.transition(before, 'draft', 'published', 'publish', reason, by, confirmNegativeMargin);
   }
 
   async disable(id: string, reason: string, by: string): Promise<VersionView> {
-    const before = await this.findVersion(id);
+    const before = await this.versionFor(id, by, 'publish');
     await this.assertCan(by, layerPermission(before.layer, 'publish'));
     return this.transition(before, 'published', 'disabled', 'disable', reason, by);
   }
 
   async rollback(id: string, reason: string, by: string, confirmNegativeMargin = false): Promise<VersionView> {
-    const src = await this.findVersion(id);
+    const src = await this.versionFor(id, by, 'rollback');
     await this.assertCan(by, layerPermission(src.layer, 'rollback'));
     const why = this.reason(reason);
     if (src.state !== 'published' && src.state !== 'disabled') throw new BadRequestException('فقط نسخه‌های منتشرشده قابل بازگردانی هستند');
@@ -437,6 +437,7 @@ export class PriceBookService {
     if (!Number.isInteger(input.value) || input.value < 0) throw new BadRequestException('مقدار باید عدد صحیح و نامنفی باشد');
     if ((input.op === 'inc_pct' || input.op === 'dec_pct') && input.value > 1000) throw new BadRequestException('درصد معتبر نیست');
     const providerId = this.scope(input.layer, input.providerId).providerId;
+    if (providerId) await this.assertProvider(providerId);
     const providerKey = providerId ? String(providerId) : null;
     const f = input.filter ?? {};
     const rows = (await this.matrix(input.layer, f.service, new Date(), providerKey)).filter((r) => {
@@ -499,7 +500,9 @@ export class PriceBookService {
     } finally {
       if (docs.length) {
         await this.catalog.invalidate();
-        await this.audit('bulk', docs, why, by, { op: input.op, value: input.value, rounding: input.rounding ?? 0, filter: input.filter }, negative.length ? { rows: applied, negativeMargin: negative } : applied);
+        const appliedKeys = new Set(applied.map((r) => r.comboKey));
+        const appliedNegative = negative.filter((c) => appliedKeys.has(c.comboKey));
+        await this.audit('bulk', docs, why, by, { op: input.op, value: input.value, rounding: input.rounding ?? 0, filter: input.filter }, appliedNegative.length ? { rows: applied, negativeMargin: appliedNegative } : applied);
       }
     }
     return { bulkId, created: docs.length, skipped };
@@ -617,11 +620,43 @@ export class PriceBookService {
   /** 409 NEGATIVE_MARGIN unless confirmed; returns the (confirmed) conflicts for the audit. */
   private async checkMargin(comboKey: string, at: Date, layer: PriceLayer, providerId: Types.ObjectId | null, value: VersionValue, confirmed: boolean, by: string): Promise<MarginConflict[]> {
     const m = await this.marginChecker(at, [comboKey]);
-    const found = m.conflicts(comboKey, layer, providerId ? String(providerId) : null, m.unitOf(value, comboKey, layer));
+    const found = [
+      ...m.conflicts(comboKey, layer, providerId ? String(providerId) : null, m.unitOf(value, comboKey, layer)),
+      ...(layer === 'customer' ? await this.dependentConflicts(comboKey, at, value) : []),
+    ];
     // M2-R1: provider names and prices only for admins who may view provider prices (the count stays visible)
     const shown: MarginWarning[] = found.length && !(await this.canViewProviderPrices(by)) ? found.map((c) => ({ comboKey: c.comboKey })) : found;
     if (found.length && !confirmed) throw new ConflictException({ statusCode: 409, code: 'NEGATIVE_MARGIN', message: NEGATIVE_MSG, conflicts: shown });
     return found; // the audit keeps the full list; it is redacted for the reader at read time (M2-R1)
+  }
+
+  /**
+   * S10: a customer `…|single` price is the `base_price` of its `…|double` sibling. When that sibling's effective customer
+   * version is derived (not manual), its unit is recomputed with the candidate in force and checked against provider prices.
+   */
+  private async dependentConflicts(comboKey: string, at: Date, value: VersionValue): Promise<MarginConflict[]> {
+    const dep = doubleSideKey(comboKey);
+    if (!dep) return [];
+    const [rows, papers, centers] = await Promise.all([
+      this.versions.find({ comboKey: { $in: [comboKey, dep] }, state: { $in: ['published', 'disabled'] } }).lean() as Promise<Row[]>,
+      this.papers.find().lean(),
+      this.centers.find({}, { name: 1 }).lean(),
+    ]);
+    const customerRows = rows.filter((r) => r.layer === 'customer');
+    const eff = pickEffective(customerRows.filter((r) => r.comboKey === dep).map(toVersionLike), at);
+    if (!eff || eff.mode === 'manual') return [];
+    const candidate = {
+      _id: new Types.ObjectId(), layer: 'customer', providerId: null, comboKey, version: Number.MAX_SAFE_INTEGER, state: 'published', effectiveFrom: at,
+      mode: value.mode, price: value.price, formula: value.formula, markup: value.markup, discount: value.discount, rounding: value.rounding ?? 0,
+      ...(value.baseProviderId ? { baseProviderId: new Types.ObjectId(value.baseProviderId) } : {}),
+    } as unknown as Row;
+    const prices = effectiveProviderPrices(rows, at);
+    const unit = unitPrice(eff, this.varsFor([...customerRows, candidate], papers, at, prices)(dep, eff.baseProviderId));
+    if (unit === null) return [];
+    const names = new Map(centers.map((c) => [String(c._id), c.name]));
+    return Object.entries(prices)
+      .filter(([, m]) => typeof m[dep] === 'number' && m[dep] > unit)
+      .map(([pid, m]) => ({ comboKey: dep, providerId: pid, providerName: names.get(pid) ?? '', providerPrice: m[dep], customerPrice: unit }));
   }
 
   private canViewProviderPrices(userId: string): Promise<boolean> {
@@ -758,6 +793,15 @@ export class PriceBookService {
     await this.audit(to === 'published' && future ? 'schedule' : action, [doc], why, by, this.plain(before), this.withNegative(this.plain(doc), negative));
     // rendered at the version's own start so a +1 ms start is already in force
     return this.viewOne(doc, startsAt);
+  }
+
+  /** S9: an unknown id answers 403 to an admin who may not do `action` on any layer (no id probing), else 404. */
+  private async versionFor(id: string, by: string, action: 'publish' | 'rollback'): Promise<Row> {
+    const doc = Types.ObjectId.isValid(id) ? ((await this.versions.findById(id).lean()) as Row | null) : null;
+    if (doc) return doc;
+    const allowed = await Promise.all(PRICE_LAYERS.map((l) => this.canView(by, layerPermission(l, action))));
+    if (!allowed.some(Boolean)) throw new ForbiddenException(DENIED);
+    throw new NotFoundException('نسخه قیمت یافت نشد');
   }
 
   private async findVersion(id: string) {

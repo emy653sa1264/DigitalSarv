@@ -87,3 +87,10 @@ export function singleSideKey(key: string): string | null {
   if (!o || (o.service !== 'bw' && o.service !== 'color') || o.side !== 'double') return null;
   return comboKey({ ...o, side: 'single' });
 }
+
+/** `…|single` print combo → its `…|double` sibling (whose formula may read this one as `base_price`); null for anything else. */
+export function doubleSideKey(key: string): string | null {
+  const o = parseCombo(key);
+  if (!o || (o.service !== 'bw' && o.service !== 'color') || o.side !== 'single') return null;
+  return comboKey({ ...o, side: 'double' });
+}

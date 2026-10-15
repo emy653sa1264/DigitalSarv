@@ -1,4 +1,4 @@
-import { comboKey, parseCombo, singleSideKey } from './combo.js';
+import { comboKey, doubleSideKey, parseCombo, singleSideKey } from './combo.js';
 
 describe('combo keys', () => {
   it('round-trips every kind', () => {
@@ -24,5 +24,13 @@ describe('combo keys', () => {
     expect(singleSideKey('color|A4|full|card160|double')).toBe('color|A4|full|card160|single');
     expect(singleSideKey('bw|A4|single')).toBeNull();
     expect(singleSideKey('addon|glue')).toBeNull();
+  });
+});
+
+describe('doubleSideKey (S10)', () => {
+  it('maps a single-sided print combo to its double-sided sibling; anything else to null', () => {
+    expect(doubleSideKey('bw|A4|single')).toBe('bw|A4|double');
+    expect(doubleSideKey('color|A3|full|glossy200|single')).toBe('color|A3|full|glossy200|double');
+    for (const k of ['bw|A4|double', 'docs|bw|single', 'addon|staple', 'nonsense']) expect(doubleSideKey(k)).toBeNull();
   });
 });

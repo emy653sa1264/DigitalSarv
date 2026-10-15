@@ -41,3 +41,6 @@ PriceVersionSchema.index(
   { layer: 1, providerId: 1, comboKey: 1 },
   { unique: true, partialFilterExpression: { state: 'pending_approval' }, name: 'one_pending_per_combo' },
 );
+
+/** M5: the provider delete pre-check looks up customer markups over a provider (`baseProviderId`). */
+PriceVersionSchema.index({ baseProviderId: 1 }, { partialFilterExpression: { baseProviderId: { $exists: true } }, name: 'base_provider' });

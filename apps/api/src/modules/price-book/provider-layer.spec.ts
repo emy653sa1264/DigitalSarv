@@ -1,5 +1,6 @@
-import { ConflictException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Types } from 'mongoose';
+import { PriceVersionSchema } from './schemas/price-version.schema.js';
 import { fakeModel } from '../../../test/fake-model.js';
 import type { PriceLayer } from './price-book.constants.js';
 import { PriceBookService } from './price-book.service.js';
@@ -492,5 +493,66 @@ describe('bulk per layer (§33)', () => {
     const err = await svc.bulkApply(body, customerOnly).catch((e: unknown) => e);
     expect((err as ConflictException).getResponse()).toMatchObject({ code: 'NEGATIVE_MARGIN', conflicts: [{ comboKey: KEY }] });
     expect(JSON.stringify((err as ConflictException).getResponse())).not.toContain('providerPrice');
+  });
+});
+
+describe('M5 hardening (S9, S10, deferred M2 items)', () => {
+  const DBL = 'bw|A4|double';
+  it('S9: an unknown version id is 403 for an admin who may not do that action on any layer, else 404', async () => {
+    const { svc, users, by } = setup();
+    const viewer = new Types.ObjectId();
+    users.docs.push({ _id: viewer, name: 'بیننده', role: 'admin', permissions: ['customer_price_view', 'provider_price_view'] });
+    const ghost = String(new Types.ObjectId());
+    await expect(svc.publish(ghost, 'x', String(viewer))).rejects.toThrow(ForbiddenException);
+    await expect(svc.disable(ghost, 'x', String(viewer))).rejects.toThrow(ForbiddenException);
+    await expect(svc.rollback(ghost, 'x', String(viewer))).rejects.toThrow(ForbiddenException);
+    await expect(svc.publish(ghost, 'x', by)).rejects.toThrow(NotFoundException);
+    await expect(svc.rollback(ghost, 'x', by)).rejects.toThrow('نسخه قیمت یافت نشد');
+  });
+  it('bulk preview of an unknown provider is 404 «مجری یافت نشد»', async () => {
+    const { svc } = setup();
+    await expect(svc.bulkPreview({ layer: 'provider', providerId: String(new Types.ObjectId()), op: 'inc_pct', value: 10 } as never)).rejects.toThrow('مجری یافت نشد');
+  });
+  it('the bulk audit records the negative margins of applied rows only', async () => {
+    const { svc, audits, by, A } = setup();
+    const A5 = 'bw|A5|single';
+    const T = new Date(Date.now() + 3_600_000).toISOString();
+    await svc.create(prov(A, 5500), by);
+    await svc.create(prov(A, 5500, { comboKey: A5 }), by);
+    await svc.create(cust(6000), by);
+    await svc.create(cust(6000, { comboKey: A5 }), by);
+    await svc.create(cust(6100, { effectiveFrom: T }), by); // KEY already has a price starting at T → the bulk skips KEY
+    const res = await svc.bulkApply({ layer: 'customer', op: 'dec_pct', value: 20, filter: { service: 'bw', comboKeys: [KEY, A5] }, effectiveFrom: T, reason: 'آزمون', confirmNegativeMargin: true } as never, by);
+    expect(res.skipped.map((r: { comboKey: string }) => r.comboKey)).toContain(KEY);
+    const bulk = audits.docs.find((a) => a.action === 'bulk')!;
+    expect((bulk.after as { negativeMargin: { comboKey: string }[] }).negativeMargin.map((c) => c.comboKey)).toEqual([A5]);
+  });
+  it('S10: a lower single-sided customer price is checked against the derived double-sided price that follows it', async () => {
+    const { svc, by, A } = setup();
+    await svc.create(prov(A, 7000, { comboKey: DBL }), by);
+    await svc.create(cust(4500), by);
+    await svc.create({ ...cust(0), comboKey: DBL, mode: 'formula', price: undefined, formula: 'base_price * 2 - 1000' }, by); // 8000 > 7000
+    const err = await svc.create(cust(3500), by).catch((e: { getResponse: () => unknown }) => e.getResponse());
+    expect(err).toMatchObject({ code: 'NEGATIVE_MARGIN', conflicts: [expect.objectContaining({ comboKey: DBL, providerPrice: 7000, customerPrice: 6000 })] });
+    await expect(svc.create(cust(3500, { confirmNegativeMargin: true }), by)).resolves.toMatchObject({ unitPrice: 3500 });
+  });
+  it('S10: a manual double-sided price does not follow the single one and is not re-checked', async () => {
+    const { svc, by, A } = setup();
+    await svc.create(prov(A, 7000, { comboKey: DBL }), by);
+    await svc.create(cust(8000, { comboKey: DBL }), by);
+    await expect(svc.create(cust(3500), by)).resolves.toMatchObject({ unitPrice: 3500 });
+  });
+  it('M2 T10: a double-sided formula over a markup single-sided sibling follows the base provider', async () => {
+    const { svc, by, A } = setup();
+    await svc.create(prov(A, 3500), by);
+    await svc.create({ ...cust(0), mode: 'fixed_markup', price: undefined, markup: 1000, baseProviderId: A }, by); // 4500
+    await svc.create({ ...cust(0), comboKey: DBL, mode: 'formula', price: undefined, formula: 'base_price * 2' }, by);
+    const dbl = async () => (await svc.matrix('customer', 'bw')).find((r) => r.comboKey === DBL)!.current?.unitPrice;
+    expect(await dbl()).toBe(9000);
+    await svc.create(prov(A, 4000), by);
+    expect(await dbl()).toBe(10000);
+  });
+  it('the schema indexes baseProviderId (provider delete pre-check)', () => {
+    expect(PriceVersionSchema.indexes()).toContainEqual([{ baseProviderId: 1 }, expect.objectContaining({ name: 'base_provider' })]);
   });
 });
