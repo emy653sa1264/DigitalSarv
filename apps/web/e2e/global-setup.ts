@@ -65,12 +65,14 @@ function tail(file: string): string {
   try { return readFileSync(file, 'utf8').slice(-4000) } catch { return '' }
 }
 
-/** Kills one process (its tree on Windows) — only ever a PID this setup spawned itself. */
-function killPid(pid: number | undefined) {
-  if (!pid) return
-  if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { stdio: 'ignore' })
+const alive = (c: ChildProcess) => c.pid !== undefined && c.exitCode === null && c.signalCode === null
+
+/** Kills one child (its tree on Windows) — only a LIVE child this setup spawned; an exited PID may have been reused. */
+function killChild(c: ChildProcess) {
+  if (!alive(c)) return
+  if (process.platform === 'win32') spawnSync('taskkill', ['/PID', String(c.pid), '/T', '/F'], { stdio: 'ignore' })
   else {
-    try { process.kill(pid, 'SIGTERM') } catch { /* already gone */ }
+    try { c.kill('SIGTERM') } catch { /* already gone */ }
   }
 }
 
@@ -78,17 +80,21 @@ function killPid(pid: number | undefined) {
 export default async function setup(project: TestProject) {
   if (!existsSync(path.join(WEB_ROOT, 'dist/index.html'))) throw new Error('apps/web/dist is missing — run `pnpm --filter web build` first')
   if (!existsSync(path.join(API_ROOT, 'dist/main.js'))) throw new Error('apps/api/dist is missing — run `pnpm --filter api build` first')
+  if (API_PORT === 3000 || WEB_PORT === 3000) throw new Error('E2E_API_PORT / E2E_WEB_PORT must not be 3000 (another program uses it)')
+  if (API_PORT === WEB_PORT) throw new Error('E2E_API_PORT and E2E_WEB_PORT must differ')
   const mongo = envPort('MONGO_PORT', 27018)
   const redis = envPort('REDIS_PORT', 6380)
   if (!(await portOpen(mongo)) || !(await portOpen(redis))) throw new Error(`MongoDB (${mongo}) / Redis (${redis}) are not reachable — run \`pnpm db:up\` (and \`pnpm seed\` once)`)
-  for (const p of [API_PORT, WEB_PORT]) if (await portOpen(p)) throw new Error(`port ${p} is busy — stop whatever uses it, or set E2E_API_PORT / E2E_WEB_PORT`)
-  // OTP requests are rate-limited per phone: clear this project's counters (dev Redis only)
+  for (const p of [API_PORT, WEB_PORT]) if (await portOpen(p)) throw new Error(`port ${p} is busy — stop whatever uses it, or set E2E_API_PORT / E2E_WEB_PORT (a leftover run of this suite: PIDs are in e2e/.artifacts/pids.json — stop only those)`)
+  // OTP requests are rate-limited per phone: clear this project's counters (dev Redis only — refuse any other Redis)
+  if (redis !== envPort('REDIS_PORT', -1)) throw new Error('REDIS_PORT is not set in the root .env — refusing to clear OTP counters on an unknown Redis')
   await redisCommand(redis, ['EVAL', "for _,k in ipairs(redis.call('keys','otp:rl:*')) do redis.call('del',k) end return 1", '0'])
 
   mkdirSync(ARTIFACTS, { recursive: true })
   const origin = `http://127.0.0.1:${WEB_PORT}`
   const apiLog = path.join(ARTIFACTS, 'api.log')
   const webLog = path.join(ARTIFACTS, 'static.log')
+  const stoppedChildren = new Set<ChildProcess>()
   const children: { name: string; proc: ChildProcess; log: string }[] = []
   let stopped = false
 
@@ -107,7 +113,8 @@ export default async function setup(project: TestProject) {
       try {
         if (statSync(c.log).size > LOG_CAP) {
           console.error(`e2e: ${c.name} log exceeded 50 MB — killing it`)
-          killPid(c.proc.pid)
+          stoppedChildren.add(c.proc)
+          killChild(c.proc)
         }
       } catch {
         // log not there yet
@@ -120,22 +127,25 @@ export default async function setup(project: TestProject) {
     if (stopped) return
     stopped = true
     clearInterval(watchdog)
-    for (const c of children) killPid(c.proc.pid)
+    process.off('exit', onExit)
+    process.off('SIGINT', onSignal)
+    process.off('SIGTERM', onSignal)
+    for (const c of children) if (!stoppedChildren.has(c.proc)) killChild(c.proc)
     await Promise.all(children.map((c) => (c.proc.exitCode === null && c.proc.signalCode === null
       ? new Promise<void>((r) => { c.proc.once('exit', () => r()); setTimeout(r, 5000) })
       : undefined)))
     rmSync(PID_FILE, { force: true })
   }
 
-  const onExit = () => { for (const c of children) killPid(c.proc.pid) }
-  const onSignal = () => { void stopAll().finally(() => process.exit(130)) }
+  function onExit() { if (!stopped) for (const c of children) killChild(c.proc) }
+  function onSignal() { void stopAll().finally(() => process.exit(130)) }
   process.once('exit', onExit)
   process.once('SIGINT', onSignal)
   process.once('SIGTERM', onSignal)
 
   try {
     const api = start('api', apiLog, ['dist/main.js'], API_ROOT, {
-      NODE_ENV: 'development', PORT: String(API_PORT), DISPATCH_SCHEDULER: '0', OTP_DEV_CODE: '1', PAYMENT_DRIVER: 'mock',
+      NODE_ENV: 'development', HOST: '127.0.0.1', PORT: String(API_PORT), DISPATCH_SCHEDULER: '0', OTP_DEV_CODE: '1', PAYMENT_DRIVER: 'mock',
       WEB_PUBLIC_URL: origin, API_PUBLIC_URL: origin, CORS_ORIGIN: origin,
     })
     await waitReady(`http://127.0.0.1:${API_PORT}/api/health/ready`, 60_000, () => api.exitCode !== null)
@@ -150,9 +160,6 @@ export default async function setup(project: TestProject) {
   project.provide('origin', origin)
 
   return async () => {
-    process.off('exit', onExit)
-    process.off('SIGINT', onSignal)
-    process.off('SIGTERM', onSignal)
     await stopAll()
   }
 }
