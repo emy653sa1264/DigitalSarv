@@ -40,18 +40,21 @@ export function EntriesCard({ providerId }: { providerId: string }) {
           </>
         )}
       </QueryView>
-      <ReasonDialog
-        open={!!voiding}
-        onOpenChange={(o) => !o && setVoiding(null)}
-        title="ابطال پرداخت"
-        description={voiding ? `${money(-(voiding.amount ?? 0))} · پیگیری ${fa(voiding.payout?.bankRef ?? '')} — مبلغ به مانده مجری برمی‌گردد` : undefined}
-        submitLabel="ابطال پرداخت"
-        pending={voidPayout.isPending}
-        onSubmit={(reason) => {
-          if (!voiding || voidPayout.isPending) return
-          voidPayout.mutate({ id: voiding.id, reason }, { onSuccess: () => { notify('پرداخت باطل شد'); setVoiding(null) } })
-        }}
-      />
+      {voiding && (
+        <ReasonDialog
+          key={voiding.id}
+          open
+          onOpenChange={(o) => !o && setVoiding(null)}
+          title="ابطال پرداخت"
+          description={`${signedMoney(voiding.amount ?? 0)} · پیگیری ${fa(voiding.payout?.bankRef ?? '')} — مبلغ به مانده مجری برمی‌گردد`}
+          submitLabel="ابطال پرداخت"
+          pending={voidPayout.isPending}
+          onSubmit={(reason) => {
+            if (voidPayout.isPending) return
+            voidPayout.mutate({ id: voiding.id, reason }, { onSuccess: () => { notify('پرداخت باطل شد'); setVoiding(null) } })
+          }}
+        />
+      )}
     </AdminCard>
   )
 }

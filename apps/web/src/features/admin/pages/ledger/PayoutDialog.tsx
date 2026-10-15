@@ -3,7 +3,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { notify, toast } from '@/components/ui/sonner'
 import { money, toEnDigits } from '@/lib/format'
-import { addDaysYmd, newRequestId, tehranYmd } from '@/lib/ledger-labels'
+import { addDaysYmd, jalaliYmd, newRequestId, tehranYmd } from '@/lib/ledger-labels'
 import { groupSheba } from '@/lib/sheba'
 import type { ProviderLedgerAdmin } from '@/lib/types'
 import { NumInput } from '../../components/controls'
@@ -45,7 +45,7 @@ function PayoutForm({ onClose, account }: { onClose: () => void; account: Provid
       <Field label="مبلغ (تومان)" hint={<span className={amount > max ? 'font-bold text-pink-dark' : undefined}>{amount > max ? 'بیشتر از مانده حساب مجری است' : money(amount)}</span>}>
         <NumInput value={amount} onValueChange={setAmount} aria-label="مبلغ پرداخت" className="w-full" />
       </Field>
-      <Field label="تاریخ واریز"><Input type="date" dir="ltr" value={paidAt} min={oldest} max={today} onChange={(e) => setPaidAt(e.target.value)} /></Field>
+      <Field label="تاریخ واریز" hint={paidAt ? jalaliYmd(paidAt) : undefined}><Input type="date" dir="ltr" value={paidAt} min={oldest} max={today} onChange={(e) => setPaidAt(e.target.value)} /></Field>
       <Field label="شماره پیگیری بانکی"><Input dir="ltr" value={bankRef} maxLength={60} onChange={(e) => setBankRef(e.target.value)} /></Field>
       <Field label="یادداشت (اختیاری، فقط برای مدیران)"><Textarea rows={2} value={note} maxLength={300} onChange={(e) => setNote(e.target.value)} /></Field>
       {account.bank
