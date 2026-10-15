@@ -888,6 +888,7 @@ describe('POST /orders/:id/pay-due (D35)', () => {
     await expect(setup({ status: 'picked_up' }).svc.payDue(String(orderId), customer, { method: 'wallet', requestId: rid })).rejects.toThrow('مبلغی برای پرداخت باقی نمانده است');
     const poor = owing(10000);
     await expect(poor.svc.payDue(String(orderId), customer, { method: 'wallet', requestId: rid })).rejects.toThrow('موجودی کیف پول کافی نیست');
+    await expect(poor.svc.payDue(String(orderId), customer, { method: 'wallet', requestId: rid })).rejects.toMatchObject({ response: { code: 'WALLET_INSUFFICIENT' } });
     expect(poor.user.walletBalance).toBe(10000);
     expect(poor.order.chargedAmount).toBe(420000);
   });

@@ -191,7 +191,7 @@ export class OrdersService {
       );
       if (res.modifiedCount !== 1) {
         if (walletDebit) await this.credits.discard(giveBackKey, 'insufficient wallet balance: nothing was debited');
-        throw new BadRequestException('موجودی کیف پول کافی نیست');
+        throw new BadRequestException({ statusCode: 400, message: 'موجودی کیف پول کافی نیست', code: 'WALLET_INSUFFICIENT' });
       }
     }
 
@@ -331,7 +331,7 @@ export class OrdersService {
     await this.credits.prepare({ key, userId: order.customerId, orderId: order._id, orderCode: order.code, amount: -due, cause: 'due_wallet', base: order.chargedAmount ?? 0 });
     const res = await this.credits.apply(key);
     if (res === 'missing') throw new NotFoundException('حساب کاربری یافت نشد');
-    if (res === 'insufficient') throw new BadRequestException('موجودی کیف پول کافی نیست');
+    if (res === 'insufficient') throw new BadRequestException({ statusCode: 400, message: 'موجودی کیف پول کافی نیست', code: 'WALLET_INSUFFICIENT' });
     if (res === 'void') throw new ConflictException('وضعیت سفارش هم‌زمان تغییر کرد؛ مبلغ به کیف پول برگشت');
     if (res !== 'done') throw new ServiceUnavailableException('پرداخت در حال انجام است؛ چند لحظه دیگر سفارش را بررسی کنید');
     return this.customerView(await this.findById(id));

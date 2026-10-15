@@ -4,6 +4,7 @@ import { Phone, Route } from 'lucide-react'
 import { EmptyState, ErrorState, GradientBadge, InfoBanner, LoadingBlock } from '@/components/brand'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/components/ui/sonner'
+import { ApiError } from '@/lib/api'
 import { fa, jalaliDayTime, money } from '@/lib/format'
 import { ORDER_FLOW, ORDER_STATUS_LABEL, type Order, type OrderSettlement, type OrderStatus } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -55,10 +56,10 @@ export function TrackScreen() {
     <Screen {...TITLE} back="/app">
       {order.isPending ? (
         <LoadingBlock rows={5} />
-      ) : order.isError || !order.data ? (
+      ) : !order.data ? (
         <ErrorState error={order.error} onRetry={() => void order.refetch()} />
       ) : (
-        <Timeline order={order.data} />
+        <Timeline key={order.data.id} order={order.data} />
       )}
     </Screen>
   )
@@ -198,7 +199,7 @@ function Timeline({ order: o }: { order: Order }) {
                 {
                   onSuccess: () => notify(`مابه‌التفاوت ${money(o.amountDue!)} از کیف پول پرداخت شد`),
                   onError: (e) => {
-                    if (e.message.includes('موجودی کیف پول کافی نیست')) dueRequestId.current = crypto.randomUUID()
+                    if (e instanceof ApiError && (e.data as { code?: string } | undefined)?.code === 'WALLET_INSUFFICIENT') dueRequestId.current = crypto.randomUUID()
                   },
                 },
               )

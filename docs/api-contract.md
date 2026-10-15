@@ -1534,7 +1534,7 @@ wallet-credit intent as every other automatic credit.
     before any «مبلغی برای پرداخت باقی نمانده است» message.
     Errors: 400 «مبلغی برای پرداخت باقی نمانده است» · 400 per status: `awaiting_approval` «پرداخت مابه‌التفاوت پس از تأیید سفارش ممکن است» ·
     `pending_payment` «ابتدا پرداخت سفارش را کامل کنید» · `cancelled` «سفارش لغو شده است» · `delivered`
-    «سفارش تحویل شده؛ مابه‌التفاوت هنگام تحویل تسویه شد» · 400 «موجودی کیف پول کافی نیست» (nothing moved; the client sends a **new** `requestId` after a top-up) · 409 «وضعیت سفارش هم‌زمان
+    «سفارش تحویل شده؛ مابه‌التفاوت هنگام تحویل تسویه شد» · 400 «موجودی کیف پول کافی نیست» with machine code `WALLET_INSUFFICIENT` (also on the wallet-pay checkout error; nothing moved; the client sends a **new** `requestId` after a top-up) · 409 «وضعیت سفارش هم‌زمان
     تغییر کرد؛ مبلغ به کیف پول برگشت» (the order changed after the debit; the debit is given back once) · 503 «پرداخت در حال انجام
     است؛ چند لحظه دیگر سفارش را بررسی کنید» (the sweep finishes it) · 404 «سفارش یافت نشد» (not the owner - existence never leaks) · 409 «این شناسه درخواست برای پرداخت دیگری استفاده شده است» (the `requestId` was used on another order).
   - in cash at handover: every «تحویل شد» write (courier, provider/admin through the job, admin status) sets
