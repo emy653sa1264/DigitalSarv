@@ -198,5 +198,37 @@ describe('v4.2 courier tasks', () => {
       expect(cour).toMatchObject({ status: 'delivered', paid: true, paidVia: 'cod', chargedAmount: 5000 });
       expect(jobsSvc.onOrderDelivered).toHaveBeenCalledWith(cour._id, 'courier', String(userId));
     });
+    it('D35: a paid order with a difference due shows «collect» and the courier collects it in cash', async () => {
+      const due = order({ status: 'out_for_delivery', payMethod: 'wallet', paid: true, paidVia: 'wallet', chargedAmount: 4000, quote: { total: 5000, totalBooks: 0 }, delivery: { method: 'courier', homePickup: true, note: '' } });
+      const cod = order({ status: 'out_for_delivery', payMethod: 'cod', paid: false, quote: { total: 7000, totalBooks: 0 }, delivery: { method: 'courier', homePickup: true, note: '' } });
+      const docs = [due, cod].map((d) => Object.assign(d, { save: vi.fn(async () => d) }));
+      const { svc, o } = setup([{ _id: courierId, userId }], docs, [], docs.map((d) => ({ _id: new Types.ObjectId(), orderId: d._id, seq: 1, status: 'out_for_delivery', deliveryMethod: 'courier' })));
+      const tasks = await svc.tasks(user);
+      expect(tasks.find((t) => t.orderId === String(due._id) && t.kind === 'delivery')?.collect).toBe(1000);
+      expect(tasks.find((t) => t.orderId === String(cod._id) && t.kind === 'delivery')?.collect).toBe(7000);
+      o.findById.mockImplementation(((id: unknown) => docs.find((d) => String(d._id) === String(id)) ?? null) as never);
+      await svc.delivered(user, String(due._id));
+      expect(due).toMatchObject({ status: 'delivered', chargedAmount: 5000, settlements: [expect.objectContaining({ kind: 'due_cash', amount: 1000 })] });
+    });
+    it('D35: delivered() records due_cash once; a replay is a 400 and adds nothing', async () => {
+      const due = order({ status: 'out_for_delivery', payMethod: 'wallet', paid: true, paidVia: 'wallet', chargedAmount: 4000, quote: { total: 5000, totalBooks: 0 }, delivery: { method: 'courier', homePickup: true, note: '' } });
+      const docs = [Object.assign(due, { save: vi.fn(async () => due) })];
+      const { svc, o } = setup([{ _id: courierId, userId }], docs, [], [{ _id: new Types.ObjectId(), orderId: due._id, seq: 1, status: 'out_for_delivery', deliveryMethod: 'courier' }]);
+      o.findById.mockImplementation(((id: unknown) => docs.find((d) => String(d._id) === String(id)) ?? null) as never);
+      await svc.delivered(user, String(due._id));
+      await expect(svc.delivered(user, String(due._id))).rejects.toThrow('این سفارش هنوز آماده تحویل نیست');
+      expect(due.settlements).toHaveLength(1);
+      expect(due).toMatchObject({ chargedAmount: 5000 });
+    });
+    it('D35: an unpaid COD delivery shows collect = the total and books no due_cash', async () => {
+      const cod = order({ status: 'out_for_delivery', payMethod: 'cod', paid: false, quote: { total: 7000, totalBooks: 0 }, delivery: { method: 'courier', homePickup: true, note: '' } });
+      const docs = [Object.assign(cod, { save: vi.fn(async () => cod) })];
+      const { svc, o } = setup([{ _id: courierId, userId }], docs, [], [{ _id: new Types.ObjectId(), orderId: cod._id, seq: 1, status: 'out_for_delivery', deliveryMethod: 'courier' }]);
+      expect((await svc.tasks(user)).find((t) => t.kind === 'delivery')?.collect).toBe(7000);
+      o.findById.mockImplementation(((id: unknown) => docs.find((d) => String(d._id) === String(id)) ?? null) as never);
+      await svc.delivered(user, String(cod._id));
+      expect(cod).toMatchObject({ paid: true, paidVia: 'cod', chargedAmount: 7000 });
+      expect(cod.settlements).toBeUndefined();
+    });
   });
 });

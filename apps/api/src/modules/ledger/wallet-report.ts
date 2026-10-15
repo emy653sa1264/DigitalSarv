@@ -2,8 +2,8 @@
  * v4.3 «کیف پول دیجیتال سرو» (D32, R9) — pure. Per settlement week: what customers were charged for delivered orders,
  * minus the provider credits/adjustments counted that week, minus the courier pay estimate (tasks × the current per-task fee).
  *
- * Revenue = `Order.chargedAmount` (what was actually charged at checkout, or on delivery for COD; total after discounts and
- * fees, never changed by a re-quote), falling back to `quote.total` for legacy orders. Only paid orders that are not
+ * Revenue = `Order.chargedAmount` (what was charged at checkout; COD on delivery; since D35 also moved by an approved recount refund,
+ * a difference paid from the wallet or in cash at handover), falling back to `quote.total` for legacy orders. Only paid orders that are not
  * cancelled/refunded count, dated by their last `delivered` timeline entry.
  * The service computes the same cells in Mongo ($match + $group); `walletReport` is the in-memory equivalent.
  */

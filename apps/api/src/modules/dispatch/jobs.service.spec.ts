@@ -537,3 +537,15 @@ describe('v4.3 fix round 1 — open compensation cases flagged on the job (P10, 
     expect(s.jobs.docs[0]).toMatchObject({ status: 'delivered', compOpen: ['other'] });
   });
 });
+
+describe('D35: cash at handover through the job mirror', () => {
+  it('a provider-delivered paid order with a difference due records due_cash once', async () => {
+    const s = setup({ status: 'packing', payMethod: 'wallet', paid: true, paidVia: 'wallet', chargedAmount: 60000, quote: { total: 90000 } });
+    const id = await heldBy(s, 'out_for_delivery');
+    Object.assign(s.jobs.docs[0], { deliveryMethod: 'provider', deliveryProviderId: P });
+    await s.svc.move(id, 'delivered', { actor: 'delivery', byRole: 'provider', providerId: String(P) });
+    expect(s.orders.docs[0]).toMatchObject({ status: 'delivered', chargedAmount: 90000, settlements: [expect.objectContaining({ kind: 'due_cash', amount: 30000 })] });
+    await s.svc.onOrderDelivered(s.order._id, 'admin');
+    expect((s.orders.docs[0].settlements as unknown[]).length).toBe(1);
+  });
+});

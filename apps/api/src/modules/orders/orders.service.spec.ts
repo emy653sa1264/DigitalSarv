@@ -823,3 +823,20 @@ describe('recount after payment (D35)', () => {
     expect(s.order.settlements).toBeUndefined();
   });
 });
+
+describe('D35 guards', () => {
+  it('amountDue is hidden for every closed status, shown while live', async () => {
+    for (const status of ['awaiting_approval', 'pending_payment', 'cancelled', 'delivered']) {
+      const s = setup({ status, chargedAmount: 420000, quote: { total: 500000 } });
+      expect(await s.svc.getForUser(String(orderId), customer)).not.toHaveProperty('amountDue');
+    }
+    const live = setup({ status: 'confirmed', chargedAmount: 420000, quote: { total: 500000 } });
+    expect(await live.svc.getForUser(String(orderId), customer)).toMatchObject({ amountDue: 80000 });
+  });
+  it('the approval CAS guards the read total, charge and refunded flag', async () => {
+    const s = setup({ status: 'awaiting_approval', timeline: [{ status: 'awaiting_approval', label: '', at: new Date() }] });
+    await s.svc.setStatus(String(orderId), 'picked_up');
+    const filter = s.orders.findOneAndUpdate.mock.calls[0][0] as Doc;
+    expect(filter).toMatchObject({ chargedAmount: 500000, 'quote.total': 420000, refunded: { $ne: true }, status: 'awaiting_approval' });
+  });
+});

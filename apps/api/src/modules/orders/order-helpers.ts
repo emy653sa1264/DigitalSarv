@@ -14,7 +14,7 @@ import { bookCount, distributeBooks } from '../pricing/pricing.js';
 import { legacyPrintToV4 } from '../pricing/print-v4.js';
 import type { ChildDraft, OrderDraft, PricingContext, ServiceDraft } from '../pricing/pricing.types.js';
 import { deliveryOf } from './delivery-rules.js';
-import { amountDue } from './order-money.js';
+import { amountDue, DUE_CLOSED } from './order-money.js';
 import type { Order, OrderChild, OrderService, PlaceSnapshot } from './order.schema.js';
 
 export interface CustomerFulfillment { status: JobStatus; label: string; place?: PlaceSnapshot }
@@ -32,7 +32,7 @@ export function customerOrderJson(order: unknown, fulfillment?: CustomerFulfillm
   const delivery = deliveryOf(rest as { delivery?: never });
   return {
     ...rest,
-    ...(amountDue(rest as never) > 0 && rest.status !== 'awaiting_approval' ? { amountDue: amountDue(rest as never) } : {}),
+    ...(amountDue(rest as never) > 0 && !DUE_CLOSED.includes(rest.status as never) ? { amountDue: amountDue(rest as never) } : {}),
     delivery: { ...delivery, ...(delivery.providerShop ? { providerShop: customerPlace(delivery.providerShop) } : {}), ...(delivery.pickupPoint ? { pickupPoint: customerPlace(delivery.pickupPoint) } : {}) },
     ...(fulfillment ? { fulfillment: { ...fulfillment, ...(fulfillment.place ? { place: customerPlace(fulfillment.place) } : {}) } } : {}),
   };
