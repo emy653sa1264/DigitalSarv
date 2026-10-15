@@ -8,6 +8,9 @@ export const CHILD_TONES: Tone[] = ['blue', 'violet', 'pink', 'amber', 'cyan', '
 
 export const DEFAULT_SLOT = '۱۶ تا ۱۸'
 
+export interface DraftDelivery { method: 'courier' | 'customer_pickup'; pickupPointId?: string; note: string }
+const emptyDelivery = (): DraftDelivery => ({ method: 'courier', note: '' })
+
 const emptyPickup = (): Pickup => ({ address: '', phone: '', date: '', slot: DEFAULT_SLOT })
 
 interface DraftData {
@@ -17,6 +20,7 @@ interface DraftData {
   coupon?: string
   urgent: boolean
   pickup: Pickup
+  delivery: DraftDelivery
   payMethod: PayMethod
   /** Child currently open in the editor. */
   activeChild: number | null
@@ -41,6 +45,7 @@ interface DraftActions {
   setCoupon: (coupon: string | undefined) => void
   setUrgent: (urgent: boolean) => void
   setPickup: (patch: Partial<Pickup>) => void
+  setDelivery: (patch: Partial<DraftDelivery>) => void
   setPayMethod: (payMethod: PayMethod) => void
   /** Cache an upload's metadata (name/size/pages) for the service editors. */
   rememberUpload: (upload: Upload) => void
@@ -58,6 +63,7 @@ const initial = (): DraftData => ({
   coupon: undefined,
   urgent: false,
   pickup: emptyPickup(),
+  delivery: emptyDelivery(),
   payMethod: 'gateway',
   activeChild: null,
   newChildIndex: null,
@@ -103,6 +109,7 @@ export const useDraft = create<DraftState>()(
       setCoupon: (coupon) => set({ coupon: coupon?.trim() || undefined }),
       setUrgent: (urgent) => set({ urgent }),
       setPickup: (patch) => set((s) => ({ pickup: { ...s.pickup, ...patch } })),
+      setDelivery: (patch) => set((s) => ({ delivery: { ...s.delivery, ...patch } })),
       setPayMethod: (payMethod) => set({ payMethod }),
       rememberUpload: (upload) => set((s) => ({ uploads: { ...s.uploads, [upload.id]: upload } })),
 
@@ -115,16 +122,18 @@ export const useDraft = create<DraftState>()(
           coupon: draft.coupon,
           urgent: !!draft.urgent,
           pickup: { ...emptyPickup(), ...draft.pickup },
+          delivery: { ...emptyDelivery(), ...(draft.delivery ?? {}), note: draft.delivery?.note ?? '' },
           payMethod: draft.payMethod ?? 'gateway',
         }),
       reset: () => set(initial()),
     }),
     {
       name: 'sarv-draft',
-      version: 2,
+      version: 3,
       migrate: (persisted, version) => {
         const s = persisted as DraftData
         if (version < 2 && Array.isArray(s?.services)) s.services = s.services.map(migrateLegacyPrint)
+        if (s && !s.delivery) s.delivery = emptyDelivery()
         return s
       },
       partialize: (s): DraftData => ({
@@ -134,6 +143,7 @@ export const useDraft = create<DraftState>()(
         coupon: s.coupon,
         urgent: s.urgent,
         pickup: s.pickup,
+        delivery: s.delivery,
         payMethod: s.payMethod,
         activeChild: s.activeChild,
         newChildIndex: s.newChildIndex,
@@ -150,7 +160,14 @@ export function selectQuoteInput(s: DraftData): OrderDraft {
 
 /** Full order body for `POST /orders`. */
 export function selectOrderDraft(s: DraftData): OrderDraft {
-  return { ...selectQuoteInput(s), pickup: s.pickup, payMethod: s.payMethod }
+  // the delivery choice never changes the price (D22), so selectQuoteInput stays without it
+  const d = s.delivery ?? emptyDelivery()
+  const delivery = {
+    method: d.method,
+    ...(d.method === 'customer_pickup' && d.pickupPointId ? { pickupPointId: d.pickupPointId } : {}),
+    ...(d.note.trim() ? { note: d.note.trim() } : {}),
+  }
+  return { ...selectQuoteInput(s), delivery, pickup: s.pickup, payMethod: s.payMethod }
 }
 
 export const isDraftEmpty = (s: Pick<DraftData, 'children' | 'services'>) => s.children.length === 0 && s.services.length === 0

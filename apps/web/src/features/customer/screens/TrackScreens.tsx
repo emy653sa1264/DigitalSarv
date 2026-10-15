@@ -82,7 +82,8 @@ function Timeline({ order: o }: { order: Order }) {
   // «خدمات اضافی» only shows when a child has extras (or the order actually passed through it);
   // «فنری‌کردن» only when there are school books.
   const hasExtras = o.children.some((c) => c.extras?.length) || o.status === 'extras' || o.timeline.some((t) => t.status === 'extras')
-  const flow = ORDER_FLOW.filter((s) => (s !== 'extras' || hasExtras) && (s !== 'binding' || o.children.length > 0))
+  const homePickup = o.delivery?.homePickup !== false
+  const flow = ORDER_FLOW.filter((s) => (s !== 'extras' || hasExtras) && (s !== 'binding' || o.children.length > 0) && (homePickup || (s !== 'courier_assigned' && s !== 'picked_up')))
   const effective: OrderStatus = o.status === 'awaiting_approval' ? 'picked_up' : o.status
   const pos = ORDER_FLOW.indexOf(effective)
   // A status hidden from this flow maps to the last visible step before it.
@@ -122,10 +123,31 @@ function Timeline({ order: o }: { order: Order }) {
             سفارش {fa(o.code)} — {orderKindLabel(o)}
           </div>
           <div className="mt-0.5 text-xs text-muted-2">
-            {meta} · تحویل‌گیری: {jalaliWeekdayLabel(o.pickup.date)}
+            {meta}
+            {homePickup && o.pickup.date ? ` · تحویل‌گیری: ${jalaliWeekdayLabel(o.pickup.date)}` : ''}
           </div>
         </div>
       </div>
+
+      {o.fulfillment && o.status !== 'cancelled' && (
+        <InfoBanner tone={o.fulfillment.status === 'ready_for_pickup' ? 'green' : 'cyan'} className="mt-3">
+          <div className="font-extrabold">وضعیت تولید: {o.fulfillment.label}</div>
+          {o.delivery?.method === 'customer_pickup' && o.fulfillment.place && (
+            <div className="mt-1 text-[12.5px] leading-6">
+              محل تحویل حضوری: {o.fulfillment.place.name} — {o.fulfillment.place.address}
+              {o.fulfillment.place.hours ? ` · ${o.fulfillment.place.hours}` : ''}
+              {o.fulfillment.place.phone && (
+                <>
+                  {' · '}
+                  <a href={`tel:${o.fulfillment.place.phone}`} dir="ltr">
+                    {fa(o.fulfillment.place.phone)}
+                  </a>
+                </>
+              )}
+            </div>
+          )}
+        </InfoBanner>
+      )}
 
       {o.status === 'cancelled' && (
         <InfoBanner tone="pink" className="mt-3">

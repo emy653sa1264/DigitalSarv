@@ -15,6 +15,10 @@ export function DoneScreen() {
   const navigate = useNavigate()
   const order = useOrder(id)
   const o = order.data
+  // print-only orders (delivery.homePickup === false) are not collected at home; legacy orders keep the courier copy
+  const noHome = o?.delivery?.homePickup === false
+  const atPoint = o?.delivery?.method === 'customer_pickup'
+  const place = o?.fulfillment?.place ?? o?.delivery?.pickupPoint
 
   return (
     <Screen title="ثبت شد" subtitle={o ? `سفارش ${fa(o.code)}` : undefined} icon={Check} tone="green" back={false}>
@@ -37,11 +41,21 @@ export function DoneScreen() {
             <div className="mt-2 text-sm leading-[1.8] text-muted-1">
               سفارش {fa(o.code)} · {o.children.length ? `${fa(orderBooks(o))} کتاب` : `${fa(o.services.length)} سرویس`}
               <br />
-              پیک {jalaliWeekdayLabel(o.pickup.date)} بین {o.pickup.slot} در محل شما است.
+              {noHome ? (
+                <>
+                  {o.fulfillment?.label ? `وضعیت تولید: ${o.fulfillment.label}` : 'سفارش شما در صف تولید است.'}
+                  <br />
+                  {atPoint
+                    ? `وقتی آماده شد اعلان می‌گیرید و از ${place ? `${place.name} — ${place.address}` : 'محل تحویل حضوری'} تحویل می‌گیرید.`
+                    : 'وقتی آماده شد برای شما ارسال می‌شود.'}
+                </>
+              ) : (
+                <>پیک {jalaliWeekdayLabel(o.pickup.date)} بین {o.pickup.slot} در محل شما است.</>
+              )}
             </div>
           </div>
           <Panel className="mt-3">
-            <div className="mb-[9px] text-[14.5px] font-extrabold">پیک چه چیزی را تحویل می‌گیرد</div>
+            <div className="mb-[9px] text-[14.5px] font-extrabold">{noHome ? 'خلاصه سفارش' : 'پیک چه چیزی را تحویل می‌گیرد'}</div>
             {o.children.map((c, i) => (
               <div key={`c${i}`} className="flex justify-between gap-2.5 py-1 text-[13px] text-muted-1">
                 <span>

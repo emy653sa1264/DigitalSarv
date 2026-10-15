@@ -8,8 +8,10 @@ import { Textarea } from '@/components/ui/textarea'
 import { fa, toEnDigits } from '@/lib/format'
 import { useCatalog } from '@/lib/query'
 import { cn } from '@/lib/utils'
+import { needsHomePickup } from '@/lib/delivery'
 import { useAuth } from '@/stores/auth'
 import { useDraft } from '@/stores/draft'
+import { DeliveryChooser, DeliveryMethodPicker } from '../components/DeliveryChooser'
 import { Screen } from '../components/Screen'
 import { CtaButton } from '../components/parts'
 import { useMyOrders } from '../hooks/queries'
@@ -39,6 +41,9 @@ export function PickupScreen() {
   const urgent = useDraft((s) => s.urgent)
   const setUrgent = useDraft((s) => s.setUrgent)
   const userPhone = useAuth((s) => s.user?.phone)
+  const children = useDraft((s) => s.children)
+  const services = useDraft((s) => s.services)
+  const delivery = useDraft((s) => s.delivery)
   const catalog = useCatalog()
   const orders = useMyOrders()
   const filled = useRef({ phone: false, address: false })
@@ -116,8 +121,22 @@ export function PickupScreen() {
     const reason = blockReason(pickup.date)
     if (reason) return notify(reason)
     if (slotInvalid) return notify('این ساعت قابل انتخاب نیست؛ ساعت یا روز دیگری انتخاب کنید')
+    if (delivery.method === 'customer_pickup' && !(catalog.data?.pickupPoints ?? []).some((p) => p.id === delivery.pickupPointId)) return notify('محل تحویل حضوری را انتخاب کنید')
     navigate('/app/membership')
   }
+
+  const urgentPanel = catalog.data?.urgentEnabled ? (
+    <Panel className="flex items-center justify-between gap-2.5 p-[15px]">
+      <div>
+        <div className="text-[14.5px] font-extrabold">سفارش فوری</div>
+        <div className="mt-0.5 text-[11.5px] text-muted-2">پردازش خارج از نوبت · {fa(catalog.data.prices.urgentFee)} تومان</div>
+      </div>
+      <DsSwitch checked={urgent} onCheckedChange={setUrgent} label="سفارش فوری" />
+    </Panel>
+  ) : null
+
+  // D12: only school books, cartridges and devices are collected at home (same rule as the server)
+  if (!needsHomePickup({ children, services })) return <DeliveryChooser urgent={urgentPanel} />
 
   return (
     <Screen title="زمان و آدرس تحویل‌گیری" subtitle="آدرس، روز و ساعت را مشخص کنید" icon={MapPin} tone="green" back="/app/summary">
@@ -255,15 +274,12 @@ export function PickupScreen() {
           {isTodayPicked && <div className="mt-2 text-[11.5px] text-muted-2">ساعت‌های گذشته امروز قابل انتخاب نیستند.</div>}
         </div>
 
-        {catalog.data?.urgentEnabled && (
-          <Panel className="flex items-center justify-between gap-2.5 p-[15px]">
-            <div>
-              <div className="text-[14.5px] font-extrabold">سفارش فوری</div>
-              <div className="mt-0.5 text-[11.5px] text-muted-2">پردازش خارج از نوبت · {fa(catalog.data.prices.urgentFee)} تومان</div>
-            </div>
-            <DsSwitch checked={urgent} onCheckedChange={setUrgent} label="سفارش فوری" />
-          </Panel>
-        )}
+        {urgentPanel}
+
+        <div className="flex flex-col gap-4">
+          <div className="text-base font-black">تحویل سفارش</div>
+          <DeliveryMethodPicker homePickup />
+        </div>
 
         <CtaButton onClick={next}>ادامه</CtaButton>
       </div>

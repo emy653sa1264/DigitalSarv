@@ -34,6 +34,13 @@ interface ActiveGroup {
 }
 
 function etaOf(o: Order): string {
+  // print-only orders have no courier pickup: show the production/fulfilment state instead
+  if (o.delivery?.homePickup === false) {
+    const place = o.fulfillment?.place?.name ?? o.delivery.pickupPoint?.name
+    const where = o.delivery.method === 'customer_pickup' && place ? ` · ${place}` : ''
+    if (o.fulfillment?.label) return `${o.fulfillment.label}${where}`
+    return `به‌روزرسانی ${jalali(o.updatedAt, { day: 'numeric', month: 'long' })}`
+  }
   return flowIndex(o.status) < flowIndex('picked_up')
     ? `تحویل‌گیری ${jalaliWeekdayLabel(o.pickup.date)}`
     : `به‌روزرسانی ${jalali(o.updatedAt, { day: 'numeric', month: 'long' })}`

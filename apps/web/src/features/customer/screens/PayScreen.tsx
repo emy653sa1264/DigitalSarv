@@ -6,6 +6,7 @@ import { useShallow } from 'zustand/react/shallow'
 import { EmptyState, ErrorState, GradientBadge, LoadingBlock, Panel, TotalsPanel } from '@/components/brand'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/components/ui/sonner'
+import { needsHomePickup } from '@/lib/delivery'
 import { fa, money, pct, toEnDigits } from '@/lib/format'
 import { ApiError } from '@/lib/api'
 import { qk, queryClient, useCatalog } from '@/lib/query'
@@ -51,13 +52,20 @@ export function PayScreen() {
     // never send an order without the total the customer saw: the server's stale-price guard needs it
     if (expectedTotal === undefined) return notify('قیمت سفارش هنوز محاسبه نشده است')
     const p = pickup
-    if (!p.address.trim() || !p.phone || !p.date || !p.slot) {
-      notify('ابتدا زمان و آدرس تحویل‌گیری را تعیین کنید')
+    const homePickup = needsHomePickup(draft)
+    const atPoint = draft.delivery?.method === 'customer_pickup'
+    const ready = homePickup
+      ? p.address.trim() && p.phone && p.date && p.slot && (!atPoint || draft.delivery?.pickupPointId)
+      : p.phone && (atPoint ? !!draft.delivery?.pickupPointId : p.address.trim())
+    if (!ready) {
+      notify(homePickup ? 'ابتدا زمان و آدرس تحویل‌گیری را تعیین کنید' : 'ابتدا روش و آدرس تحویل را تعیین کنید')
       navigate('/app/pickup')
       return
     }
+    // no home pickup → no date/slot (the server validates them only for home pickups)
+    const body = homePickup ? { ...p, phone: toEnDigits(p.phone) } : { address: p.address, phone: toEnDigits(p.phone) }
     createOrder.mutate(
-      { ...draft, pickup: { ...p, phone: toEnDigits(p.phone) }, expectedTotal },
+      { ...draft, pickup: body as typeof p, expectedTotal },
       {
         onSuccess: (order) => {
           // The order exists server-side now; an unfinished gateway payment is retried from /app/pay/return or the orders list.
