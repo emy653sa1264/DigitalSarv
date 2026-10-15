@@ -28,7 +28,10 @@ export class AdminPriceBookController {
   }
 
   @Get('price-book/compare') @RequirePermissions('provider_price_view', 'customer_price_view')
-  compare(@Query() q: CompareQueryDto) { return this.book.compare(q.service, q.providerId); }
+  compare(@Query() q: CompareQueryDto) {
+    const { page, limit } = pageParams(q);
+    return this.book.compare(q.service, q.providerId, new Date(), page, limit);
+  }
 
   @Get('price-book/pending') @RequirePermissions('provider_price_view')
   pending(@Query() q: PageQueryDto, @CurrentUser() user: AuthUser) {

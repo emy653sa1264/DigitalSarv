@@ -12,7 +12,7 @@ export const pk = {
   history: (comboKey: string, layer: PriceLayer = 'customer', providerId = '') => ['admin', 'price-book', 'history', layer, comboKey, providerId] as const,
   audit: (page: number) => ['admin', 'price-book', 'audit', page] as const,
   pending: (page: number) => ['admin', 'price-book', 'pending', page] as const,
-  compare: (service: PriceService, providerId = '') => ['admin', 'price-book', 'compare', service, providerId] as const,
+  compare: (service: PriceService, providerId = '', page = 1) => ['admin', 'price-book', 'compare', service, providerId, page] as const,
   ranges: ['admin', 'binding-ranges'] as const,
 }
 
@@ -59,8 +59,11 @@ export const usePriceAudit = (page: number) =>
 export const usePendingPrices = (page: number, enabled = true) =>
   useQuery({ queryKey: pk.pending(page), enabled, placeholderData: keepPreviousData, queryFn: () => api.get<Paged<PendingItem>>('/admin/price-book/pending', { page, limit: 20 }) })
 
-export const useComparePrices = (service: PriceService, providerId?: string) =>
-  useQuery({ queryKey: pk.compare(service, providerId), queryFn: () => api.get<CompareRow[]>('/admin/price-book/compare', { service, providerId }) })
+export const useComparePrices = (service: PriceService, providerId: string | undefined, page: number) =>
+  useQuery({
+    queryKey: pk.compare(service, providerId, page), placeholderData: keepPreviousData,
+    queryFn: () => api.get<Paged<CompareRow>>('/admin/price-book/compare', { service, providerId, page, limit: 20 }),
+  })
 
 export const useBindingRanges = () => useQuery({ queryKey: pk.ranges, queryFn: () => api.get<BindingRange[]>('/admin/binding-ranges') })
 

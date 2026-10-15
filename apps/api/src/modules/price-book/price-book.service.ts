@@ -3,6 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { randomUUID } from 'node:crypto';
 import { Model, Types } from 'mongoose';
 import { canViewProviderPrices, type Permission } from '../../common/permissions.js';
+import { escapeRegex, type Paged } from '../../common/utils/pagination.js';
 import { CatalogService } from '../catalog/catalog.service.js';
 import { Extra } from '../catalog/schemas/extra.schema.js';
 import { Paper } from '../catalog/schemas/paper.schema.js';
@@ -672,13 +673,15 @@ export class PriceBookService {
     return conflicts.length ? { ...after, negativeMargin: conflicts } : after;
   }
 
-  /** §23 view: every provider x combo of a service with customer price, difference and margin % (admin only; unpaginated until M5). */
-  async compare(service: ComboService, providerId?: string, at = new Date()): Promise<CompareRow[]> {
-    const [papers, ranges, rows, centers] = await Promise.all([
+  /** §23 view, paged by provider (S8): every combo of `service` x the page's providers; reads only that service's versions (admin only). */
+  async compare(service: ComboService, providerId?: string, at = new Date(), page = 1, limit = 20): Promise<Paged<CompareRow>> {
+    const centerFilter = providerId ? { _id: this.oid(providerId) } : {};
+    const [papers, ranges, rows, centers, total] = await Promise.all([
       this.papers.find().sort({ sort: 1, _id: 1 }).lean(),
       this.ranges.find().sort({ minPages: 1 }).lean(),
-      this.versions.find().lean() as Promise<Row[]>,
-      this.centers.find(providerId ? { _id: this.oid(providerId) } : {}, { name: 1, status: 1 }).sort({ _id: 1 }).lean(),
+      this.versions.find({ comboKey: new RegExp(`^${escapeRegex(service)}\\|`) }).lean() as Promise<Row[]>,
+      this.centers.find(centerFilter, { name: 1, status: 1 }).sort({ _id: 1 }).skip((page - 1) * limit).limit(limit).lean(),
+      this.centers.countDocuments(centerFilter),
     ]);
     const names = this.names(papers, ranges);
     const customerRows = rows.filter((r) => r.layer === 'customer');
@@ -707,7 +710,7 @@ export class PriceBookService {
         });
       }
     }
-    return out;
+    return { items: out, total, page, limit };
   }
 
   private async assertProvider(id: Types.ObjectId) {

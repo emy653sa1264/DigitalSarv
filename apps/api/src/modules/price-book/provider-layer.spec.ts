@@ -566,3 +566,19 @@ describe('M5 hardening (S9, S10, deferred M2 items)', () => {
     expect(PriceVersionSchema.indexes()).toContainEqual([{ baseProviderId: 1 }, expect.objectContaining({ name: 'base_provider' })]);
   });
 });
+
+describe('compare paging (S8)', () => {
+  it('pages by provider and reads only the requested service’s versions', async () => {
+    const { svc, versions, by, A, B, C } = setup();
+    await svc.create(prov(A, 3500), by);
+    await svc.create(prov(B, 3700), by);
+    await svc.create(cust(4500), by);
+    const p1 = await svc.compare('bw', undefined, new Date(), 1, 2);
+    expect(p1).toMatchObject({ total: 3, page: 1, limit: 2 });
+    expect([...new Set(p1.items.map((r) => r.providerId))]).toEqual([A, B]);
+    expect(p1.items.find((r) => r.providerId === A && r.comboKey === KEY)).toMatchObject({ providerPrice: 3500, customerPrice: 4500 });
+    const p2 = await svc.compare('bw', undefined, new Date(), 2, 2);
+    expect([...new Set(p2.items.map((r) => r.providerId))]).toEqual([C]);
+    expect(versions.find.mock.calls.at(-1)![0]).toEqual({ comboKey: expect.any(RegExp) });
+  });
+});

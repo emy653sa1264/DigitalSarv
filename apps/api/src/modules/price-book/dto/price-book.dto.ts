@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
 import { ArrayMaxSize, IsArray, IsBoolean, IsIn, IsInt, IsISO8601, IsMongoId, IsOptional, IsString, MaxLength, Min, MinLength, ValidateNested } from 'class-validator';
+import { PageQueryDto } from '../../../common/utils/pagination.js';
 import { BULK_OPS, type BulkOp } from '../bulk.js';
 import { COLOR_TYPES, COMBO_SERVICES, PRINT_SIZES, SIDES, type ComboService } from '../combo.js';
 import { PRICE_LAYERS, PRICE_MODES, ROUNDINGS, type PriceLayer, type PriceMode } from '../price-book.constants.js';
@@ -34,7 +35,7 @@ export class ReasonDto {
 export class ConfirmReasonDto extends ReasonDto {
   @IsOptional() @IsBoolean() confirmNegativeMargin?: boolean;
 }
-export class CompareQueryDto {
+export class CompareQueryDto extends PageQueryDto {
   @IsIn(['bw', 'color', 'spiral', 'addon']) service: 'bw' | 'color' | 'spiral' | 'addon';
   @IsOptional() @IsMongoId() providerId?: string;
 }

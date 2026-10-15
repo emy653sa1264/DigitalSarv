@@ -75,21 +75,21 @@ describe('compare view (§23)', () => {
     await svc.create(prov(B, 3700), by);
     await svc.create(prov(C, 3400), by);
     await svc.create(cust(4500), by);
-    const rows = (await svc.compare('bw')).filter((r) => r.comboKey === KEY);
+    const rows = (await svc.compare('bw')).items.filter((r) => r.comboKey === KEY);
     expect(rows.map((r) => [r.providerName, r.providerPrice, r.customerPrice, r.difference, r.marginPct, r.negative])).toEqual([
       ['مجری الف', 3500, 4500, 1000, 28.6, false],
       ['مجری ب', 3700, 4500, 800, 21.6, false],
       ['مجری ج', 3400, 4500, 1100, 32.4, false],
     ]);
     expect(rows[2].providerStatus).toBe('busy');
-    const other = (await svc.compare('bw')).find((r) => r.comboKey === 'bw|A4|double' && r.providerId === A)!;
+    const other = (await svc.compare('bw')).items.find((r) => r.comboKey === 'bw|A4|double' && r.providerId === A)!;
     expect(other).toMatchObject({ providerPrice: null, customerPrice: null, difference: null, marginPct: null, negative: false });
-    expect((await svc.compare('bw', B)).every((r) => r.providerId === B)).toBe(true);
+    expect((await svc.compare('bw', B)).items.every((r) => r.providerId === B)).toBe(true);
   });
   it('flags a confirmed negative margin', async () => {
     const { svc, by, B } = setup();
     await svc.create(prov(B, 3700), by);
     await svc.create(cust(3600, { confirmNegativeMargin: true }), by);
-    expect((await svc.compare('bw', B)).find((r) => r.comboKey === KEY)).toMatchObject({ difference: -100, negative: true });
+    expect((await svc.compare('bw', B)).items.find((r) => r.comboKey === KEY)).toMatchObject({ difference: -100, negative: true });
   });
 });

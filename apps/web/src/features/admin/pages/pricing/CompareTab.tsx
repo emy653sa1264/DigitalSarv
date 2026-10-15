@@ -5,7 +5,7 @@ import { NO_PROVIDER_PRICE, PROVIDER_STATUS } from '@/lib/provider-labels'
 import { useCenters } from '../../api'
 import { AdminSelect, Tag } from '../../components/controls'
 import { QueryView } from '../../components/kit'
-import { AdminRow, AdminTable, SearchInput } from '../../components/table'
+import { AdminRow, AdminTable, Pager, SearchInput } from '../../components/table'
 import { faDec } from '../../lib'
 import { useComparePrices, type PriceService } from '../../pricing-api'
 import { MODE_LABEL } from './labels'
@@ -24,32 +24,35 @@ export function CompareTab() {
   const [onlyNegative, setOnlyNegative] = useState(false)
   const [onlyPriced, setOnlyPriced] = useState(true)
   const [search, setSearch] = useState('')
-  const query = useComparePrices(service, providerId === ALL ? undefined : providerId)
+  const [page, setPage] = useState(1)
+  const query = useComparePrices(service, providerId === ALL ? undefined : providerId, page)
 
   return (
     <div className="grid gap-4">
       <div className="grid gap-2.5 sm:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
-        <AdminSelect value={providerId} onValueChange={setProviderId} ariaLabel="مجری"
+        <AdminSelect value={providerId} onValueChange={(v) => { setProviderId(v); setPage(1) }} ariaLabel="مجری"
           options={[{ value: ALL, label: 'همه مجریان' }, ...(providers.data ?? []).map((p) => ({ value: p.id, label: p.name }))]} />
         <SearchInput value={search} onChange={setSearch} placeholder="جستجوی ترکیب…" />
       </div>
       <div className="flex flex-wrap items-center gap-3">
         <div className="no-scrollbar flex max-w-full gap-1.5 overflow-x-auto pb-1" role="tablist" aria-label="سرویس">
           {SERVICES.map((s) => (
-            <Chip key={s.key} size="sm" role="tab" aria-selected={service === s.key} selected={service === s.key} onClick={() => setService(s.key)} className="shrink-0 whitespace-nowrap">{s.label}</Chip>
+            <Chip key={s.key} size="sm" role="tab" aria-selected={service === s.key} selected={service === s.key} onClick={() => { setService(s.key); setPage(1) }} className="shrink-0 whitespace-nowrap">{s.label}</Chip>
           ))}
         </div>
         <label className="flex items-center gap-2 text-[12.5px] font-bold"><DsSwitch checked={onlyNegative} onCheckedChange={setOnlyNegative} label="فقط زیان‌ده" />فقط زیان‌ده</label>
         <label className="flex items-center gap-2 text-[12.5px] font-bold"><DsSwitch checked={onlyPriced} onCheckedChange={setOnlyPriced} label="فقط ترکیب‌های قیمت‌دار" />فقط قیمت‌دار</label>
       </div>
-      <QueryView query={query} rows={6} isEmpty={(d) => d.length === 0} empty={{ title: 'موردی برای مقایسه نیست', hint: 'ابتدا مجری اضافه کنید.' }}>
-        {(rows) => {
+      <QueryView query={query} rows={6} isEmpty={(d) => d.items.length === 0} empty={{ title: 'موردی برای مقایسه نیست', hint: 'ابتدا مجری اضافه کنید.' }}>
+        {(d) => {
+          const rows = d.items
           const shown = rows.filter((r) => (!onlyNegative || r.negative) && (!onlyPriced || r.providerPrice !== null || r.customerPrice !== null) && (!search.trim() || r.label.includes(search.trim())))
           const losses = rows.filter((r) => r.negative).length
           return (
             <>
-              {losses > 0 && <div className="rounded-[16px] bg-pink-soft px-4 py-3 text-[13px] font-extrabold text-pink-ink">{fa(losses)} ترکیب با قیمت مشتری کمتر از قیمت مجری</div>}
-              <AdminTable columns={COLUMNS} minWidth={980} head={['ترکیب', 'مجری', 'قیمت مجری', 'قیمت مشتری', 'اختلاف', 'درصد سود', 'وضعیت']}>
+              {losses > 0 && <div className="rounded-[16px] bg-pink-soft px-4 py-3 text-[13px] font-extrabold text-pink-ink">{fa(losses)} ترکیب با قیمت مشتری کمتر از قیمت مجری (در این صفحه)</div>}
+              <AdminTable columns={COLUMNS} minWidth={980} head={['ترکیب', 'مجری', 'قیمت مجری', 'قیمت مشتری', 'اختلاف', 'درصد سود', 'وضعیت']}
+                footer={<Pager page={d.page} limit={d.limit} total={d.total} onPage={setPage} />}>
                 {shown.map((r) => {
                   const st = PROVIDER_STATUS[r.providerStatus]
                   return (
