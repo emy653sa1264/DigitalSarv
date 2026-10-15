@@ -186,6 +186,11 @@ export class OrdersService {
       }
     }
 
+    // anything that throws before the insert is attempted (pricing, mapping, the order code) is definitive: nothing was written
+    const giveBack = async (immediate: boolean) => {
+      if (walletDebit) await this.credits.apply(giveBackKey, { immediate });
+    };
+    const buildBase = () => {
     // wallet is deducted above; a gateway order is paid when its callback verifies; COD is paid on delivery
     const charged = dto.payMethod === 'wallet' || (dto.payMethod === 'gateway' && !gateway);
     const status: OrderStatus = gateway ? 'pending_payment' : 'registered';
@@ -195,7 +200,7 @@ export class OrdersService {
     const checklists = ctx.checklists ?? defaultChecklists();
     const qcLabels = orderQcLabels(draft.children.length > 0, services.map((s) => s.kind), checklists);
     const pickupLabels = [...checklists.pickup];
-    const base = {
+    return {
       customerId: user._id,
       customerName: user.name || 'مشتری',
       customerPhone: user.phone,
@@ -226,11 +231,23 @@ export class OrdersService {
       pickupChecks: pickupLabels.map(() => false),
       ...(gateway ? { payment: { driver: this.payments.driver.name, status: 'pending' as const, amount: quote.total }, deferred } : {}),
     };
+    };
+    let base: ReturnType<typeof buildBase>;
+    try {
+      base = buildBase();
+    } catch (err) {
+      await giveBack(true);
+      throw err;
+    }
 
     let order: OrderDocument | undefined;
     for (let attempt = 0; !order; attempt++) {
+      const code = await this.nextCode().catch(async (codeErr: unknown) => {
+        await giveBack(true);
+        throw codeErr;
+      });
       try {
-        order = await this.orders.create({ ...base, _id: debitId, code: await this.nextCode() });
+        order = await this.orders.create({ ...base, _id: debitId, code });
       } catch (err) {
         const e = err as { code?: number; name?: string; message?: string; keyPattern?: Record<string, unknown> };
         const dup = e.code === 11000;
@@ -245,7 +262,7 @@ export class OrdersService {
         if (!dup || attempt >= 2) {
           // definitive = the insert certainly did not happen (validation, or the code collided every time); anything else is
           // ambiguous and left to the sweep after its delay
-          if (walletDebit) await this.credits.apply(giveBackKey, { immediate: e.name === 'ValidationError' || dup });
+          await giveBack(e.name === 'ValidationError' || dup);
           throw err;
         }
         await this.ensureSequence();

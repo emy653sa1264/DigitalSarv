@@ -345,10 +345,11 @@ export class WalletCreditsService {
   }
 
   /** The guarded `$inc`. True when the wallet carries the key (now or from an earlier run). */
-  private async move(doc: WalletCreditRow, ctx: { moved: boolean }): Promise<boolean> {
+  private async move(doc: WalletCreditRow, ctx: { moved: boolean }, requireKey?: string): Promise<boolean> {
     const debit = doc.amount < 0;
     const res = await this.users.updateOne(
-      { _id: doc.userId, walletCreditKeys: { $ne: doc.key }, ...(debit ? { walletBalance: { $gte: -doc.amount } } : {}) },
+      // `requireKey` (a checkout give-back's debit proof) is checked in the crediting update itself
+      { _id: doc.userId, walletCreditKeys: { $ne: doc.key }, ...(requireKey ? { $and: [{ walletCreditKeys: requireKey }] } : {}), ...(debit ? { walletBalance: { $gte: -doc.amount } } : {}) },
       { $inc: { walletBalance: doc.amount }, $push: { walletCreditKeys: doc.key } },
     );
     if (res.modifiedCount === 1) {
@@ -396,9 +397,10 @@ export class WalletCreditsService {
     }
     const age = (ctx.now ?? new Date()).getTime() - new Date((doc as { createdAt?: Date }).createdAt ?? 0).getTime();
     if (!ctx.immediate && age < CREATE_GIVEBACK_AFTER_MS) return 'waiting';
-    if (!(await this.users.exists({ _id: doc.userId, walletCreditKeys: walletKey.debit(ref) }))) return 'waiting';
-    if (!(await this.move(doc, ctx))) return 'missing';
+    // the proof is part of the crediting update (atomic with the `$inc`); no proof and no earlier credit = the debit never happened
+    if (!(await this.move(doc, ctx, walletKey.debit(ref)))) return (await this.users.exists({ _id: doc.userId })) ? 'waiting' : 'missing';
     await this.markDone(doc);
+    // Mongo cannot `$pull` and `$push` the same array in one update: the proof is cleaned up right after (best-effort; the credit key blocks a replay)
     await this.users.updateOne({ _id: doc.userId }, { $pull: { walletCreditKeys: walletKey.debit(ref) } });
     return 'done';
   }

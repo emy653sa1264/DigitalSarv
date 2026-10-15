@@ -674,9 +674,27 @@ describe('checkout give-back only when the debit happened and no order exists (D
     expect(s.orders.docs).toHaveLength(2);
     expect(s.user.walletBalance).toBe(700000);
   });
-  it('a crash after the debit and before the insert: the sweep gives back once, only after the delay', async () => {
+  type PricingStub = { pricing: { pricedServices: ReturnType<typeof vi.fn> } };
+  it('a failure after the debit and before the insert is definitive: given back at once, once', async () => {
     const s = funded();
-    (s.svc as unknown as { pricing: { pricedServices: ReturnType<typeof vi.fn> } }).pricing.pricedServices.mockImplementationOnce(() => { throw new Error('process died'); });
+    (s.svc as unknown as PricingStub).pricing.pricedServices.mockImplementationOnce(() => { throw new Error('pricing broke'); });
+    await expect(s.svc.create(customer, walletDraft)).rejects.toThrow('pricing broke');
+    expect(s.user.walletBalance).toBe(1_000_000);
+    expect(debitKeys(s)).toHaveLength(0);
+    expect(await s.credits.sweep(later(11 * 60_000))).toMatchObject({ applied: 0 });
+    expect(s.user.walletBalance).toBe(1_000_000);
+  });
+  it('an order-code failure is definitive too', async () => {
+    const s = funded();
+    vi.spyOn(s.svc as unknown as { nextCode(): Promise<string> }, 'nextCode').mockRejectedValueOnce(new Error('redis down'));
+    await expect(s.svc.create(customer, walletDraft)).rejects.toThrow('redis down');
+    expect(s.user.walletBalance).toBe(1_000_000);
+    expect(s.orders.docs).toHaveLength(1);
+  });
+  it('a process death after the debit: the sweep gives back once, only after the delay', async () => {
+    const s = funded();
+    vi.spyOn(s.credits, 'apply').mockImplementationOnce(async () => 'retry'); // the process died before it could give back
+    (s.svc as unknown as PricingStub).pricing.pricedServices.mockImplementationOnce(() => { throw new Error('process died'); });
     await expect(s.svc.create(customer, walletDraft)).rejects.toThrow('process died');
     expect(s.user.walletBalance).toBe(700000);
     expect(debitKeys(s)).toHaveLength(1);
@@ -687,6 +705,16 @@ describe('checkout give-back only when the debit happened and no order exists (D
     expect(s.user.walletBalance).toBe(1_000_000);
     expect(debitKeys(s)).toHaveLength(0);
     expect(s.intents.docs).toEqual([expect.objectContaining({ state: 'done', cause: 'create_failed', amount: 300000 })]);
+  });
+  it('the proof is part of the crediting update: without it nothing is credited even when the order check passed', async () => {
+    const s = funded();
+    vi.spyOn(s.credits, 'apply').mockImplementationOnce(async () => 'retry');
+    s.orders.create.mockRejectedValueOnce(new Error('socket hang up'));
+    await expect(s.svc.create(customer, walletDraft)).rejects.toThrow('socket hang up');
+    s.user.walletCreditKeys = (s.user.walletCreditKeys as string[]).filter((k) => !k.startsWith('debit:')); // the proof is gone
+    expect(await s.credits.sweep(later(11 * 60_000))).toMatchObject({ applied: 0 });
+    expect(s.user.walletBalance).toBe(700000);
+    expect(s.users.updateOne.mock.calls.filter(([f]) => JSON.stringify(f).includes('debit:'))).not.toHaveLength(0); // the guard is in the filter
   });
   it('insufficient balance: the intent is voided and nothing is ever credited', async () => {
     const s = setup(); // wallet is 0
