@@ -1484,14 +1484,27 @@ Every automatic wallet movement goes through an internal intent (`walletCredits`
 | `dueback:<dueKey>` | that debit given back because the order could no longer take it |
 
 1. The intent is written first (`pending`).
-2. The write that decides the money pushes the key into the order's internal `creditKeys` in the **same** compare-and-set
-   (cancel: with `status: 'cancelled', refunded: true`; gateway: with `refundedAuthorities`; recount: with the approval).
-3. The wallet moves only when the order carries the key, by `$inc` guarded on the key (`User.walletCreditKeys`, internal), so it
-   happens at most once whoever runs it; then the intent is `done`.
+2. The write that decides the money pushes `{ key, amount }` into the order's internal `creditKeys` in the **same**
+   compare-and-set, which guards on the input the amount was computed from (cancel: with `status: 'cancelled', refunded: true`
+   and `chargedAmount`; gateway: with `refundedAuthorities`; recount: with the approval). A key is pushed at most once. The
+   **marker's amount governs**: the wallet always moves it, and a pending intent holding another amount is corrected to it
+   (the intent's `prepare` is first-writer-wins, its amount only a hint). Callers compute the amount from the freshly read
+   order, never from the returned row, and call `apply(key)` only after their compare-and-set succeeded.
+3. The wallet moves only when the order carries the marker, by `$inc` guarded on the key (`User.walletCreditKeys`, internal), so
+   it happens at most once whoever runs it; then the intent is `done`.
 
-A sweep (every minute, every instance) re-applies intents still `pending` after 60 s; an intent whose order never took it
-becomes `void` after 24 h. A failing `$inc` never fails the request that caused it (a cancel still answers 200; the money
-arrives with the sweep; logged at ERROR). This replaces the v4.1 «settle manually from the logs» fallback.
+A sweep (every minute, every instance, bounded, `DISPATCH_SCHEDULER=0` switches it off) works in four independent passes:
+(A) intents `pending` for 60 s to 24 h, least recently looked-at first (`lastSweptAt`); (B) older than 24 h: applied if the
+order carries the marker, otherwise `void`; (C) intents voided by that rule in the last 7 days whose order took the key after
+all are revived; (D) user keys of settled intents are pruned after 7 days. A `void` renames the intent's key to
+`<key>~void~<id>` (freeing the real key for a later credit) and keeps `origKey` and `voidedAt`; `apply` also revives a void or
+lost intent whenever the order carries the marker (new intent with the marker's amount; the user key prevents a double;
+`revivedAt` is stamped on the voided row). A transient failure backs the intent off exponentially (`failures`, `nextAttemptAt`:
+60 s doubling, capped at 30 min) and never counts toward the attempt cap; only a missing customer account counts (`attempts`,
+cap 20, logged once; capped intents stay `pending` for an admin to settle and are counted by `cappedCount()`). Internal fields
+of `walletCredits`: `failures`, `nextAttemptAt`, `lastSweptAt`, `origKey`, `voidedAt`, `revivedAt`. A failing `$inc` never fails
+the request that caused it (a cancel still answers 200; the money arrives with the sweep; logged at ERROR). This replaces the
+v4.1 «settle manually from the logs» fallback.
 
 A cancellation refund is never applied for an amount different from the order's `chargedAmount` at cancel time.
 The checkout wallet debit stays a guarded `$inc`; the compensating credit when order creation fails goes through the same

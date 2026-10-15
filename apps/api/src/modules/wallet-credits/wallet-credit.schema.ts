@@ -20,7 +20,7 @@ export class WalletCredit {
   @Prop({ type: String }) note?: string;
   @Prop({ type: Date }) doneAt?: Date;
   @Prop({ type: Boolean }) keyPulled?: boolean;
-  /** Failed `missing-account` attempts (the sweep stops at MAX_ATTEMPTS). */
+  /** Transient-error count (drives the exponential backoff in `nextAttemptAt`; never counts toward the cap). */
   @Prop({ type: Number, default: 0 }) failures?: number;
   /** Transient-error backoff: the sweep skips the intent until then. */
   @Prop({ type: Date }) nextAttemptAt?: Date;
@@ -37,3 +37,5 @@ export type WalletCreditDocument = HydratedDocument<WalletCredit>;
 export const WalletCreditSchema = SchemaFactory.createForClass(WalletCredit);
 WalletCreditSchema.index({ state: 1, createdAt: 1 });
 WalletCreditSchema.index({ state: 1, doneAt: 1 }, { partialFilterExpression: { keyPulled: { $exists: false } }, name: 'settled_keys' });
+WalletCreditSchema.index({ state: 1, voidedAt: 1 }, { partialFilterExpression: { origKey: { $exists: true } }, name: 'voided_origkey' });
+WalletCreditSchema.index({ state: 1, lastSweptAt: 1, createdAt: 1 }, { name: 'sweep_rotation' });

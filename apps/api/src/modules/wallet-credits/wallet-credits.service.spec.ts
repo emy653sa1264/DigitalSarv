@@ -119,6 +119,46 @@ describe('wallet credit intents (D34)', () => {
     expect(await s.svc.sweep(later(27 * 60 * MIN))).toMatchObject({ applied: 0 });
     expect(s.user.walletBalance).toBe(50000);
   });
+  it('pass A rotation: 250 young marker-less rows do not starve a newer marked one; the second sweep picks it up', async () => {
+    const s = setup();
+    const base = Date.now() - 3_600_000;
+    for (let n = 0; n < 250; n++) {
+      s.intents.docs.push({ _id: new Types.ObjectId(), key: `cancel:${new Types.ObjectId()}`, userId: s.userId, orderId: new Types.ObjectId(), amount: 1000, cause: 'cancel_refund', state: 'pending', attempts: 0, createdAt: new Date(base + n), updatedAt: new Date(base) });
+    }
+    const key = walletKey.cancel(String(s.orderId));
+    await credit(s, key, 50000);
+    mark(s, key, 50000);
+    expect(await s.svc.sweep(later(2 * MIN))).toMatchObject({ applied: 0, voided: 0 });
+    expect(s.user.walletBalance).toBe(0);
+    expect(await s.svc.sweep(later(3 * MIN))).toMatchObject({ applied: 1 });
+    expect(s.user.walletBalance).toBe(50000);
+  });
+  it('pass C with a missing customer: not applied, stamped, retried and credited once the account is back', async () => {
+    const s = setup();
+    const key = walletKey.cancel(String(s.orderId));
+    await credit(s, key);
+    await s.svc.sweep(later(25 * 60 * MIN)); // voided
+    mark(s, key, 50000);
+    const account = s.users.docs.splice(0, 1)[0];
+    expect(await s.svc.sweep(later(26 * 60 * MIN))).toMatchObject({ applied: 0 });
+    const voidRow = s.intents.docs.find((d) => d.origKey === key)!;
+    expect(voidRow.revivedAt).toBeUndefined();
+    expect(voidRow.lastSweptAt).toBeInstanceOf(Date);
+    expect(s.intents.docs.find((d) => d.key === key)).toMatchObject({ state: 'pending', attempts: 1 });
+    s.users.docs.push(account);
+    expect(await s.svc.sweep(later(27 * 60 * MIN))).toMatchObject({ applied: 1 });
+    expect(account.walletBalance).toBe(50000);
+    expect(voidRow.revivedAt).toBeInstanceOf(Date);
+  });
+  it('one failing pass does not stop the others', async () => {
+    const s = setup();
+    const key = walletKey.cancel(String(s.orderId));
+    await credit(s, key);
+    mark(s, key);
+    s.intents.find.mockImplementationOnce(() => { throw new Error('pass A broke'); });
+    expect(await s.svc.sweep(later(2 * MIN))).toMatchObject({ applied: 0 });
+    expect(s.intents.find).toHaveBeenCalledTimes(4);
+  });
   it('a marker revives a voided or lost intent and the user key prevents a double (C2, M6)', async () => {
     const s = setup();
     const key = walletKey.cancel(String(s.orderId));
@@ -201,7 +241,7 @@ describe('wallet credit intents (D34)', () => {
     expect(await s.svc.apply(key)).toBe('retry');
     expect(s.user.walletBalance).toBe(50000);
     expect(s.intents.docs[0]).toMatchObject({ state: 'pending', attempts: 0, failures: 1, lastError: expect.stringMatching(/connection reset/) });
-    expect(await s.svc.sweep(later(2 * MIN))).toMatchObject({ applied: 1 });
+    expect(await s.svc.sweep(later(2 * MIN))).toMatchObject({ applied: 0 } /* the wallet already moved: finishing «done» is not a move */);
     expect(s.user.walletBalance).toBe(50000);
     expect(s.intents.docs[0].state).toBe('done');
   });
