@@ -59,6 +59,7 @@ import {
 } from './order-helpers.js';
 import { deliveryOf, needsHomePickup, resolveDelivery } from './delivery-rules.js';
 import { Order, OrderDocument, type DeferredEffects } from './order.schema.js';
+import { paymentOnDelivery, recountRefund, recountSeq } from './order-money.js';
 import { pickupProblem } from './pickup-rules.js';
 
 @Injectable()
@@ -470,16 +471,30 @@ export class OrdersService {
       const last = qcLabelsOf(order).length - 1;
       qcGuard = { [`qc.${last}`]: true, qc: { $not: { $elemMatch: { $ne: true } } } };
     }
-    const codPaid =
-      status === 'delivered' && order.payMethod === 'cod' && !order.paid
-        ? { paid: true, chargedAmount: order.quote?.total ?? 0, paidVia: 'cod' as const }
-        : {};
+    // D35: approving a recount of a wallet / gateway paid order refunds a lower total once (intent first, D34)
+    const refund = order.status === 'awaiting_approval' ? recountRefund(order) : 0;
+    const refundKey = walletKey.recount(String(order._id), recountSeq(order.timeline));
+    if (refund > 0) await this.credits.prepare({ key: refundKey, userId: order.customerId, orderId: order._id, orderCode: order.code, amount: refund, cause: 'recount_refund' });
+    // COD is paid, and a difference due is collected, in cash in the delivered update itself
+    const now = new Date();
+    const money = status === 'delivered' ? paymentOnDelivery(order, now) : { set: {}, push: {}, guard: {} };
     const updated = await this.orders.findOneAndUpdate(
-      { _id: order._id, status: order.status, ...qcGuard },
-      { $set: { status, ...codPaid }, $push: { timeline: timelineEntry(status) }, $inc: { __v: 1 } },
+      {
+        _id: order._id, status: order.status, ...qcGuard, ...money.guard,
+        ...(refund > 0 ? { chargedAmount: order.chargedAmount ?? null, 'quote.total': order.quote?.total, refunded: { $ne: true } } : {}),
+      },
+      {
+        $set: { status, ...money.set, ...(refund > 0 ? { chargedAmount: order.quote.total } : {}) },
+        $push: {
+          timeline: timelineEntry(status, now), ...money.push,
+          ...(refund > 0 ? { creditKeys: { key: refundKey, amount: refund }, settlements: { kind: 'recount_refund', amount: refund, at: now } } : {}),
+        },
+        $inc: { __v: 1 },
+      },
       { returnDocument: 'after' },
     );
     if (!updated) throw OrdersService.raced();
+    if (refund > 0) await this.credits.apply(refundKey); // never throws; the sweep retries
     await this.notifications.dispatch(status, updated);
     if (status === 'delivered') await (by ? this.jobs.onOrderDelivered(updated._id, 'admin', by) : this.jobs.onOrderDelivered(updated._id, 'admin'));
     if (status === 'out_for_delivery') await (by ? this.jobs.onOrderOutForDelivery(updated._id, 'admin', by) : this.jobs.onOrderOutForDelivery(updated._id));

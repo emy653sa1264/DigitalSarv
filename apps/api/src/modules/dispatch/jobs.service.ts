@@ -7,6 +7,7 @@ import { Center } from '../centers/center.schema.js';
 import { CatalogService } from '../catalog/catalog.service.js';
 import { deliveryOf, placeOf } from '../orders/delivery-rules.js';
 import { BEFORE_QC_DONE, needsQcGuard, qcComplete, qcLabelsOf, timelineEntry, type CustomerFulfillment } from '../orders/order-helpers.js';
+import { paymentOnDelivery } from '../orders/order-money.js';
 import { Order, type OrderDelivery, type OrderDocument } from '../orders/order.schema.js';
 import { DispatchNotifier } from './dispatch-notifier.js';
 import {
@@ -300,9 +301,7 @@ export class JobsService {
       if (strict) throw new BadRequestException(`سفارش در وضعیت «${STATUS_LABELS[order.status]}» است و به «${STATUS_LABELS[target]}» نمی‌رود`);
       return;
     }
-    const codPaid = target === 'delivered' && order.payMethod === 'cod' && !order.paid
-      ? { paid: true, chargedAmount: order.quote?.total ?? 0, paidVia: 'cod' as const }
-      : {};
+    const money = target === 'delivered' ? paymentOnDelivery(order) : { set: {}, push: {}, guard: {} };
     // the same QC guard as OrdersService.setStatus: a checklist un-ticked meanwhile blocks leaving production
     let qcGuard: Record<string, unknown> = {};
     const last = qcLabelsOf(order).length - 1;
@@ -310,8 +309,8 @@ export class JobsService {
       qcGuard = { [`qc.${last}`]: true, qc: { $not: { $elemMatch: { $ne: true } } } };
     }
     const updated = await this.orders.findOneAndUpdate(
-      { _id: order._id, status: order.status, ...qcGuard },
-      { $set: { status: target, ...codPaid }, $push: { timeline: timelineEntry(target) }, $inc: { __v: 1 } },
+      { _id: order._id, status: order.status, ...qcGuard, ...money.guard },
+      { $set: { status: target, ...money.set }, $push: { timeline: timelineEntry(target), ...money.push }, $inc: { __v: 1 } },
       { returnDocument: 'after' },
     );
     if (!updated) {

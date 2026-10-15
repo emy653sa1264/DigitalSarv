@@ -763,3 +763,63 @@ describe('checkout give-back only when the debit happened and no order exists (D
     expect(s.orders.findOneAndUpdate.mock.calls[0][0]).toMatchObject({ chargedAmount: null, 'quote.total': 420000 });
   });
 });
+
+describe('recount after payment (D35)', () => {
+  const recounted = (o: Doc = {}) => ({ status: 'awaiting_approval', timeline: [{ status: 'awaiting_approval', label: 'در انتظار تأیید', at: new Date() }], ...o });
+  it('approving a lower recount of a wallet order refunds the difference once and records it', async () => {
+    const s = setup(recounted());
+    await Promise.allSettled([s.svc.setStatus(String(orderId), 'picked_up'), s.svc.setStatus(String(orderId), 'picked_up')]);
+    expect(s.order).toMatchObject({ status: 'picked_up', chargedAmount: 420000, settlements: [expect.objectContaining({ kind: 'recount_refund', amount: 80000 })] });
+    expect(s.user.walletBalance).toBe(80000);
+    expect(s.intents.docs).toEqual([expect.objectContaining({ key: `recount:${String(orderId)}:1`, state: 'done', amount: 80000 })]);
+    // a later cancel refunds what is still charged — 500,000 in total, never more
+    await s.svc.setStatus(String(orderId), 'cancelled');
+    expect(s.user.walletBalance).toBe(500000);
+  });
+  it('a crash after the approval CAS is finished by the sweep, once', async () => {
+    const s = setup(recounted());
+    vi.spyOn(s.credits, 'apply').mockResolvedValueOnce('retry'); // the process died before the wallet moved
+    await s.svc.setStatus(String(orderId), 'picked_up');
+    expect(s.user.walletBalance).toBe(0);
+    expect(s.order).toMatchObject({ chargedAmount: 420000, creditKeys: [{ key: `recount:${String(orderId)}:1`, amount: 80000 }] });
+    await s.credits.apply(`recount:${String(orderId)}:1`);
+    await s.credits.apply(`recount:${String(orderId)}:1`);
+    expect(s.user.walletBalance).toBe(80000);
+  });
+  it('a raised total is not charged; the customer sees amountDue', async () => {
+    const s = setup(recounted({ chargedAmount: 420000, quote: { total: 500000 } }));
+    await s.svc.setStatus(String(orderId), 'confirmed');
+    expect(s.order.chargedAmount).toBe(420000);
+    expect(s.user.walletBalance).toBe(0);
+    expect(s.intents.docs).toHaveLength(0);
+    expect(await s.svc.getForUser(String(orderId), customer)).toMatchObject({ amountDue: 80000 });
+  });
+  it('a second recount refunds only its own difference under its own key', async () => {
+    const s = setup(recounted());
+    await s.svc.setStatus(String(orderId), 'confirmed'); // 500,000 → 420,000: refund 80,000 (recount 1)
+    Object.assign(s.order, { status: 'awaiting_approval', quote: { total: 400000 } });
+    (s.order.timeline as Doc[]).push({ status: 'awaiting_approval', label: 'در انتظار تأیید', at: new Date() });
+    await s.svc.setStatus(String(orderId), 'picked_up'); // 420,000 → 400,000: refund 20,000 (recount 2)
+    expect(s.user.walletBalance).toBe(100000);
+    expect(s.intents.docs.map((d: Doc) => [d.key, d.amount])).toEqual([[`recount:${String(orderId)}:1`, 80000], [`recount:${String(orderId)}:2`, 20000]]);
+  });
+  it('a COD order is never refunded; the final total is what the courier collects', async () => {
+    const s = setup(recounted({ payMethod: 'cod', paid: false, chargedAmount: undefined, paidVia: undefined }));
+    await s.svc.setStatus(String(orderId), 'picked_up');
+    expect(s.user.walletBalance).toBe(0);
+    expect(s.intents.docs).toHaveLength(0);
+  });
+  it('the admin «تحویل شد» collects a difference due in cash, in the same update', async () => {
+    const s = setup({ status: 'out_for_delivery', chargedAmount: 420000, quote: { total: 500000 } });
+    await s.svc.setStatus(String(orderId), 'delivered');
+    expect(s.order).toMatchObject({ status: 'delivered', chargedAmount: 500000, settlements: [expect.objectContaining({ kind: 'due_cash', amount: 80000 })] });
+  });
+  it('COD + a raised recount: chargedAmount equals the final total once, with no due_cash', async () => {
+    const s = setup(recounted({ payMethod: 'cod', paid: false, chargedAmount: undefined, paidVia: undefined, quote: { total: 600000 } }));
+    await s.svc.setStatus(String(orderId), 'picked_up');
+    Object.assign(s.order, { status: 'out_for_delivery' });
+    await s.svc.setStatus(String(orderId), 'delivered');
+    expect(s.order).toMatchObject({ status: 'delivered', paid: true, paidVia: 'cod', chargedAmount: 600000 });
+    expect(s.order.settlements).toBeUndefined();
+  });
+});

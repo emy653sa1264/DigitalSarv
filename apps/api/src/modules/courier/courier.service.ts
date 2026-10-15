@@ -30,7 +30,8 @@ import {
   recountChildren,
   TERMINAL_STATUSES,
 } from '../orders/order-helpers.js';
-import { Order, OrderDocument } from '../orders/order.schema.js';
+import { amountDue, paymentOnDelivery } from '../orders/order-money.js';
+import { Order, OrderDocument, type OrderSettlement } from '../orders/order.schema.js';
 import { PricingService } from '../pricing/pricing.service.js';
 import { UploadsService } from '../uploads/uploads.service.js';
 import { makeReferralCode } from '../users/users.service.js';
@@ -63,6 +64,8 @@ export interface CourierTask {
   done: boolean;
   from?: Place;
   dropoff?: Place;
+  /** v4.4 (D35): cash to take at the door — an unpaid COD total or a difference due. */
+  collect?: number;
 }
 
 function eventToday(order: Order, status: OrderStatus, since: Date): boolean {
@@ -160,7 +163,8 @@ export class CourierService {
       const atProvider = o.status === 'packing' && job?.status === 'ready' && job.deliveryMethod === 'courier';
       const deliveryPending = (courierDelivers && o.status === 'out_for_delivery') || atProvider;
       if (deliveryPending || (courierDelivers && eventToday(o, 'delivered', since))) {
-        tasks.push({ ...base, id: `${o.id}-delivery`, kind: 'delivery', done: !deliveryPending, ...(atProvider && job?.place ? { from: job.place } : {}) });
+        const collect = o.payMethod === 'cod' && !o.paid ? (o.quote?.total ?? 0) : amountDue(o);
+        tasks.push({ ...base, id: `${o.id}-delivery`, kind: 'delivery', done: !deliveryPending, ...(atProvider && job?.place ? { from: job.place } : {}), ...(collect > 0 && deliveryPending ? { collect } : {}) });
       }
     }
     // pending first, then completed
@@ -269,11 +273,10 @@ export class CourierService {
     }
     if (order.status === 'packing') pushStatus(order, 'out_for_delivery');
     pushStatus(order, 'delivered');
-    if (order.payMethod === 'cod' && !order.paid) {
-      order.paid = true;
-      order.chargedAmount = order.quote?.total ?? 0;
-      order.paidVia = 'cod';
-    }
+    // COD is paid, and a difference due (D35) collected, in cash in the same save (optimistic concurrency on __v)
+    const money = paymentOnDelivery(order);
+    Object.assign(order, money.set);
+    if (money.push.settlements) order.settlements = [...(order.settlements ?? []), money.push.settlements as OrderSettlement];
     await saveOrConflict(order);
     await this.notifications.dispatch('delivered', order);
     // the job follows (best-effort, never throws); the id comes from the token
