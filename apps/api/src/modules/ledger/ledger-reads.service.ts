@@ -51,6 +51,12 @@ export class LedgerReadsService {
     private readonly ledger: LedgerService,
   ) {}
 
+  async providerNames(ids: string[]): Promise<Map<string, string>> {
+    if (!ids.length) return new Map();
+    const rows = (await this.centers.find({ _id: { $in: [...new Set(ids)].map(oid) } }, { name: 1 }).lean()) as { _id: unknown; name: string }[];
+    return new Map(rows.map((p) => [String(p._id), p.name]));
+  }
+
   async settlement(now = new Date()): Promise<SettlementInfo> {
     const weekday = await this.ledger.weekday();
     return { weekday, cutoff: tehranYmd(settlementCutoff(now, weekday)), next: nextSettlementYmd(now, weekday) };

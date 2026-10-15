@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { CatalogModule } from '../catalog/catalog.module.js';
 import { AdminLedgerController } from './ledger.controller.js';
+import { LedgerActionsService } from './ledger-actions.service.js';
 import { LedgerReadsService } from './ledger-reads.service.js';
 import { LedgerService } from './ledger.service.js';
 
@@ -8,7 +9,7 @@ import { LedgerService } from './ledger.service.js';
 @Module({
   imports: [CatalogModule],
   controllers: [AdminLedgerController],
-  providers: [LedgerService, LedgerReadsService],
+  providers: [LedgerService, LedgerReadsService, LedgerActionsService],
   exports: [LedgerService],
 })
 export class LedgerModule {}
