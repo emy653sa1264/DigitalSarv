@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { ClipboardList, CreditCard } from 'lucide-react'
 import { RadioGroup as RadioGroupPrimitive } from 'radix-ui'
@@ -22,7 +22,13 @@ import { customerKeys, redirectToGateway, useCreateOrder, useDraftQuote } from '
 export function PayScreen() {
   const navigate = useNavigate()
   const user = useAuth((s) => s.user)
-  const draft = useDraft(useShallow(selectOrderDraft))
+  // select the stored fields (stable references) and build the order body once per change —
+  // selectOrderDraft creates a fresh `delivery` object, which a shallow selector would see as a change on every render
+  const raw = useDraft(useShallow((s) => ({
+    children: s.children, services: s.services, planId: s.planId, coupon: s.coupon, urgent: s.urgent,
+    delivery: s.delivery, pickup: s.pickup, payMethod: s.payMethod,
+  })))
+  const draft = useMemo(() => selectOrderDraft(raw as Parameters<typeof selectOrderDraft>[0]), [raw])
   const pickup = useDraft((s) => s.pickup)
   const setPayMethod = useDraft((s) => s.setPayMethod)
   const reset = useDraft((s) => s.reset)
