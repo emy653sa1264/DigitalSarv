@@ -552,6 +552,16 @@ describe('M5 hardening (S9, S10, deferred M2 items)', () => {
     await svc.create(prov(A, 4000), by);
     expect(await dbl()).toBe(10000);
   });
+  it('S9: approve and reject answer 403 before any lookup for an admin without publish permission, else 404 for an unknown id', async () => {
+    const { svc, users, by } = setup();
+    const viewer = new Types.ObjectId();
+    users.docs.push({ _id: viewer, name: 'بیننده', role: 'admin', permissions: ['provider_price_view'] });
+    const ghost = String(new Types.ObjectId());
+    await expect(svc.approve(ghost, 'x', String(viewer))).rejects.toThrow(ForbiddenException);
+    await expect(svc.reject(ghost, 'x', String(viewer))).rejects.toThrow(ForbiddenException);
+    await expect(svc.approve(ghost, 'x', by)).rejects.toThrow(NotFoundException);
+    await expect(svc.reject(ghost, 'x', by)).rejects.toThrow(NotFoundException);
+  });
   it('the schema indexes baseProviderId (provider delete pre-check)', () => {
     expect(PriceVersionSchema.indexes()).toContainEqual([{ baseProviderId: 1 }, expect.objectContaining({ name: 'base_provider' })]);
   });
