@@ -3,43 +3,15 @@ import { HttpException, ServiceUnavailableException } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { Types } from 'mongoose';
+import { applyUpdate, fakeModel, matches } from '../../../test/fake-model.js';
 import { FakeRedis, fakeRedisService } from '../../../test/fake-redis.js';
 import type { AuthUser } from '../../common/auth/auth-user.js';
 import { DEFAULT_CHECKLISTS } from '../catalog/catalog.defaults.js';
+import { WalletCreditsService } from '../wallet-credits/wallet-credits.service.js';
 import { AssignDto, type OrderDraftDto } from './dto/orders.dto.js';
 import { OrdersService } from './orders.service.js';
 
 type Doc = Record<string, unknown>;
-
-const get = (doc: Doc, path: string): unknown =>
-  path.split('.').reduce<unknown>((v, k) => (v == null ? undefined : (v as Doc)[k]), doc);
-
-/** Mongo-ish filter matching for the handful of operators the service uses (dotted paths included). */
-function matches(doc: Doc, filter: Doc): boolean {
-  return Object.entries(filter).every(([k, cond]) => {
-    const v = get(doc, k);
-    if (cond && typeof cond === 'object' && !(cond instanceof Types.ObjectId)) {
-      const c = cond as { $in?: unknown[]; $ne?: unknown; $gte?: number; $not?: { $elemMatch?: { $ne?: unknown } } };
-      if (c.$in) return c.$in.includes(v);
-      if ('$ne' in c) return v !== c.$ne;
-      if (c.$gte !== undefined) return (v as number) >= c.$gte;
-      // `{ $not: { $elemMatch: { $ne: x } } }` — no element differs from x (the QC guard)
-      const inner = c.$not?.$elemMatch;
-      if (inner && '$ne' in inner) return !(Array.isArray(v) && v.some((x) => x !== inner.$ne));
-    }
-    return String(v) === String(cond);
-  });
-}
-
-function apply(doc: Doc, update: Doc) {
-  Object.assign(doc, update.$set ?? {});
-  for (const k of Object.keys((update.$unset as Doc) ?? {})) delete doc[k];
-  for (const [k, v] of Object.entries((update.$inc as Record<string, number>) ?? {})) doc[k] = ((doc[k] as number) ?? 0) + v;
-  for (const [k, v] of Object.entries((update.$push as Doc) ?? {})) {
-    const items = (v as { $each?: unknown[] }).$each ?? [v];
-    doc[k] = [...((doc[k] as unknown[]) ?? []), ...items];
-  }
-}
 
 /** Shallow copy (keeps ObjectId instances, unlike structuredClone) with its own timeline array. */
 const copy = (d: Doc): Doc => ({ ...d, ...(Array.isArray(d.timeline) ? { timeline: [...d.timeline] } : {}) });
@@ -56,16 +28,17 @@ function collection(docs: Doc[]) {
       await Promise.resolve();
       const d = docs.find((x) => matches(x, filter));
       if (!d) return null;
-      apply(d, update);
+      applyUpdate(d, update);
       return copy(d);
     }),
     updateOne: vi.fn(async (filter: Doc, update: Doc) => {
       await Promise.resolve();
       const d = docs.find((x) => matches(x, filter));
       if (!d) return { modifiedCount: 0 };
-      apply(d, update);
+      applyUpdate(d, update);
       return { modifiedCount: 1 };
     }),
+    findOne: vi.fn((filter: Doc) => ({ lean: async () => { const d = docs.find((x) => matches(x, filter)); return d ? copy(d) : null; } })),
     exists: vi.fn(async (filter: Doc) => (docs.some((x) => matches(x, filter)) ? { _id: 'x' } : null)),
     find: vi.fn((filter: Doc) => ({
       sort: async () => docs.filter((x) => matches(x, filter)).map((d) => ({ ...copy(d), id: String(d._id) })),
@@ -126,6 +99,8 @@ function setup(order: Doc = {}, quoteTotal = 300000) {
     onOrderOutForDelivery: vi.fn(async () => undefined), fulfillmentFor: vi.fn(async () => new Map()),
   };
   const dispatch = { assignFromOrder: vi.fn(async () => undefined), boardInfo: vi.fn(async () => new Map()) };
+  const intents = fakeModel([], { unique: [['key']] });
+  const credits = new WalletCreditsService(intents as never, users as never, orders as never);
   const svc = new OrdersService(
     orders as never,
     users as never,
@@ -139,8 +114,9 @@ function setup(order: Doc = {}, quoteTotal = 300000) {
     uploads as never,
     jobs as never,
     dispatch as never,
+    credits as never,
   );
-  return { svc, orders, users, noop, payments, uploads, jobs, dispatch, order: orders.docs[0], user: users.docs[0] };
+  return { svc, intents, credits, orders, users, noop, payments, uploads, jobs, dispatch, order: orders.docs[0], user: users.docs[0] };
 }
 
 const walletRefunds = (users: ReturnType<typeof collection>) =>
@@ -606,5 +582,90 @@ describe('v4.2 orders ↔ jobs', () => {
     const { svc, dispatch } = setup();
     await expect(svc.assign(String(orderId), { centerId: String(new Types.ObjectId()), courierId: String(new Types.ObjectId()) }, 'admin-id')).rejects.toThrow('پیک یافت نشد');
     expect(dispatch.assignFromOrder).not.toHaveBeenCalled();
+  });
+});
+
+describe('cancellation refunds through intents (D34)', () => {
+  it('parallel cancels refund chargedAmount exactly once, through one intent', async () => {
+    const s = setup();
+    await Promise.allSettled(Array.from({ length: 5 }, () => s.svc.cancel(String(orderId), customer)));
+    expect(s.user.walletBalance).toBe(500000);
+    expect(s.intents.docs).toEqual([expect.objectContaining({ key: `cancel:${String(orderId)}`, state: 'done', cause: 'cancel_refund', amount: 500000 })]);
+    expect(s.order.creditKeys).toEqual([{ key: `cancel:${String(orderId)}`, amount: 500000 }]);
+  });
+  it('a cancel whose $inc fails still answers; the sweep refunds it once', async () => {
+    const s = setup();
+    s.users.updateOne.mockImplementationOnce(async () => { throw new Error('mongo down'); });
+    expect(await s.svc.cancel(String(orderId), customer)).toMatchObject({ status: 'cancelled', refunded: true });
+    expect(s.user.walletBalance).toBe(0);
+    expect(await s.credits.sweep(new Date(Date.now() + 120_000))).toMatchObject({ applied: 1 });
+    expect(await s.credits.sweep(new Date(Date.now() + 180_000))).toMatchObject({ applied: 0 });
+    expect(s.user.walletBalance).toBe(500000);
+  });
+  it('a crash after the compare-and-set and before apply: the sweep refunds once', async () => {
+    const s = setup();
+    vi.spyOn(s.credits, 'apply').mockImplementationOnce(async () => 'retry'); // the process died here
+    expect(await s.svc.cancel(String(orderId), customer)).toMatchObject({ status: 'cancelled', refunded: true });
+    expect(s.user.walletBalance).toBe(0);
+    expect(await s.credits.sweep(new Date(Date.now() + 120_000))).toMatchObject({ applied: 1 });
+    expect(await s.credits.sweep(new Date(Date.now() + 180_000))).toMatchObject({ applied: 0 });
+    expect(s.user.walletBalance).toBe(500000);
+  });
+  it('a lost compare-and-set leaves an intent no order took: nothing is refunded and it is voided after a day', async () => {
+    const s = setup();
+    s.orders.findOneAndUpdate.mockImplementationOnce(async () => { s.order.status = 'picked_up'; return null; }); // the courier won the race
+    await expect(s.svc.cancel(String(orderId), customer)).rejects.toThrow(/قابل لغو نیست/);
+    expect(s.user.walletBalance).toBe(0);
+    expect(await s.credits.sweep(new Date(Date.now() + 25 * 3_600_000))).toMatchObject({ voided: 1 });
+    expect(s.user.walletBalance).toBe(0);
+  });
+  it('a stale cancel (read 500,000) loses to a recount to 420,000: the fresh cancel refunds 420,000 once', async () => {
+    const s = setup();
+    const real = s.orders.findOneAndUpdate.getMockImplementation()!;
+    s.orders.findOneAndUpdate.mockImplementationOnce(async (filter: Doc, update: Doc) => {
+      s.order.chargedAmount = 420000; // the recount approval lands between the cancel's read and its compare-and-set
+      return real(filter, update);
+    });
+    expect(await s.svc.cancel(String(orderId), customer)).toMatchObject({ status: 'cancelled', refunded: true });
+    expect(s.user.walletBalance).toBe(420000);
+    expect(s.order.creditKeys).toEqual([{ key: `cancel:${String(orderId)}`, amount: 420000 }]);
+    expect(s.intents.docs).toEqual([expect.objectContaining({ state: 'done', amount: 420000 })]);
+    expect(await s.credits.sweep(new Date(Date.now() + 120_000))).toMatchObject({ applied: 0 });
+    expect(s.user.walletBalance).toBe(420000);
+  });
+  it('the admin cancel refunds through the same intent', async () => {
+    const s = setup({ status: 'picked_up' });
+    await s.svc.setStatus(String(orderId), 'cancelled');
+    expect(s.user.walletBalance).toBe(500000);
+    expect(s.intents.docs).toEqual([expect.objectContaining({ key: `cancel:${String(orderId)}`, state: 'done' })]);
+  });
+});
+
+describe('create failure after the wallet debit (D34, F7)', () => {
+  const tomorrow = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Tehran' }).format(new Date(Date.now() + 86_400_000));
+  const walletDraft = { children: [{ name: 'a', grade: 'g', color: 'blue', books: 1 }], services: [], payMethod: 'wallet', pickup: { address: 'addr', phone: '09123456789', date: tomorrow, slot: '۱۰ تا ۱۲' } } as unknown as OrderDraftDto;
+
+  it('the compensating credit goes through a createfail intent and happens once', async () => {
+    const s = setup();
+    s.user.walletBalance = 1_000_000;
+    s.orders.create.mockRejectedValueOnce(new Error('insert failed'));
+    await expect(s.svc.create(customer, walletDraft)).rejects.toThrow('insert failed');
+    expect(s.user.walletBalance).toBe(1_000_000);
+    expect(s.intents.docs).toEqual([expect.objectContaining({ key: expect.stringMatching(/^createfail:[0-9a-f]{24}$/), state: 'done', cause: 'create_failed', amount: 300000 })]);
+    expect(await s.credits.sweep(new Date(Date.now() + 120_000))).toMatchObject({ applied: 0 });
+    expect(s.user.walletBalance).toBe(1_000_000);
+  });
+  it('a crash during the credit: the sweep credits it once', async () => {
+    const s = setup();
+    s.user.walletBalance = 1_000_000;
+    s.orders.create.mockRejectedValueOnce(new Error('insert failed'));
+    const real = s.users.updateOne.getMockImplementation()!;
+    s.users.updateOne.mockImplementationOnce(real); // the checkout debit
+    s.users.updateOne.mockImplementationOnce(async () => { throw new Error('mongo down'); }); // the credit
+    await expect(s.svc.create(customer, walletDraft)).rejects.toThrow('insert failed');
+    expect(s.user.walletBalance).toBe(700000);
+    expect(await s.credits.sweep(new Date(Date.now() + 120_000))).toMatchObject({ applied: 1 });
+    expect(await s.credits.sweep(new Date(Date.now() + 180_000))).toMatchObject({ applied: 0 });
+    expect(s.user.walletBalance).toBe(1_000_000);
   });
 });

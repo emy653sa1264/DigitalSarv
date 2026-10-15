@@ -1,6 +1,6 @@
 /** v4.4 recoverable wallet credits (D34, S1) — pure: causes, states, keys and timings. No Mongo here. */
 
-export const WALLET_CREDIT_CAUSES = ['gateway_mismatch', 'gateway_capture', 'cancel_refund', 'recount_refund', 'due_wallet', 'due_reversal'] as const;
+export const WALLET_CREDIT_CAUSES = ['gateway_mismatch', 'gateway_capture', 'cancel_refund', 'recount_refund', 'due_wallet', 'due_reversal', 'create_failed'] as const;
 export type WalletCreditCause = (typeof WALLET_CREDIT_CAUSES)[number];
 export const WALLET_CREDIT_STATES = ['pending', 'done', 'void', 'reversed'] as const;
 export type WalletCreditState = (typeof WALLET_CREDIT_STATES)[number];
@@ -21,13 +21,15 @@ export const INSUFFICIENT_NOTE = 'insufficient wallet balance';
 export const walletKey = {
   gateway: (orderId: string, authority: string) => `gw:${orderId}:${authority}`,
   cancel: (orderId: string) => `cancel:${orderId}`,
+  /** The checkout debit's own reference (a fresh ObjectId): there is no order when order creation failed. */
+  createFail: (debitRef: string) => `createfail:${debitRef}`,
   recount: (orderId: string, n: number) => `recount:${orderId}:${n}`,
   due: (orderId: string, requestId: string) => `due:${orderId}:${requestId}`,
   dueBack: (dueKey: string) => `dueback:${dueKey}`,
 };
 
 /** Credits the deciding order write must confirm (its `creditKeys` holds the key) before the wallet moves. */
-export const needsOrderMarker = (cause: WalletCreditCause): boolean => cause !== 'due_wallet' && cause !== 'due_reversal';
+export const needsOrderMarker = (cause: WalletCreditCause): boolean => cause !== 'due_wallet' && cause !== 'due_reversal' && cause !== 'create_failed';
 
 /** Transient errors back off exponentially, capped. `errors` = failures so far (0 -> first delay). */
 export const BACKOFF_BASE_MS = 60_000;
@@ -45,6 +47,7 @@ export function orderIdOfKey(key: string): string | null {
 export function causeOfKey(key: string): WalletCreditCause {
   switch (key.split(':')[0]) {
     case 'cancel': return 'cancel_refund';
+    case 'createfail': return 'create_failed';
     case 'recount': return 'recount_refund';
     case 'due': return 'due_wallet';
     case 'dueback': return 'due_reversal';

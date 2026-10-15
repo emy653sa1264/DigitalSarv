@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   ServiceUnavailableException,
 } from '@nestjs/common';
@@ -36,6 +37,8 @@ import { PricingService } from '../pricing/pricing.service.js';
 import type { OrderDraft } from '../pricing/pricing.types.js';
 import { RulesService } from '../rules/rules.service.js';
 import { UploadsService } from '../uploads/uploads.service.js';
+import { walletKey } from '../wallet-credits/wallet-credit-model.js';
+import { WalletCreditsService } from '../wallet-credits/wallet-credits.service.js';
 import { User } from '../users/user.schema.js';
 import type { AdminOrdersQueryDto, AssignDto, OrderDraftDto } from './dto/orders.dto.js';
 import { applyPlacementEffects } from './order-effects.js';
@@ -60,6 +63,8 @@ import { pickupProblem } from './pickup-rules.js';
 
 @Injectable()
 export class OrdersService {
+  private readonly logger = new Logger(OrdersService.name);
+
   constructor(
     @InjectModel(Order.name) private readonly orders: Model<Order>,
     @InjectModel(User.name) private readonly users: Model<User>,
@@ -73,6 +78,7 @@ export class OrdersService {
     private readonly uploads: UploadsService,
     private readonly jobs: JobsService,
     private readonly dispatch: DispatchService,
+    private readonly credits: WalletCreditsService,
   ) {}
 
   // ------------------------------------------------------------ order codes
@@ -159,6 +165,7 @@ export class OrdersService {
       ruleIds: appliedRuleIds,
     };
 
+    const debitRef = String(new Types.ObjectId()); // names this checkout debit if it has to be given back (D34)
     if (dto.payMethod === 'wallet') {
       const res = await this.users.updateOne(
         { _id: user._id, walletBalance: { $gte: quote.total } },
@@ -215,9 +222,7 @@ export class OrdersService {
       } catch (err) {
         const dup = (err as { code?: number }).code === 11000;
         if (!dup || attempt >= 2) {
-          if (dto.payMethod === 'wallet') {
-            await this.users.updateOne({ _id: user._id }, { $inc: { walletBalance: quote.total } });
-          }
+          if (dto.payMethod === 'wallet') await this.giveBackDebit(user._id, debitRef, quote.total);
           throw err;
         }
         await this.ensureSequence();
@@ -325,6 +330,29 @@ export class OrdersService {
     };
   }
 
+  /**
+   * D34 (F7): the checkout wallet debit goes back through a `createfail:<debitRef>` intent. No order exists, so the intent needs no
+   * order marker (cause `create_failed`): it is written only here, after the failure was observed, and the user key makes its
+   * `$inc` happen once whoever runs it (this request or the sweep). Never throws; if even the intent cannot be written the old
+   * direct guarded credit is the last resort. A process crash between the debit and this call is outside what any scheme can see.
+   */
+  private async giveBackDebit(userId: Types.ObjectId, debitRef: string, amount: number): Promise<void> {
+    if (!(amount > 0)) return;
+    const key = walletKey.createFail(debitRef);
+    try {
+      await this.credits.prepare({ key, userId, orderId: debitRef, orderCode: '-', amount, cause: 'create_failed', note: 'order creation failed after the wallet debit' });
+    } catch (err) {
+      this.logger.error(`wallet give-back ${key} (${amount} toman): intent not written, crediting directly: ${(err as Error).message}`);
+      try {
+        await this.users.updateOne({ _id: userId }, { $inc: { walletBalance: amount } });
+      } catch (err2) {
+        this.logger.error(`wallet give-back ${key} (${amount} toman, user ${String(userId)}) failed - settle manually: ${(err2 as Error).message}`);
+      }
+      return;
+    }
+    await this.credits.apply(key); // never throws; a failed $inc is retried by the sweep
+  }
+
   async cancel(id: string, user: AuthUser): Promise<Record<string, unknown>> {
     const tooLate = () => new BadRequestException('این سفارش دیگر قابل لغو نیست؛ با پشتیبانی تماس بگیرید');
     // a gateway payment may land between the read and the compare-and-set (pending_payment → registered
@@ -342,22 +370,30 @@ export class OrdersService {
    * The single cancellation path (customer + admin). The status change is a compare-and-set guarded by
    * `guard` and by the `paid` flag read here; for an order paid by wallet or gateway `refunded: true` is
    * set in the same update, so however many cancels race, exactly one wins and the wallet is credited
-   * `chargedAmount` exactly once. Returns null when the guard no longer matches (the order changed first).
+   * `chargedAmount` exactly once through the `cancel:<orderId>` wallet intent (D34). Returns null when the guard no longer matches (the order changed first).
    */
   private async cancelAndRefund(order: OrderDocument, guard: QueryFilter<Order>, byRole: 'customer' | 'admin', by?: string): Promise<OrderDocument | null> {
-    // chargedAmount / paidVia are only set together with `paid`, so guarding on `paid` makes the pre-read safe
+    // chargedAmount / paidVia are only set together with `paid`, so guarding on `paid` makes the pre-read safe;
+    // the amount is guarded too: a recount refund or a paid difference may change chargedAmount (D35)
     const amount = refundableAmount(order);
+    const key = walletKey.cancel(String(order._id));
+    // D34: intent -> this compare-and-set (pushes { key, amount }) -> guarded $inc; a crash anywhere is finished by the sweep.
+    // The amount comes from the order read here, never from the intent row (first writer wins); a stale cancel fails its CAS.
+    if (amount > 0) await this.credits.prepare({ key, userId: order.customerId, orderId: order._id, orderCode: order.code, amount, cause: 'cancel_refund' });
     const updated = await this.orders.findOneAndUpdate(
-      { ...guard, _id: order._id, refunded: { $ne: true }, paid: order.paid ? true : { $ne: true } },
+      {
+        ...guard, _id: order._id, refunded: { $ne: true }, paid: order.paid ? true : { $ne: true },
+        ...(amount > 0 ? { chargedAmount: order.chargedAmount ?? null } : {}),
+      },
       {
         $set: { status: 'cancelled', ...(amount > 0 ? { refunded: true, paid: false } : {}) },
-        $push: { timeline: timelineEntry('cancelled') },
+        $push: { timeline: timelineEntry('cancelled'), ...(amount > 0 ? { creditKeys: { key, amount } } : {}) },
         $inc: { __v: 1 },
       },
       { returnDocument: 'after' },
     );
     if (!updated) return null;
-    if (amount > 0) await this.users.updateOne({ _id: updated.customerId }, { $inc: { walletBalance: amount } });
+    if (amount > 0) await this.credits.apply(key); // never throws; a failed $inc is retried by the sweep
     await this.notifications.dispatch('cancelled', updated);
     // v4.2: the job follows (best-effort; records the stage it was cancelled at)
     if (by) await this.jobs.cancelForOrder(updated, byRole, by);
