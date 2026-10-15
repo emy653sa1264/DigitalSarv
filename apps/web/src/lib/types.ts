@@ -417,6 +417,9 @@ export const ORDER_FLOW: OrderStatus[] = [
   'delivered',
 ]
 
+/** v4.4 (D35): money settled after checkout. */
+export interface OrderSettlement { kind: 'recount_refund' | 'due_wallet' | 'due_cash'; amount: number; at: string }
+
 export interface Order {
   id: string
   code: string
@@ -430,6 +433,9 @@ export interface Order {
   payMethod: PayMethod
   paid: boolean
   chargedAmount?: number
+  /** v4.4 (D35): what is still owed after a recount raised the total (only when > 0). */
+  amountDue?: number
+  settlements?: OrderSettlement[]
   paidVia?: PayMethod
   refunded?: boolean
   delivery?: OrderDelivery
@@ -522,6 +528,8 @@ export interface CourierTask {
   done: boolean
   from?: { name: string; address: string; phone: string }
   dropoff?: { name: string; address: string; phone: string }
+  /** v4.4 (D35): cash to take at the door — an unpaid COD total or a difference due. */
+  collect?: number
   lat?: number
   lng?: number
 }

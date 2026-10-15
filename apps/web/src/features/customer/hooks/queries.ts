@@ -126,6 +126,19 @@ export function useCancelOrder() {
   })
 }
 
+/** v4.4 (D35): pay a difference due from the wallet. The caller owns `requestId` (one per banner; a retry or double click reuses it, a new one only after a top-up). */
+export function usePayDue() {
+  return useMutation({
+    mutationFn: ({ id, requestId }: { id: string; requestId: string }) => api.post<Order>(`/orders/${id}/pay-due`, { method: 'wallet', requestId }),
+    onSuccess: (order) => {
+      queryClient.setQueryData(customerKeys.order(order.id), order)
+      void queryClient.invalidateQueries({ queryKey: customerKeys.order(order.id) })
+      void queryClient.invalidateQueries({ queryKey: customerKeys.orders })
+      void queryClient.invalidateQueries({ queryKey: qk.me })
+    },
+  })
+}
+
 export function useReorder() {
   return useMutation({ mutationFn: (id: string) => api.post<OrderDraft>(`/orders/${id}/reorder`) })
 }

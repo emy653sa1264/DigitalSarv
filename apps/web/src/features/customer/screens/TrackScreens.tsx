@@ -1,15 +1,16 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Navigate, useNavigate, useParams } from 'react-router'
 import { Phone, Route } from 'lucide-react'
 import { EmptyState, ErrorState, GradientBadge, InfoBanner, LoadingBlock } from '@/components/brand'
 import { Button } from '@/components/ui/button'
 import { notify } from '@/components/ui/sonner'
 import { fa, jalaliDayTime, money } from '@/lib/format'
-import { ORDER_FLOW, ORDER_STATUS_LABEL, type Order, type OrderStatus } from '@/lib/types'
+import { ORDER_FLOW, ORDER_STATUS_LABEL, type Order, type OrderSettlement, type OrderStatus } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { useAuth } from '@/stores/auth'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { Screen } from '../components/Screen'
-import { isActiveOrder, useCancelOrder, useMyOrders, useOrder, usePayOrder } from '../hooks/queries'
+import { isActiveOrder, useCancelOrder, useMyOrders, useOrder, usePayDue, usePayOrder } from '../hooks/queries'
 import { useSupportPhone } from '../hooks/useOps'
 import { jalaliWeekdayLabel } from '../lib/jalali'
 import { orderBooks, orderIcon, orderKindLabel, orderTone } from '../lib/orders'
@@ -63,6 +64,12 @@ export function TrackScreen() {
   )
 }
 
+const SETTLEMENT_TEXT: Record<OrderSettlement['kind'], (amount: string) => string> = {
+  recount_refund: (a) => `پس از شمارش کتاب‌ها ${a} به کیف پول شما برگشت داده شد.`,
+  due_wallet: (a) => `مابه‌التفاوت ${a} از کیف پول شما پرداخت شد.`,
+  due_cash: (a) => `مابه‌التفاوت ${a} هنگام تحویل پرداخت شد.`,
+}
+
 function SupportLink({ className }: { className?: string }) {
   const support = useSupportPhone()
   return (
@@ -76,6 +83,10 @@ function SupportLink({ className }: { className?: string }) {
 function Timeline({ order: o }: { order: Order }) {
   const payment = usePayOrder()
   const cancel = useCancelOrder()
+  const payDue = usePayDue()
+  const walletBalance = useAuth((s) => s.user?.walletBalance)
+  // One requestId per banner: a retry or double click is the same payment; only a failed top-up gets a fresh one.
+  const dueRequestId = useRef(crypto.randomUUID())
   const support = useSupportPhone()
   const [confirming, setConfirming] = useState(false)
 
@@ -173,6 +184,36 @@ function Timeline({ order: o }: { order: Order }) {
           <SupportLink className="mt-2" />
         </InfoBanner>
       )}
+
+      {!!o.amountDue && (
+        <InfoBanner tone="amber" className="mt-3">
+          <div>پس از شمارش کتاب‌ها مبلغ سفارش {money(o.amountDue)} بیشتر شد. آن را از کیف پول بپردازید یا هنگام تحویل به پیک بدهید.</div>
+          {walletBalance !== undefined && <div className="mt-1 text-[12.5px] font-bold">موجودی کیف پول: {money(walletBalance)}</div>}
+          <button
+            type="button"
+            disabled={payDue.isPending}
+            onClick={() =>
+              payDue.mutate(
+                { id: o.id, requestId: dueRequestId.current },
+                {
+                  onSuccess: () => notify(`مابه‌التفاوت ${money(o.amountDue!)} از کیف پول پرداخت شد`),
+                  onError: (e) => {
+                    if (e.message.includes('موجودی کیف پول کافی نیست')) dueRequestId.current = crypto.randomUUID()
+                  },
+                },
+              )
+            }
+            className="mt-2 cursor-pointer rounded-full bg-accent px-4 py-[9px] text-[12.5px] font-extrabold text-white shadow-[0_6px_14px_rgba(47,109,246,0.35)] hover:bg-accent-dark disabled:opacity-60"
+          >
+            {payDue.isPending ? 'در حال پرداخت…' : 'پرداخت از کیف پول'}
+          </button>
+        </InfoBanner>
+      )}
+      {o.settlements?.map((s, i) => (
+        <InfoBanner key={`${s.kind}-${i}`} tone={s.kind === 'recount_refund' ? 'green' : 'blue'} className="mt-3">
+          {SETTLEMENT_TEXT[s.kind](money(s.amount))}
+        </InfoBanner>
+      ))}
 
       <ol className="mt-4">
         {flow.map((status, i) => {
