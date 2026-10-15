@@ -293,7 +293,17 @@ describe.skipIf(!up)('security and history (e2e: §90, §91, D34, D35)', () => {
       const got = await Promise.all(reads.map(async (p) => (await k.http().get(p).set(k.authH(c)).expect(200)).body));
       const text = JSON.stringify(got);
       // positive controls: the scan below looks at real data (C has a job and a price row), so a vacuous pass is impossible
-      expect(JSON.stringify(got[4])).toContain(job.id);
+      // opening the detail (read in parallel above) marks the job seen and moves it from «new» to «pending», and the list
+      // is paged by deadline (earlier runs can push it past page 1) — so look in both tabs, page by page
+      let listed = false;
+      for (const tab of ['new', 'pending']) {
+        for (let p = 1; p <= 20 && !listed; p++) {
+          const page = (await k.http().get(`/api/provider/jobs?tab=${tab}&limit=100&page=${p}`).set(k.authH(c)).expect(200)).body as { items: { id: string }[] };
+          listed = page.items.some((j) => j.id === job.id);
+          if (page.items.length < 100) break;
+        }
+      }
+      expect(listed).toBe(true);
       expect(JSON.stringify(got[6])).toContain(job.id);
       const row = (got[2] as { comboKey: string; current: { price: number } | null }[]).find((r) => r.comboKey === COLOR);
       expect(row?.current?.price).toBe(8123);

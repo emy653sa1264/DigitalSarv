@@ -24,6 +24,7 @@ pnpm dev:web          # http://localhost:5173 (proxies /api → :3000)
 pnpm --filter api test        # vitest unit tests (pricing etc.)
 pnpm --filter api test:e2e    # needs db:up
 pnpm --filter web build       # tsc -b && vite build
+pnpm --filter web e2e         # browser regression (D37), see Gotchas
 ```
 
 Dev logins are OTP-by-phone; the OTP request response includes `devCode` only when `OTP_DEV_CODE=1` and `NODE_ENV !== 'production'` (set in `apps/api/.env`). Outside `development`/`test`, `JWT_SECRET` is required at boot.
@@ -45,6 +46,8 @@ Admin `09120000000`, courier `09121111111`, provider `09122222222` (چاپ نگ�
 - Print/docs/flyer orders have no home pickup slot; only school books, cartridges and repairs do (`needsHomePickup`). Fees never depend on the delivery method (D22) — never change `computeQuote` for delivery.
 - **v4.3 ledger** (`modules/ledger`, contract «v4.3»): provider money lives only in `ledgerEntries` — append-only, every write a keyed upsert (`LedgerService.insertOnce`); a counted amount is never edited (corrections are adjustments, a payout is undone by a `payout_void`); only a pending credit's amount is set once. Admin entries go through `LedgerService.withSlot` (per-provider `rev` + unique `slot`) so a payout never exceeds the balance; balances are always derived from the entries. A job's move to `delivered` sets `ledgerPending` in the same `cas` and the ledger credits it afterwards (the dispatch tick retries); never credit by hand. Provider credit = the assignment snapshot (D26); discounts and fees are Digital Sarv's share. Finance permissions `ledger_view` / `ledger_adjust` / `payout_record`; the bank account (Sheba) is admin-only (`payout_record`), `select:false`, changes are kept in `bankAccountHistory`, and it is shown masked to the provider and in responses.
 - Provider-only price-book combos (`school|…`, `docs|…`, `flyer|…`, `cart|…`, `repair|…`, `extra|…`, D29) never get a customer version; the customer quote never reads them.
+- **v4.4 wallet credits** (`modules/wallet-credits`, contract «v4.4»): never `$inc` a wallet directly for an automatic credit or refund. Write the intent (`WalletCreditsService.prepare`), push its key into `Order.creditKeys` in the same compare-and-set that decides the money, then `apply(key)` (never throws; the minute sweep finishes anything a crash left). D35: a recount approval refunds a lower total through `recount:<orderId>:<n>`; a higher total is `amountDue`, paid by `POST /orders/:id/pay-due` (wallet, error code `WALLET_INSUFFICIENT`) or in cash at delivery via `paymentOnDelivery` (`orders/order-money.ts`) — `chargedAmount` is always what was collected.
+- Security e2e: `apps/api/test/security.e2e-spec.ts` (§90, §91) — every refusal must pass `expectSafeError` (Nest error shape, Persian message, no ids / names / stack). Add a line there for every new route that takes an id.
 
 ## Gotchas
 
