@@ -62,6 +62,14 @@ import { Order, OrderDocument, type DeferredEffects } from './order.schema.js';
 import { amountDue, DUE_CLOSED, paymentOnDelivery, recountRefund, recountSeq } from './order-money.js';
 import { pickupProblem } from './pickup-rules.js';
 
+/** F10: what a customer is told when a difference cannot be paid in this status (asked before «nothing due»). */
+const DUE_CLOSED_MESSAGE: Record<string, string> = {
+  cancelled: 'سفارش لغو شده است',
+  delivered: 'سفارش تحویل شده؛ مابه‌التفاوت هنگام تحویل تسویه شد',
+  pending_payment: 'ابتدا پرداخت سفارش را کامل کنید',
+  awaiting_approval: 'پرداخت مابه‌التفاوت پس از تأیید سفارش ممکن است',
+};
+
 @Injectable()
 export class OrdersService {
   private readonly logger = new Logger(OrdersService.name);
@@ -316,7 +324,7 @@ export class OrdersService {
     const seen = await this.credits.dueRequest(order.customerId, String(order._id), dto.requestId);
     if (seen === 'other') throw new ConflictException('این شناسه درخواست برای پرداخت دیگری استفاده شده است');
     if (seen === 'done') return this.customerView(order); // an idempotent replay of a payment that already succeeded
-    if (DUE_CLOSED.includes(order.status)) throw new BadRequestException('پرداخت مابه‌التفاوت پس از تأیید سفارش ممکن است');
+    if (DUE_CLOSED.includes(order.status)) throw new BadRequestException(DUE_CLOSED_MESSAGE[order.status] ?? 'مبلغی برای پرداخت باقی نمانده است');
     const due = amountDue(order);
     if (!due) throw new BadRequestException('مبلغی برای پرداخت باقی نمانده است');
     const key = walletKey.due(String(order._id), dto.requestId);

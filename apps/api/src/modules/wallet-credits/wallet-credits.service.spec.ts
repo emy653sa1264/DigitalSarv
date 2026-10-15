@@ -371,3 +371,26 @@ describe('paying a difference from the wallet (D35)', () => {
     expect(s.order.chargedAmount).toBe(130000);
   });
 });
+
+describe('a due payment without money frees its key (D35, M3/M4)', () => {
+  it('the voided row keeps origKey, and the same requestId works after a top-up', async () => {
+    const s = setup({ balance: 10000, order: { status: 'picked_up', chargedAmount: 100000, quote: { total: 130000 } } });
+    const key = walletKey.due(String(s.orderId), 'r1');
+    const input = { key, userId: s.userId, orderId: s.orderId, orderCode: '10500', amount: -30000, cause: 'due_wallet' as const, base: 100000 };
+    await s.svc.prepare(input);
+    expect(await s.svc.apply(key)).toBe('insufficient');
+    expect(s.intents.docs[0]).toMatchObject({ state: 'void', origKey: key });
+    expect(s.intents.docs[0].key).not.toBe(key);
+    s.user.walletBalance = 50000;
+    await s.svc.prepare(input);
+    expect(await s.svc.apply(key)).toBe('done');
+    expect(s.user.walletBalance).toBe(20000);
+    expect(s.order.chargedAmount).toBe(130000);
+  });
+  it('a missing account is reported as missing, not as insufficient', async () => {
+    const s = setup({ balance: 100000, order: { status: 'picked_up', chargedAmount: 100000, quote: { total: 130000 } } });
+    const key = walletKey.due(String(s.orderId), 'r1');
+    await s.svc.prepare({ key, userId: new Types.ObjectId(), orderId: s.orderId, orderCode: '10500', amount: -30000, cause: 'due_wallet', base: 100000 });
+    expect(await s.svc.apply(key)).toBe('missing');
+  });
+});

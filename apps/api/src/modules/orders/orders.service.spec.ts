@@ -892,10 +892,16 @@ describe('POST /orders/:id/pay-due (D35)', () => {
     expect(poor.order.chargedAmount).toBe(420000);
   });
   it('each closed status answers the status message before any «nothing due»', async () => {
-    for (const status of ['awaiting_approval', 'pending_payment', 'cancelled', 'delivered']) {
+    const texts: Record<string, string> = {
+      awaiting_approval: 'پرداخت مابه‌التفاوت پس از تأیید سفارش ممکن است',
+      pending_payment: 'ابتدا پرداخت سفارش را کامل کنید',
+      cancelled: 'سفارش لغو شده است',
+      delivered: 'سفارش تحویل شده؛ مابه‌التفاوت هنگام تحویل تسویه شد',
+    };
+    for (const [status, text] of Object.entries(texts)) {
       for (const money of [{ chargedAmount: 420000, quote: { total: 500000 } }, {}]) {
         const s = setup({ status, ...money });
-        await expect(s.svc.payDue(String(orderId), customer, { method: 'wallet', requestId: rid })).rejects.toThrow('پرداخت مابه‌التفاوت پس از تأیید سفارش ممکن است');
+        await expect(s.svc.payDue(String(orderId), customer, { method: 'wallet', requestId: rid })).rejects.toThrow(text);
       }
     }
   });

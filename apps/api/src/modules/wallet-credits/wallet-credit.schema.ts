@@ -40,4 +40,6 @@ export const WalletCreditSchema = SchemaFactory.createForClass(WalletCredit);
 WalletCreditSchema.index({ state: 1, createdAt: 1 });
 WalletCreditSchema.index({ state: 1, doneAt: 1 }, { partialFilterExpression: { keyPulled: { $exists: false } }, name: 'settled_keys' });
 WalletCreditSchema.index({ state: 1, voidedAt: 1 }, { partialFilterExpression: { origKey: { $exists: true } }, name: 'voided_origkey' });
+// serves dueRequest (one customer's due:<orderId>:<requestId> keys)
+WalletCreditSchema.index({ userId: 1, key: 1 }, { name: 'user_key' });
 WalletCreditSchema.index({ state: 1, lastSweptAt: 1, createdAt: 1 }, { name: 'sweep_rotation' });

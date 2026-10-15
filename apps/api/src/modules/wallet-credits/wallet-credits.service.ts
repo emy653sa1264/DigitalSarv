@@ -105,11 +105,18 @@ export class WalletCreditsService {
     try {
       doc = (await this.intents.findOne({ key }).lean()) as WalletCreditRow | null;
       if (doc?.state === 'done') return 'done';
-      if (doc?.state === 'reversed') return 'void';
+      if (doc?.state === 'reversed') {
+        if (doc.cause === 'due_wallet') await this.giveBackDue(doc); // repairs a crash between the switch and the give-back (same requestId again)
+        return 'void';
+      }
       const orderId = doc?.orderId ? String(doc.orderId) : orderIdOfKey(key);
       const marker = orderId ? await this.markerOf(orderId, key) : null;
       if (!doc || doc.state === 'void') {
-        if (!marker) return doc ? (doc.note === INSUFFICIENT_NOTE ? 'insufficient' : 'void') : 'missing';
+        if (!marker) {
+          if (doc) return doc.note === INSUFFICIENT_NOTE ? 'insufficient' : 'void';
+          // a due payment voided for lack of money renamed its key: asking again is still «insufficient» (a new prepare is a fresh try)
+          return (await this.intents.exists({ origKey: key, note: INSUFFICIENT_NOTE })) ? 'insufficient' : 'missing';
+        }
         doc = await this.revive(key, marker, doc); // the order carries the credit but the intent was voided or lost
       }
       if (doc.state === 'done') return 'done';
@@ -422,8 +429,13 @@ export class WalletCreditsService {
   private async finishDue(doc: WalletCreditRow, ctx: { moved: boolean }): Promise<ApplyResult> {
     const due = -doc.amount;
     if (!(await this.move(doc, ctx))) {
-      await this.intents.updateOne({ _id: doc._id, state: 'pending' }, { $set: { state: 'void', note: INSUFFICIENT_NOTE } });
-      return 'insufficient';
+      if (!(await this.users.exists({ _id: doc.userId }))) {
+        this.logger.error(`wallet payment ${doc.key}: the customer account is missing`);
+        await this.failed(doc, new Error('customer account missing'), 'missing');
+        return 'missing';
+      }
+      // the key is freed (renamed, `origKey` kept so pass C can revive it) - the same requestId can be tried again after a top-up
+      return (await this.voidIntent(doc, INSUFFICIENT_NOTE)) ? 'insufficient' : 'retry';
     }
     const base = doc.base ?? 0;
     const took = await this.orders.updateOne(
@@ -434,11 +446,24 @@ export class WalletCreditsService {
       await this.markDone(doc);
       return 'done';
     }
-    const back = walletKey.dueBack(doc.key);
-    await this.prepare({ key: back, userId: doc.userId, orderId: doc.orderId!, orderCode: doc.orderCode ?? '', amount: due, cause: 'due_reversal', base });
-    await this.intents.updateOne({ _id: doc._id, state: 'pending' }, { $set: { state: 'reversed', doneAt: new Date(), note: 'the order no longer took the payment' } });
+    // only the call whose switch to `reversed` took effect (or a row already reversed) writes the give-back, so a payment that was
+    // finished meanwhile is never reversed. RESIDUAL: a crash between the switch and the give-back leaves a reversed row without a
+    // give-back; asking again with the same requestId repairs it (run), the sweep does not look at reversed rows.
+    const sw = await this.intents.updateOne({ _id: doc._id, state: 'pending' }, { $set: { state: 'reversed', doneAt: new Date(), note: 'the order no longer took the payment' } });
+    if (sw.modifiedCount !== 1) {
+      const cur = (await this.intents.findOne({ _id: doc._id }).lean()) as WalletCreditRow | null;
+      if (cur?.state === 'done') return 'done';
+      if (cur?.state !== 'reversed') return 'retry';
+    }
     this.logger.warn(`order ${doc.orderCode}: wallet payment ${doc.key} of ${due} toman could not be taken - given back`);
-    await this.apply(back);
+    await this.giveBackDue(doc);
     return 'void';
+  }
+
+  /** The debit of a due payment goes back once (`dueback:` intent, idempotent by key). */
+  private async giveBackDue(doc: WalletCreditRow): Promise<void> {
+    const back = walletKey.dueBack(doc.key);
+    await this.prepare({ key: back, userId: doc.userId, orderId: doc.orderId!, orderCode: doc.orderCode ?? '', amount: -doc.amount, cause: 'due_reversal', base: doc.base });
+    await this.apply(back);
   }
 }
