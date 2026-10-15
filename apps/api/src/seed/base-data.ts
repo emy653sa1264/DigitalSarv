@@ -136,6 +136,9 @@ export const NOTIFICATIONS = [
   { event: 'provider_unavailable', channel: 'push', text: 'مجری این سفارش در دسترس نیست؛ تخصیص را بررسی کنید.', on: true },
   { event: 'assigned', channel: 'push', text: 'سفارش شما به واحد تولید سپرده شد.', on: true },
   { event: 'ready_for_pickup', channel: 'push', text: 'سفارش شما آماده تحویل حضوری است.', on: true },
+  // v4.3 settlement (D19, R12): provider «سرو مجری»; the amount is appended
+  { event: 'payout_recorded', channel: 'push', text: 'پرداخت تسویه برای شما ثبت شد.', on: true },
+  { event: 'payout_voided', channel: 'push', text: 'یک پرداخت تسویه باطل شد.', on: true },
 ] as const;
 
 export const ZONES = [

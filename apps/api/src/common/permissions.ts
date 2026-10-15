@@ -5,6 +5,8 @@ export const PERMISSIONS = [
   'provider_view', 'provider_edit', 'provider_manage',
   'dispatch_view', 'dispatch_assign', 'dispatch_reassign',
   'provider_order_view', 'provider_order_accept', 'provider_order_status',
+  // v4.3 (D33): statements, balances, wallet report · pending amounts, compensation, adjustments · payouts and bank accounts
+  'ledger_view', 'ledger_adjust', 'payout_record',
 ] as const;
 export type Permission = (typeof PERMISSIONS)[number];
 

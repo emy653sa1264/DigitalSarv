@@ -186,15 +186,19 @@ export const DISPATCH_EVENTS = [
   'assigned', 'ready_for_pickup',
 ] as const;
 export type DispatchEvent = (typeof DISPATCH_EVENTS)[number];
-export const NOTIFICATION_EVENTS = [...ORDER_STATUSES, ...DISPATCH_EVENTS] as const;
+/** v4.3 settlement events (D19, R12) — the provider's inbox + web push. */
+export const LEDGER_EVENTS = ['payout_recorded', 'payout_voided'] as const;
+export type LedgerEvent = (typeof LEDGER_EVENTS)[number];
+export const NOTIFICATION_EVENTS = [...ORDER_STATUSES, ...DISPATCH_EVENTS, ...LEDGER_EVENTS] as const;
 export type NotificationEvent = (typeof NOTIFICATION_EVENTS)[number];
 export const NOTIFICATION_AUDIENCES = ['customer', 'provider', 'admin'] as const;
 export type NotificationAudience = (typeof NOTIFICATION_AUDIENCES)[number];
-const EVENT_AUDIENCE: Record<DispatchEvent, NotificationAudience> = {
+const EVENT_AUDIENCE: Record<DispatchEvent | LedgerEvent, NotificationAudience> = {
   job_assigned: 'provider', job_delivery_assigned: 'provider', job_withdrawn: 'provider', job_cancelled: 'provider',
   job_changed: 'provider', job_deadline: 'provider',
   job_rejected: 'admin', job_timeout: 'admin', job_failed: 'admin', job_late: 'admin', provider_unavailable: 'admin',
   assigned: 'customer', ready_for_pickup: 'customer',
+  payout_recorded: 'provider', payout_voided: 'provider',
 };
 /** Who receives an event: order statuses go to the order's customer. */
 export function audienceOf(event: NotificationEvent): NotificationAudience {

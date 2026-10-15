@@ -17,7 +17,7 @@ function setup() {
   const versions = fakeModel([]);
   const sessions = { revokeUser: vi.fn(async () => undefined) };
   const jobs = fakeModel([]);
-  const svc = new ProvidersService(centers as never, orders as never, users as never, zones as never, papers as never, versions as never, sessions as never, jobs as never);
+  const svc = new ProvidersService(centers as never, orders as never, users as never, zones as never, papers as never, versions as never, sessions as never, jobs as never, fakeModel([]) as never);
   return { svc, centers, orders, users, versions, sessions, jobs, zoneId, id: String(centers.docs[0]._id) };
 }
 
@@ -135,11 +135,26 @@ describe('ProvidersService', () => {
     jobs.docs.push({ _id: new Types.ObjectId(), providerId: new Types.ObjectId(), status: 'completed' }); // another provider's job
     await expect(svc.remove(id)).resolves.toEqual({ ok: true });
   });
+  it('v4.3: a provider with ledger entries cannot be deleted (R14)', async () => {
+    const s = setup();
+    Object.assign(s.svc as object, { ledger: fakeModel([{ _id: new Types.ObjectId(), providerId: s.centers.docs[0]._id, key: 'credit:x', kind: 'credit' }]) });
+    await expect(s.svc.remove(s.id)).rejects.toThrow('این مجری در حساب تسویه سابقه دارد؛ به‌جای حذف آن را غیرفعال کنید');
+    Object.assign(s.svc as object, { ledger: fakeModel([]) });
+    await expect(s.svc.remove(s.id)).resolves.toEqual({ ok: true });
+  });
   it('self view never exposes admin notes, commission, rating or the login', async () => {
     const { svc, id } = setup();
     await svc.update(id, { adminNotes: 'محرمانه' });
     const self = await svc.self(id);
     expect(JSON.stringify(self)).not.toMatch(/adminNotes|محرمانه|commissionPct|rating|login|userId/);
     expect(self).toMatchObject({ id, name: 'چاپ نگین', status: 'active' });
+  });
+
+  it('v4.3: a provider with ledger entries cannot be deleted (R14)', async () => {
+    const s = setup();
+    Object.assign(s.svc as object, { ledger: fakeModel([{ _id: new Types.ObjectId(), providerId: s.centers.docs[0]._id, key: 'credit:x', kind: 'credit' }]) });
+    await expect(s.svc.remove(s.id)).rejects.toThrow('این مجری در حساب تسویه سابقه دارد؛ به‌جای حذف آن را غیرفعال کنید');
+    Object.assign(s.svc as object, { ledger: fakeModel([]) });
+    await expect(s.svc.remove(s.id)).resolves.toEqual({ ok: true });
   });
 });

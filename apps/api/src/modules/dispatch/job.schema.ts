@@ -74,6 +74,10 @@ export class Job {
   @Prop({ type: Boolean }) backfilled?: boolean;
   /** I4: set by every `cas` that bumps `rev`, cleared once that revision is mirrored onto the order (reconcile's scan). */
   @Prop({ type: Boolean }) mirrorPending?: boolean;
+  /** v4.3: set in the same compare-and-set that delivers the job; cleared once the ledger processed it (reconcile scans it). */
+  @Prop({ type: Boolean }) ledgerPending?: boolean;
+  /** v4.3: when the ledger processed the delivered job (credits written, or nothing to credit). */
+  @Prop({ type: Date }) ledgerAt?: Date;
   @Prop({ type: Date, required: true }) orderCreatedAt: Date;
 
   createdAt: Date;
@@ -93,3 +97,4 @@ JobSchema.index({ 'assignment.assignedAt': 1 }, { sparse: true });
 JobSchema.index({ status: 1, updatedAt: -1 });
 JobSchema.index({ updatedAt: -1 });
 JobSchema.index({ mirrorPending: 1, _id: 1 }, { sparse: true });
+JobSchema.index({ ledgerPending: 1, _id: 1 }, { sparse: true });

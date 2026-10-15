@@ -73,3 +73,12 @@ describe('notification templates (M7)', () => {
     expect(t.text).not.toContain('پیک');
   });
 });
+
+it('v4.3: every ledger event has a seeded push template for the provider audience', async () => {
+  const { NOTIFICATIONS } = await import('./base-data.js');
+  const { LEDGER_EVENTS, audienceOf } = await import('../common/constants.js');
+  for (const e of LEDGER_EVENTS) {
+    expect(NOTIFICATIONS.some((n) => n.event === e && n.channel === 'push')).toBe(true);
+    expect(audienceOf(e)).toBe('provider');
+  }
+});

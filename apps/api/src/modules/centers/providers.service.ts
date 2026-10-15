@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, Optional } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { TokenVerifier } from '../../common/auth/token-verifier.service.js';
@@ -8,6 +8,7 @@ import { assertObjectId } from '../../common/utils/object-id.js';
 import { normalizePhone } from '../../common/utils/phone.js';
 import { Paper } from '../catalog/schemas/paper.schema.js';
 import { Job } from '../dispatch/job.schema.js';
+import { LedgerEntry } from '../ledger/ledger-entry.schema.js';
 import { TERMINAL_STATUSES } from '../orders/order-helpers.js';
 import { Order } from '../orders/order.schema.js';
 import { PriceVersion } from '../price-book/schemas/price-version.schema.js';
@@ -34,6 +35,7 @@ export class ProvidersService {
     @InjectModel(PriceVersion.name) private readonly versions: Model<PriceVersion>,
     private readonly sessions: TokenVerifier,
     @InjectModel(Job.name) private readonly jobs: Model<Job>,
+    @Optional() @InjectModel(LedgerEntry.name) private readonly ledger?: Model<LedgerEntry>,
   ) {}
 
   async list(): Promise<ProviderAdmin[]> {
@@ -78,6 +80,9 @@ export class ProvidersService {
       this.orders.exists({ 'providerPricing.providerId': String(c._id) }),
     ]);
     if (job || priced) throw new ConflictException('این مجری در سفارش‌های ثبت‌شده (تولید یا ارسال) سابقه دارد؛ به‌جای حذف آن را غیرفعال کنید');
+    if (this.ledger && (await this.ledger.exists({ providerId: c._id }))) {
+      throw new ConflictException('این مجری در حساب تسویه سابقه دارد؛ به‌جای حذف آن را غیرفعال کنید');
+    }
     if (await this.versions.exists({ $or: [{ layer: 'provider', providerId: c._id }, { baseProviderId: c._id }] })) {
       throw new ConflictException('این مجری قیمت ثبت‌شده دارد؛ به‌جای حذف آن را غیرفعال کنید');
     }

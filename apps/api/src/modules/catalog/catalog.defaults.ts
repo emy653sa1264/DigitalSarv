@@ -193,3 +193,12 @@ export const defaultDispatch = (): DispatchSettings => ({ ...DEFAULT_DISPATCH })
 
 /** «محل‌های تحویل حضوری» of Digital Sarv (D17). `phone` in ASCII digits. */
 export interface PickupPoint { id: string; name: string; address: string; phone: string; hours: string; on: boolean }
+
+// ---------------------------------------------------------------- v4.3 ledger (M4)
+
+export interface LedgerSettings {
+  /** JS getDay() of the weekly provider settlement day (D31; 6 = Saturday). */
+  settlementWeekday: number;
+}
+export const DEFAULT_LEDGER: LedgerSettings = { settlementWeekday: 6 };
+export const defaultLedger = (): LedgerSettings => ({ ...DEFAULT_LEDGER });

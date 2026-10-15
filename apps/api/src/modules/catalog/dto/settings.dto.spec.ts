@@ -27,6 +27,10 @@ describe('UpdateSettingsDto (PUT /admin/settings)', () => {
     expect((await check({})).errors).toEqual([]); // everything is optional
     expect((await check({ ops: { sameDayCutoff: '' } })).errors).toEqual([]);
   });
+  it('v4.3: the ledger settlement weekday is 0–6', async () => {
+    expect((await check({ ledger: { settlementWeekday: 6 } })).errors).toEqual([]);
+    expect((await check({ ledger: { settlementWeekday: 7 } })).errors).toContain('روز هفته معتبر نیست (۰ یکشنبه … ۶ شنبه)');
+  });
 
   it('rejects out-of-range ops with Persian messages', async () => {
     for (const ops of [
@@ -75,5 +79,10 @@ describe('PickupPointDto id (ruling Q1)', () => {
   it('a malformed id is still refused', async () => {
     const dto = plainToInstance(UpdateSettingsDto, { pickupPoints: [{ ...body.pickupPoints[0], id: 'x' }] });
     expect(await validate(dto)).not.toEqual([]);
+  });
+
+  it('v4.3: the ledger settlement weekday is 0–6', async () => {
+    expect((await check({ ledger: { settlementWeekday: 6 } })).errors).toEqual([]);
+    expect((await check({ ledger: { settlementWeekday: 7 } })).errors).toContain('روز هفته معتبر نیست (۰ یکشنبه … ۶ شنبه)');
   });
 });

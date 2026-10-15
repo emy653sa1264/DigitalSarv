@@ -21,12 +21,14 @@ import {
   defaultChecklists,
   defaultCourierPay,
   defaultDispatch,
+  defaultLedger,
   defaultOps,
   defaultPrintAddons,
   PRINT_ADDON_FLAGS,
   type Checklists,
   type CourierPaySettings,
   type DispatchSettings,
+  type LedgerSettings,
   type PickupPoint,
   type OpsSettings,
   type PrintAddons,
@@ -70,6 +72,7 @@ export interface ResolvedSettings {
   printAddons: PrintAddons;
   dispatch: DispatchSettings;
   pickupPoints: PickupPoint[];
+  ledger: LedgerSettings;
 }
 
 @Injectable()
@@ -200,6 +203,7 @@ export class CatalogService {
       printAddons: { ...defaultPrintAddons(), ...defined(s?.printAddons ?? {}) } as PrintAddons,
       dispatch: { ...defaultDispatch(), ...defined(s?.dispatch ?? {}) } as DispatchSettings,
       pickupPoints: (s?.pickupPoints ?? []).map((p) => ({ id: p.id, name: p.name, address: p.address, phone: p.phone, hours: p.hours ?? '', on: p.on !== false })),
+      ledger: { ...defaultLedger(), ...defined(s?.ledger ?? {}) } as LedgerSettings,
     };
   }
 
@@ -234,8 +238,8 @@ export class CatalogService {
 
   /** «تنظیمات» (v3.3). */
   async getAdminSettings() {
-    const { ops, courier, checklists, printAddons, dispatch, pickupPoints } = await this.getSettings();
-    return { ops, courier, checklists, printAddons, dispatch, pickupPoints };
+    const { ops, courier, checklists, printAddons, dispatch, pickupPoints, ledger } = await this.getSettings();
+    return { ops, courier, checklists, printAddons, dispatch, pickupPoints, ledger };
   }
 
   /** Partial update: given fields replace the current value; lists are replaced as a whole. */
@@ -249,6 +253,7 @@ export class CatalogService {
     };
     const printAddons = { ...current.printAddons, ...defined(dto.printAddons ?? {}) } as PrintAddons;
     const dispatch = { ...current.dispatch, ...defined(dto.dispatch ?? {}) } as DispatchSettings;
+    const ledger = { ...current.ledger, ...defined(dto.ledger ?? {}) } as LedgerSettings;
     if (dispatch.urgentLeadHours > dispatch.leadHours) throw new BadRequestException('مهلت سفارش فوری نباید بیشتر از مهلت سفارش عادی باشد');
     let pickupPoints = current.pickupPoints;
     if (dto.pickupPoints) {
@@ -268,13 +273,15 @@ export class CatalogService {
     }
     // dispatch timings likewise per field: saving one timing never reverts another admin's concurrent change
     const dispatchSets = Object.fromEntries(Object.entries(defined(dto.dispatch ?? {})).map(([k, v]) => [`dispatch.${k}`, v]));
+    // the settlement weekday likewise per field
+    const ledgerSets = Object.fromEntries(Object.entries(defined(dto.ledger ?? {})).map(([k, v]) => [`ledger.${k}`, v]));
     await this.settings.updateOne(
       { _id: SETTINGS_ID },
-      { $set: { ops, courier, checklists, pickupPoints, ...addonSets, ...dispatchSets }, $setOnInsert: { prices: { ...DEFAULT_PRICES }, urgentEnabled: true } },
+      { $set: { ops, courier, checklists, pickupPoints, ...addonSets, ...dispatchSets, ...ledgerSets }, $setOnInsert: { prices: { ...DEFAULT_PRICES }, urgentEnabled: true } },
       { upsert: true },
     );
     await this.invalidate();
-    return { ops, courier, checklists, printAddons, dispatch, pickupPoints };
+    return { ops, courier, checklists, printAddons, dispatch, pickupPoints, ledger };
   }
 
   // ------------------------------------------------------------ plans

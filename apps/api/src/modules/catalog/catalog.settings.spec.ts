@@ -3,7 +3,7 @@ import { Types } from 'mongoose';
 import { fakeModel, type Doc } from '../../../test/fake-model.js';
 import { FakeRedis, fakeRedisService } from '../../../test/fake-redis.js';
 import { addDays } from '../../common/utils/dates.js';
-import { BIND_COLORS, DEFAULT_CHECKLISTS, DEFAULT_DISPATCH, DEFAULT_OPS, defaultPrintAddons } from './catalog.defaults.js';
+import { BIND_COLORS, DEFAULT_CHECKLISTS, DEFAULT_DISPATCH, DEFAULT_LEDGER, DEFAULT_OPS, defaultPrintAddons } from './catalog.defaults.js';
 import { CatalogService } from './catalog.service.js';
 
 function setup({ settings = [] as Doc[], campaign = null as Doc | null, colors = [] as Doc[], bindColors = [] as Doc[] } = {}) {
@@ -44,7 +44,7 @@ describe('«تنظیمات» (v3.3)', () => {
     expect(res.checklists.pickup).toEqual(['y']);
     expect(settings.docs[0].ops.sameDayCutoff).toBe('15:00');
     expect((await svc.getCatalog()).ops).toMatchObject({ sameDayCutoff: '15:00' }); // not the cached one
-    await expect(svc.getAdminSettings()).resolves.toEqual({ ops: res.ops, courier: res.courier, checklists: res.checklists, printAddons: defaultPrintAddons(), dispatch: DEFAULT_DISPATCH, pickupPoints: [] });
+    await expect(svc.getAdminSettings()).resolves.toEqual({ ops: res.ops, courier: res.courier, checklists: res.checklists, printAddons: defaultPrintAddons(), dispatch: DEFAULT_DISPATCH, pickupPoints: [], ledger: DEFAULT_LEDGER });
   });
 });
 
@@ -138,5 +138,17 @@ describe('v4.2 dispatch settings and pickup points', () => {
     await expect(svc.updateSettings({ dispatch: { urgentLeadHours: 60 } } as never)).rejects.toThrow('مهلت سفارش فوری نباید بیشتر از مهلت سفارش عادی باشد');
     await expect(svc.updateSettings({ dispatch: { leadHours: 12 } } as never)).rejects.toThrow('مهلت سفارش فوری');
     await expect(svc.updateSettings({ dispatch: { leadHours: 12, urgentLeadHours: 12 } } as never)).resolves.toMatchObject({ dispatch: { leadHours: 12, urgentLeadHours: 12 } });
+  });
+});
+
+describe('v4.3 «تسویه مجریان» settings (D31)', () => {
+  it('the settlement weekday reads as Saturday by default, stored values win, and it is saved per field', async () => {
+    const { svc, settings } = setup({ settings: [{ _id: 'main', prices: {} }] });
+    expect((await svc.getSettings()).ledger).toEqual({ settlementWeekday: 6 });
+    const res = await svc.updateSettings({ ledger: { settlementWeekday: 3 } } as never);
+    expect(res.ledger).toEqual({ settlementWeekday: 3 });
+    expect(settings.docs[0].ledger).toEqual({ settlementWeekday: 3 });
+    expect((await svc.getAdminSettings()).ledger).toEqual({ settlementWeekday: 3 });
+    expect(DEFAULT_LEDGER).toEqual({ settlementWeekday: 6 });
   });
 });

@@ -129,6 +129,11 @@ export class DispatchSettingsDto {
   @DispatchInt('تکمیل خودکار (ساعت)', 0, 720) autoCompleteHours?: number;
 }
 
+export class LedgerSettingsDto {
+  @IsOptional() @Type(() => Number) @IsInt(weekdayMsg) @Min(0, weekdayMsg) @Max(6, weekdayMsg)
+  settlementWeekday?: number;
+}
+
 const pointPhoneMsg = { message: 'شماره تماس محل تحویل معتبر نیست' };
 export class PickupPointDto {
   /** An empty id from the form means «new point». */
@@ -170,4 +175,7 @@ export class UpdateSettingsDto {
 
   @IsOptional() @IsArray() @ArrayMaxSize(30, { message: 'حداکثر ۳۰ محل تحویل حضوری مجاز است' }) @ValidateNested({ each: true }) @Type(() => PickupPointDto)
   pickupPoints?: PickupPointDto[];
+
+  @IsOptional() @IsObject() @ValidateNested() @Type(() => LedgerSettingsDto)
+  ledger?: LedgerSettingsDto;
 }

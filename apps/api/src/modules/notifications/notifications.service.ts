@@ -10,7 +10,7 @@ import { PushSubscription } from './push-subscription.schema.js';
 import { UserNotification, userNotificationJson } from './user-notification.schema.js';
 
 /** Reference of a provider/admin notification (contract v4.2). */
-export interface NotifyRef { orderId: unknown; orderCode: string; jobId?: unknown; url: string; tag: string }
+export interface NotifyRef { orderId?: unknown; orderCode?: string; jobId?: unknown; url: string; tag: string }
 
 const PUSH_TITLE: Record<NotificationAudience, string> = { customer: 'دیجیتال سرو', provider: 'سرو مجری', admin: 'دیجیتال سرو · مدیریت' };
 /** v3.3 rows have no audience: they are the customer's. */
@@ -98,16 +98,17 @@ export class NotificationsService {
         try {
           const userId = new Types.ObjectId(id);
           await this.inbox.create({
-            userId, orderId: new Types.ObjectId(String(ref.orderId)), orderCode: ref.orderCode, event, audience, url: ref.url, text, read: false,
+            userId, orderCode: ref.orderCode ?? '', event, audience, url: ref.url, text, read: false,
+            ...(ref.orderId ? { orderId: new Types.ObjectId(String(ref.orderId)) } : {}),
             ...(ref.jobId ? { jobId: new Types.ObjectId(String(ref.jobId)) } : {}),
           });
           void this.pushToUser(userId, { title: PUSH_TITLE[audience], body: text, url: ref.url, tag: ref.tag });
         } catch (err) {
-          this.logger.warn(`notification ${event} for order ${ref.orderCode} to ${id} failed: ${(err as Error).message}`);
+          this.logger.warn(`notification ${event} (${ref.orderCode || ref.tag}) to ${id} failed: ${(err as Error).message}`);
         }
       }
     } catch (err) {
-      this.logger.warn(`notification ${event} for order ${ref.orderCode} failed: ${(err as Error).message}`);
+      this.logger.warn(`notification ${event} (${ref.orderCode || ref.tag}) failed: ${(err as Error).message}`);
     }
   }
 

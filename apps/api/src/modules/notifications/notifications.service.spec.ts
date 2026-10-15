@@ -182,3 +182,17 @@ describe('v4.2 provider / admin notifications (§68, D19)', () => {
     expect(inbox.docs[0]).toMatchObject({ audience: 'customer', text: 'سفارش شما آماده تحویل حضوری است. — دفتر مرکزی، تهران، ونک' });
   });
 });
+
+describe('v4.3 ledger notifications (R12)', () => {
+  it('notify without an order: the inbox row has no order, the provider audience and the settlement url', async () => {
+    const { svc, templates, inbox } = setup();
+    templates.docs.push({ _id: new Types.ObjectId(), event: 'payout_recorded', channel: 'push', text: 'پرداخت تسویه برای شما ثبت شد.', on: true });
+    const u = new Types.ObjectId();
+    await svc.notify('payout_recorded', [u], { url: '/provider/settlement', tag: 'payout-1' }, ' — ۱٬۰۰۰ تومان');
+    expect(inbox.docs).toHaveLength(1);
+    expect(inbox.docs[0]).toMatchObject({ event: 'payout_recorded', audience: 'provider', orderCode: '', url: '/provider/settlement', text: 'پرداخت تسویه برای شما ثبت شد. — ۱٬۰۰۰ تومان' });
+    expect(inbox.docs[0].orderId).toBeUndefined();
+    const mine = await svc.mine(String(u), {}, 'provider');
+    expect(mine.items[0]).toMatchObject({ orderId: '', orderCode: '', url: '/provider/settlement' });
+  });
+});

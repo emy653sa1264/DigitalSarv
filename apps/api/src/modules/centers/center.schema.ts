@@ -33,6 +33,9 @@ const CapacitySchema = new MongooseSchema(
   { _id: false },
 );
 
+/** v4.3: the provider's payout account (Sheba normalized and checksum-validated, R7). */
+export interface BankAccount { sheba: string; holder: string; bankName: string; updatedAt: Date; updatedBy?: Types.ObjectId }
+
 /** A print centre = a provider («مجری», v4.1 D1). v1 fields are kept unchanged. */
 @Schema({ collection: 'centers', timestamps: true })
 export class Center {
@@ -64,6 +67,9 @@ export class Center {
   @Prop({ type: CapacitySchema, default: () => ({ perService: [] }) }) capacity: Capacity;
   @Prop({ type: [EquipmentSchema], default: [] }) equipment: Equipment[];
   @Prop({ type: [CapabilitySchema], default: [] }) capabilities: Capability[];
+
+  // ---- v4.3 settlement (D31, R7): written only by PUT /admin/ledger/providers/:id/bank
+  @Prop({ type: MongooseSchema.Types.Mixed }) bankAccount?: BankAccount;
 
   createdAt: Date;
   updatedAt: Date;
