@@ -26,6 +26,22 @@ describe('AdminBootstrapService.ensureAdmins', () => {
     expect(users.docs.find((u) => u.phone === '09120000004')).toMatchObject({ role: 'admin' }); // a new account has no tokens to revoke
   });
 
+  it('a write that certainly failed (the account reads as before) revokes nothing; one that may have landed is revoked', async () => {
+    const cust = { _id: new Types.ObjectId(), phone: '09120000005', role: 'customer' };
+    const users = fakeModel([cust]);
+    const sessions = { revokeUser: vi.fn(async () => undefined) };
+    const svc = new AdminBootstrapService(users as never, { getOrThrow: () => ({ adminPhones: [] }) } as never, sessions as never);
+    users.updateOne.mockImplementationOnce((async () => { throw new Error('mongo down'); }) as never);
+    await expect(svc.ensureAdmins(['09120000005'])).resolves.toBe(0);
+    expect(users.docs[0]).toMatchObject({ role: 'customer' });
+    expect(sessions.revokeUser).not.toHaveBeenCalled();
+    // the write landed but its answer was lost: the role changed, so the old tokens go
+    const real = users.updateOne.getMockImplementation()!;
+    users.updateOne.mockImplementationOnce((async (...a: unknown[]) => { await (real as (...x: unknown[]) => Promise<unknown>)(...a); throw new Error('connection reset'); }) as never);
+    await svc.ensureAdmins(['09120000005']);
+    expect(users.docs[0]).toMatchObject({ role: 'admin' });
+    expect(sessions.revokeUser).toHaveBeenCalledWith(String(cust._id));
+  });
   it('a Redis error while revoking never aborts the boot (F5)', async () => {
     const users = fakeModel([{ _id: new Types.ObjectId(), phone: '09120000001', role: 'customer' }]);
     const sessions = { revokeUser: vi.fn(async () => { throw new Error('redis down'); }) };

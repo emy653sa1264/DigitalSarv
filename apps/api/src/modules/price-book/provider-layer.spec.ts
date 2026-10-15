@@ -542,6 +542,19 @@ describe('M5 hardening (S9, S10, deferred M2 items)', () => {
     await svc.create(cust(8000, { comboKey: DBL }), by);
     await expect(svc.create(cust(3500), by)).resolves.toMatchObject({ unitPrice: 3500 });
   });
+  it('S10 early returns: no double-sided customer price, a double-sided key itself, or no provider price on the sibling -> no extra check', async () => {
+    const { svc, by, A } = setup();
+    await svc.create(prov(A, 7000, { comboKey: DBL }), by);
+    // the sibling has no customer version at all: nothing follows the single-sided price
+    await expect(svc.create(cust(3500), by)).resolves.toMatchObject({ unitPrice: 3500 });
+    // a double-sided key has no dependent of its own (only its own margin is checked)
+    await expect(svc.create(cust(7500, { comboKey: DBL }), by)).resolves.toMatchObject({ unitPrice: 7500 });
+    const s2 = setup();
+    await s2.svc.create(cust(4500), s2.by);
+    await s2.svc.create({ ...cust(0), comboKey: DBL, mode: 'formula', price: undefined, formula: 'base_price * 2 - 1000' }, s2.by);
+    // derived sibling but no provider prices it on the double side: never a conflict
+    await expect(s2.svc.create(cust(1000), s2.by)).resolves.toMatchObject({ unitPrice: 1000 });
+  });
   it('M2 T10: a double-sided formula over a markup single-sided sibling follows the base provider', async () => {
     const { svc, by, A } = setup();
     await svc.create(prov(A, 3500), by);

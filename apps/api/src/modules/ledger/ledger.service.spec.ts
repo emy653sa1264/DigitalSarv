@@ -69,6 +69,30 @@ describe('LedgerService.creditJob (D27)', () => {
     expect(s.entries.docs[0].countedAt).toBeUndefined();
     expect(await s.svc.balanceOf(String(P), CUTOFF)).toEqual({ available: 0, earnedSinceCutoff: 0, due: 0, pendingCount: 1 });
   });
+  it('P13 by role: only the compensated provider\'s production credit waits; a delivery credit is never touched by a compensation', async () => {
+    const F = new Types.ObjectId();
+    const earned = (s: ReturnType<typeof setup>) => s.job.providerPricing.payoutBasis; // 60000
+    const over = (s0: Doc = {}) => ({ deliveryMethod: 'provider', deliveryProviderId: F, ...s0 });
+    const withDelivery = (s: ReturnType<typeof setup>) => {
+      s.jobs.docs[0].providerPricing = { ...s.job.providerPricing, delivery: { providerId: String(F), fee: 20000 } };
+      return s;
+    };
+    const comp = (s: ReturnType<typeof setup>, providerId: Types.ObjectId) =>
+      s.entries.docs.push(counted(30000, new Date('2026-10-18T10:00:00Z'), 'adjustment', { key: `comp:${String(s.job._id)}:${String(providerId)}`, providerId, cause: 'compensation' }));
+    // the producer was compensated earlier: its production credit is pending (suggestion = earned - compensation); the delivery provider is paid
+    const a = withDelivery(setup(over()));
+    comp(a, P);
+    expect(await a.svc.creditJob(a.job._id)).toBe(2);
+    const prodA = a.entries.docs.find((e) => e.role === 'production')!;
+    expect(prodA).toMatchObject({ providerId: P, state: 'pending', amount: null, basis: { suggested: earned(a) - 30000 } });
+    expect(a.entries.docs.find((e) => e.role === 'delivery')).toMatchObject({ providerId: F, state: 'counted', amount: 20000 });
+    // the delivery provider lost production earlier (S11) and delivers now: its delivery fee and the producer's credit both count
+    const b = withDelivery(setup(over()));
+    comp(b, F);
+    expect(await b.svc.creditJob(b.job._id)).toBe(2);
+    expect(b.entries.docs.find((e) => e.role === 'production')).toMatchObject({ providerId: P, state: 'counted', amount: 60000 });
+    expect(b.entries.docs.find((e) => e.role === 'delivery')).toMatchObject({ providerId: F, state: 'counted', amount: 20000 });
+  });
   it('never throws: a failing write is logged, the flag stays and reconcile credits it', async () => {
     const s = setup();
     vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);

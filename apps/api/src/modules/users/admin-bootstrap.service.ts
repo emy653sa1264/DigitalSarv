@@ -26,6 +26,7 @@ export class AdminBootstrapService implements OnApplicationBootstrap {
     let changed = 0;
     for (const phone of phones) {
       const before = await this.users.findOne({ phone }, { role: 1, permissions: 1, providerId: 1, courierId: 1 }).lean();
+      let written = false;
       for (let attempt = 0; attempt < 2; attempt++) {
         try {
           const res = await this.users.updateOne(
@@ -39,6 +40,7 @@ export class AdminBootstrapService implements OnApplicationBootstrap {
             { upsert: true },
           );
           changed += res.upsertedCount + res.modifiedCount;
+          written = true;
           break;
         } catch (err) {
           // two instances inserting the same phone at once: the loser retries as an update
@@ -48,8 +50,10 @@ export class AdminBootstrapService implements OnApplicationBootstrap {
           }
         }
       }
-      // the boot changed what this account may do: its older tokens carry a stale role claim (v4.4)
-      if (before && (before.role !== 'admin' || before.permissions || before.providerId || before.courierId)) {
+      // the boot changed what this account may do: its older tokens carry a stale role claim (v4.4). A failed write is revoked only
+      // when it may have landed after all (the account no longer reads as before, or cannot be read: fail closed).
+      if (!written && before) written = await this.changedSince(before);
+      if (written && before && (before.role !== 'admin' || before.permissions || before.providerId || before.courierId)) {
         try {
           await this.sessions.revokeUser(String(before._id));
         } catch (err) {
@@ -59,5 +63,17 @@ export class AdminBootstrapService implements OnApplicationBootstrap {
     }
     if (phones.length) this.logger.log(`ADMIN_PHONES: ${phones.length} admin(s) ensured (${changed} changed)`);
     return changed;
+  }
+
+  /** After a failed bootstrap write: did it land anyway? An unreadable account counts as changed (revoking is the safe side). */
+  private async changedSince(before: { _id: unknown; role?: string; permissions?: unknown; providerId?: unknown; courierId?: unknown }): Promise<boolean> {
+    try {
+      const now = await this.users.findById(before._id, { role: 1, permissions: 1, providerId: 1, courierId: 1 }).lean();
+      if (!now) return true;
+      const sig = (u: typeof before) => JSON.stringify([u.role, u.permissions ?? null, u.providerId ? String(u.providerId) : null, u.courierId ? String(u.courierId) : null]);
+      return sig(now) !== sig(before);
+    } catch {
+      return true;
+    }
   }
 }

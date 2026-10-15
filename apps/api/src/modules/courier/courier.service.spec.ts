@@ -47,6 +47,33 @@ describe('CourierService.verify recount', () => {
     // every service line keeps its stored price/label/detail (a v4 combo may be unavailable by now)
     expect(pricing.quote.mock.calls[0][3]).toEqual({ fixedServices: [{ price: 1, label: 'چاپ اسناد', detail: '' }] });
   });
+  const recountOf = async (over: Doc) => {
+    const userId = new Types.ObjectId();
+    const courierId = new Types.ObjectId();
+    const order = {
+      _id: new Types.ObjectId(), courierId, status: 'courier_assigned', planId: 'bronze', urgent: false, pickupLabels: ['a'], timeline: [],
+      quote: { totalBooks: 5, total: 500000 }, children: [{ name: 'a', grade: 'g', books: 5, total: 500000 }], services: [],
+      markModified: vi.fn(), save: vi.fn(async () => undefined), ...over,
+    };
+    const pricing = {
+      context: vi.fn(async () => ({ grades: [], extras: [] })),
+      quote: vi.fn(async () => ({ quote: { total: 300000, totalBooks: 3, children: [{ total: 300000 }] }, appliedRuleIds: [] })),
+    };
+    const svc = new CourierService(
+      fakeModel([{ _id: courierId, userId }]) as never, fakeModel([order]) as never, fakeModel([]) as never, fakeModel([]) as never,
+      pricing as never, { dispatch: vi.fn(async () => undefined) } as never, { attach: vi.fn(async () => undefined) } as never, {} as never, fakeModel([]) as never, fakeModel([]) as never, {} as never, { revokeUser: vi.fn(async () => undefined) } as never,
+    );
+    return (await svc.verify({ id: String(userId), role: 'courier' } as never, String(order._id), { collectedCount: 3, checks: [true] })) as unknown as Doc;
+  };
+  it('a paid pre-v2 order without chargedAmount keeps the total it was charged before the re-quote (legacy lowered difference)', async () => {
+    const res = await recountOf({ paid: true, payMethod: 'wallet' });
+    expect(res.quote.total).toBe(300000);
+    expect(res.chargedAmount).toBe(500000);
+  });
+  it('the re-quote never invents a chargedAmount for an unpaid order, nor rewrites an existing one', async () => {
+    expect((await recountOf({ paid: false, payMethod: 'cod' })).chargedAmount).toBeUndefined();
+    expect((await recountOf({ paid: true, payMethod: 'wallet', chargedAmount: 450000 })).chargedAmount).toBe(450000);
+  });
 });
 
 describe('CourierService admin (v3.2)', () => {
@@ -266,5 +293,56 @@ describe('courier logins (S7)', () => {
     await svc.update(String(id), { phone: '09127770004' } as never);
     expect(u.docs.find((x) => x.phone === '09127770003')).toMatchObject({ role: 'customer' });
     expect(sessions.revokeUser).toHaveBeenCalledWith(String(oldUser._id));
+  });
+  it('the claim is a compare-and-set: an account changed after the read is 409, unchanged and not revoked', async () => {
+    const cust = { _id: new Types.ObjectId(), phone: '09127770005', role: 'customer', name: 'مشتری' };
+    const { svc, u, sessions } = setup([], [], [cust]);
+    // the read saw a customer; by the write the account has become an admin
+    const seen = { ...cust };
+    u.docs[0].role = 'admin';
+    u.findOne.mockImplementationOnce((() => ({ lean: async () => seen })) as never);
+    await expect(link(svc, new Types.ObjectId(), '09127770005')).rejects.toThrow('حساب این شماره هم‌زمان تغییر کرد');
+    expect(u.docs[0]).toMatchObject({ role: 'admin' });
+    expect(u.docs[0].courierId).toBeUndefined();
+    expect(sessions.revokeUser).not.toHaveBeenCalled();
+  });
+  it('two links creating the same phone at once: the loser of the insert is 409 (E11000), not a 500', async () => {
+    const { svc, u } = setup([]);
+    u.create.mockImplementationOnce((async () => { throw Object.assign(new Error('E11000 duplicate key phone_1'), { code: 11000 }); }) as never);
+    await expect(link(svc, new Types.ObjectId(), '09127770006')).rejects.toBeInstanceOf(ConflictException);
+  });
+  const demote = (svc: unknown, userId: Types.ObjectId, courierId: Types.ObjectId) =>
+    (svc as { demote: (u: Types.ObjectId, c: Types.ObjectId) => Promise<void> }).demote(userId, courierId);
+  it('demotion revokes before and after the role change; a login that is no longer this courier is only revoked once and kept', async () => {
+    const courierId = new Types.ObjectId();
+    const mine = { _id: new Types.ObjectId(), phone: '09127770007', role: 'courier', courierId };
+    const moved = { _id: new Types.ObjectId(), phone: '09127770008', role: 'courier', courierId: new Types.ObjectId() };
+    const { svc, u, sessions } = setup([], [], [mine, moved]);
+    await demote(svc, mine._id, courierId);
+    expect(u.docs[0]).toMatchObject({ role: 'customer' });
+    expect(u.docs[0].courierId).toBeUndefined();
+    expect(sessions.revokeUser).toHaveBeenCalledTimes(2);
+    sessions.revokeUser.mockClear();
+    await demote(svc, moved._id, courierId); // the CAS misses: the other courier's login is untouched
+    expect(u.docs[1]).toMatchObject({ role: 'courier', courierId: moved.courierId });
+    expect(sessions.revokeUser).toHaveBeenCalledTimes(1);
+  });
+  it('removing a courier without open orders deletes it and demotes and revokes its login', async () => {
+    const courierId = new Types.ObjectId();
+    const login = { _id: new Types.ObjectId(), phone: '09127770009', role: 'courier', courierId };
+    const { svc, c, u, sessions } = setup([{ _id: courierId, code: '9', name: 'پیک', phone: '09127770009', userId: login._id }], [], [login]);
+    expect(await svc.remove(String(courierId))).toEqual({ ok: true });
+    expect(c.docs).toHaveLength(0);
+    expect(u.docs[0]).toMatchObject({ role: 'customer' });
+    expect(sessions.revokeUser).toHaveBeenCalledWith(String(login._id));
+  });
+  it('removing a courier with open orders is 409 and changes nothing', async () => {
+    const courierId = new Types.ObjectId();
+    const login = { _id: new Types.ObjectId(), phone: '09127770010', role: 'courier', courierId };
+    const { svc, c, u, sessions } = setup([{ _id: courierId, code: '10', name: 'پیک', phone: '09127770010', userId: login._id }], [{ _id: new Types.ObjectId(), courierId, status: 'picked_up' }], [login]);
+    await expect(svc.remove(String(courierId))).rejects.toBeInstanceOf(ConflictException);
+    expect(c.docs).toHaveLength(1);
+    expect(u.docs[0]).toMatchObject({ role: 'courier' });
+    expect(sessions.revokeUser).not.toHaveBeenCalled();
   });
 });
