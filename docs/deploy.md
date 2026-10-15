@@ -355,7 +355,7 @@ marked `<…>` comes from `.env.production` or the provider's panel, never from 
 ## Reference: what nginx does (`deploy/nginx/default.conf`)
 
 - `/assets/*` gets `Cache-Control: public, max-age=31536000, immutable` (hashed files). `/icons/*` is cached for 7 days. HTML, `sw.js` and `*.webmanifest` get `no-cache`.
-- SPA fallback per prefix: `/app/*` → `/app/index.html`, `/courier/*` → `/courier/index.html`, `/admin/*` → `/admin/index.html`, everything else → `/index.html`. `/app`, `/courier` and `/admin` redirect to the trailing-slash path.
+- SPA fallback per prefix: `/app/*` → `/app/index.html`, `/courier/*` → `/courier/index.html`, `/provider/*` → `/provider/index.html`, `/admin/*` → `/admin/index.html`, everything else → `/index.html`. `/app`, `/courier` and `/admin` redirect to the trailing-slash path.
 - `/api/` is proxied to `api:3000`, resolved at request time through Docker DNS, so nginx starts and keeps serving the landing page even when the API is down. It uses `client_max_body_size 55m` and 120 s timeouts, and sets `X-Forwarded-For/Proto/Host`.
 - Security headers come from `deploy/nginx/snippets/security-headers.conf`: CSP (self only, `data:`/`blob:` images, Google Maps frames), `X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`, `X-Frame-Options`, COOP, and conditional HSTS. The API's own headers come from helmet.
 - gzip for text, JS, CSS, JSON, SVG and manifests. `server_tokens off`.
