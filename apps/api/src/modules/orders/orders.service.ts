@@ -190,6 +190,7 @@ export class OrdersService {
     const giveBack = async (immediate: boolean) => {
       if (walletDebit) await this.credits.apply(giveBackKey, { immediate });
     };
+    const pickupDto = dto.pickup; // narrowed here: the closure below loses the early-return narrowing
     const buildBase = () => {
     // wallet is deducted above; a gateway order is paid when its callback verifies; COD is paid on delivery
     const charged = dto.payMethod === 'wallet' || (dto.payMethod === 'gateway' && !gateway);
@@ -209,9 +210,9 @@ export class OrdersService {
       quote,
       // a slot/date only exists for home pickup; the address only when something is collected or sent there
       pickup: {
-        ...dto.pickup,
+        ...pickupDto,
         ...(homePickup ? {} : { date: undefined, slot: undefined }),
-        address: homePickup || resolved.delivery.method === 'courier' ? (dto.pickup.address ?? '') : '',
+        address: homePickup || resolved.delivery.method === 'courier' ? (pickupDto.address ?? '') : '',
         phone: pickupPhone,
       },
       delivery: resolved.delivery,
