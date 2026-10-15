@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { fakeModel, type Doc } from '../../../test/fake-model.js';
 import { DEFAULT_DISPATCH } from '../catalog/catalog.defaults.js';
@@ -18,6 +19,8 @@ function setup(jobOver: Doc = {}, settings: Doc = {}, centerOver: Doc = {}) {
   const jobsModel = fakeModel([job]);
   const orders = fakeModel([order]);
   const centers = fakeModel([{ _id: P, name: 'P', status: 'active', availableForOrders: true, ...centerOver }]);
+  orders.joins.jobs = jobsModel; // tick() runs the reconcile pass ($lookup both ways)
+  jobsModel.joins.orders = orders;
   const notifier = { provider: vi.fn(async () => undefined), admins: vi.fn(async () => undefined), customer: vi.fn(async () => undefined) };
   const catalog = { getSettings: vi.fn(async () => ({ dispatch: { ...DEFAULT_DISPATCH, ...settings } })) };
   const jobs = new JobsService(jobsModel as never, orders as never, catalog as never, notifier as never);
@@ -93,7 +96,10 @@ describe('DispatchScheduler (D21)', () => {
   it('tick runs every step with the stored settings and never throws', async () => {
     const s = setup({}, { responseTimeoutMinutes: 30 });
     await expect(s.sched.tick(NOW)).resolves.toMatchObject({ timeouts: 1 });
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined); // the failure is expected: keep the output clean
     s.jobsModel.find.mockImplementationOnce(() => { throw new Error('mongo down'); });
     await expect(s.sched.tick(NOW)).resolves.toBeDefined();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('mongo down'));
+    warn.mockRestore();
   });
 });

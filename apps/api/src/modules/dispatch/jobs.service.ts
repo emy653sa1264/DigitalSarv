@@ -33,6 +33,10 @@ const badMove = (from: JobStatus, to: JobStatus) => new BadRequestException(`ت�
 /** The flow actor a role acts as (the system safety net acts with admin authority). */
 const actorOf = (r: ByRole): Actor => (r === 'provider' ? 'delivery' : r === 'courier' ? 'courier' : r === 'customer' ? 'system' : 'admin');
 const flowOf = (job: Pick<Job, 'deliveryMethod' | 'pickupAt'>): FlowCtx => ({ method: job.deliveryMethod, pickupAt: job.pickupAt });
+/** The flow was checked on this delivery method / pickup place: a concurrent delivery change makes the move a lost race (M1). */
+const flowGuardOf = (job: Pick<Job, 'deliveryMethod' | 'pickupAt'>): Record<string, unknown> => ({
+  ...(job.deliveryMethod ? { deliveryMethod: job.deliveryMethod } : {}), pickupAt: job.pickupAt ?? null,
+});
 
 function stampsFor(to: JobStatus, now: Date): Record<string, Date> {
   if (to === 'accepted') return { 'assignment.acceptedAt': now };
@@ -62,9 +66,9 @@ export class JobsService {
 
   /**
    * Creates the order's job once — an idempotent, race-safe upsert on `{orderId, seq: 1}`. Never throws.
-   * `viaReconcile`: the safety net creates it; an order placed long before is a backfill (Q26, no alert flood).
+   * An order without `delivery` (placed before v4.2) is a backfill: its alerts are stamped at creation (Q27).
    */
-  async ensureJob(order: JobSource, opts: { viaReconcile?: boolean } = {}): Promise<JobDocument | null> {
+  async ensureJob(order: JobSource): Promise<JobDocument | null> {
     if (!orderNeedsJob(order.status)) return null;
     const key = { orderId: order._id, seq: 1 };
     try {
@@ -72,7 +76,7 @@ export class JobsService {
         const { dispatch } = await this.catalog.getSettings();
         await this.warnIfCentreUnusable(order);
         const now = new Date();
-        const backfill = isBackfill(order, now, !!opts.viaReconcile);
+        const backfill = isBackfill(order);
         await this.jobs.updateOne(key, { $setOnInsert: jobSeed(order, dispatch, now, { backfill }) }, { upsert: true });
       } catch (err) {
         if ((err as { code?: number }).code !== 11000) throw err;
@@ -246,10 +250,15 @@ export class JobsService {
     const now = new Date();
     if (to === 'delivered') await this.mirrorOrder(order, 'delivered', true);
     const action: JobAction = to === 'accepted' ? 'accepted' : to === 'completed' ? 'completed' : 'status';
-    // the flow was checked on this delivery method / pickup place: a concurrent delivery change makes the move a lost race
-    const flowGuard = { ...(job.deliveryMethod ? { deliveryMethod: job.deliveryMethod } : {}), pickupAt: job.pickupAt ?? null };
-    const updated = await this.cas(job, to, { actor: o.actor, extraGuard: flowGuard, set: stampsFor(to, now), history: this.entry(job, action, to, o, now) });
-    if (!updated) throw raced();
+    const updated = await this.cas(job, to, { actor: o.actor, extraGuard: flowGuardOf(job), set: stampsFor(to, now), history: this.entry(job, action, to, o, now) });
+    if (!updated) {
+      // the order is delivered already (moved first): a job the order follow-up / reconcile delivered meanwhile is the answer
+      if (to === 'delivered') {
+        const now2 = await this.jobs.findById(job._id);
+        if (now2?.status === 'delivered') return now2;
+      }
+      throw raced();
+    }
     if (to !== 'delivered') await this.mirrorOrder(order, ORDER_MIRROR[to], false);
     if (to === 'accepted') await this.notifier.customer('assigned', order);
     if (to === 'ready_for_pickup') {
@@ -383,6 +392,7 @@ export class JobsService {
       const now = new Date();
       const updated = await this.cas(job, 'delivered', {
         actor,
+        ...(actor !== 'admin' ? { extraGuard: flowGuardOf(job) } : {}),
         set: { deliveredAt: now, ...(job.readyAt ? {} : { readyAt: now }) },
         history: this.entry(job, 'status', 'delivered', { byRole, ...(by ? { by } : {}) }, now),
       });
@@ -400,7 +410,7 @@ export class JobsService {
       if (!job || job.status !== 'ready' || job.deliveryMethod !== 'courier') return false;
       const actor = actorOf(byRole);
       if (!canMove('ready', 'out_for_delivery', actor, flowOf(job))) return false;
-      const updated = await this.cas(job, 'out_for_delivery', { actor, history: this.entry(job, 'status', 'out_for_delivery', { byRole, ...(by ? { by } : {}) }, new Date()) });
+      const updated = await this.cas(job, 'out_for_delivery', { actor, ...(actor !== 'admin' ? { extraGuard: flowGuardOf(job) } : {}), history: this.entry(job, 'status', 'out_for_delivery', { byRole, ...(by ? { by } : {}) }, new Date()) });
       return !!updated;
     } catch (err) {
       this.logger.warn(`out_for_delivery job of order ${String(orderId)} failed: ${(err as Error).message}`);
@@ -496,7 +506,7 @@ export class JobsService {
     const res = { created: 0, cancelled: 0, delivered: 0, mirrored: 0 };
     try {
       const missing = await this.missingJobs(limit);
-      for (const o of missing) if (await this.ensureJob(o, { viaReconcile: true })) res.created++;
+      for (const o of missing) if (await this.ensureJob(o)) res.created++;
       const stale = await this.jobs.aggregate<{ orderId: Types.ObjectId; o: { status: OrderStatus }[] }>([
         { $match: { status: { $in: LIVE } } },
         { $lookup: { from: 'orders', localField: 'orderId', foreignField: '_id', as: 'o' } },

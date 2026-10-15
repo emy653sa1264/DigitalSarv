@@ -70,7 +70,7 @@ export class Job {
   @Prop({ type: Date }) deadlineNotifiedAt?: Date;
   @Prop({ type: Date }) lateAlertedAt?: Date;
   @Prop({ type: Date }) unavailableAlertedAt?: Date;
-  /** Q26: created by reconcile for an order placed before v4.2 — its late / deadline alerts were stamped at creation. */
+  /** Q27: the job of an order placed before v4.2 (no `delivery`) — its late / deadline alerts were stamped at creation. */
   @Prop({ type: Boolean }) backfilled?: boolean;
   /** I4: set by every `cas` that bumps `rev`, cleared once that revision is mirrored onto the order (reconcile's scan). */
   @Prop({ type: Boolean }) mirrorPending?: boolean;

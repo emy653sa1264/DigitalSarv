@@ -856,10 +856,11 @@ type CancelStage = 'before_production' | 'in_production' | 'after_production';
   `registered|confirmed|courier_assigned|picked_up|awaiting_approval → accepted`, `preparing|binding|extras|qc → in_production`,
   `packing → ready`, `out_for_delivery → out_for_delivery`, history action `migrated`, and **no** provider price snapshot.
   A migrated job has no `providerPricing`, so a separate delivery-provider fee set on it later is recorded only in the `delivery_changed` history entry (`deliveryFee`, for M4).
-- **Migration (Q26).** A job the reconcile pass creates for an order placed more than 60 minutes earlier is a
-  *backfill* (`backfilled: true`): its deadline (`createdAt + lead`) is usually past already, so `lateAlertedAt` and
-  `deadlineNotifiedAt` are stamped at creation, and the first deploy sends no `job_late` / `job_deadline` flood. Jobs
-  created at placement or payment verification are never backfills. Centre-less legacy orders already past
+- **Migration (Q27).** A job created for an order **without `delivery`** is a *backfill* (`backfilled: true`): every
+  v4.2 order stores `delivery` at creation and no earlier order has it. Whoever creates it (the reconcile pass, or the
+  v1 `PATCH /admin/orders/:id/assign` on a legacy order), its deadline (`createdAt + lead`) is usually past already, so
+  `lateAlertedAt` and `deadlineNotifiedAt` are stamped at creation, and the first deploy sends no `job_late` /
+  `job_deadline` flood. A v4.2 order's job is never a backfill, however late reconcile creates it. Centre-less legacy orders already past
   `registered` become `unassigned` jobs: an admin assigns them (or closes the order from the order page), and they get
   no late or reminder alerts. An admin deadline change re-arms both alerts.
 - The reconcile «missing job» scan matches `status $in` the live order statuses on the `{status, createdAt}` index,
@@ -904,7 +905,8 @@ type CancelStage = 'before_production' | 'in_production' | 'after_production';
 | any live → cancelled | the order was cancelled | `cancel.stage` recorded (M4 compensation) |
 
 Every move is a compare-and-set on the status, the assignment id, the acting holder **and the delivery method /
-pickup place it was checked on**: a concurrent delivery change makes it a lost race (409). A job that leaves its
+pickup place it was checked on**: a concurrent delivery change makes it a lost race (409). The order-event follow-ups
+(order delivered / out for delivery) carry the same guard for courier and provider actors; an admin overrides. A job that leaves its
 producer while `in_production` (failed, unassigned, reassigned) unticks the order's QC checklist (while the order is
 before QC sign-off), so the next provider runs the checklist again.
 
@@ -1092,7 +1094,8 @@ Errors (Persian):
   400 «روش تحویل انتخابی مشتری (ارسال یا تحویل حضوری) تغییر نمی‌کند» · 400 «روش تحویل این سفارش دیگر قابل تغییر نیست» (after `ready`).
 - 400 «مهلت باید در آینده باشد» (PATCH job) · 400 «مجری تحویل فقط برای روش «تحویل توسط مجری» تعیین می‌شود» ·
   400 «ابتدا مجری سفارش را تعیین کنید» (pickup at the provider shop without a provider) · 400 «این سفارش در انتظار پاسخ مجری نیست» (respond).
-- 409 «وضعیت سفارش هم‌زمان تغییر کرد؛ دوباره تلاش کنید» (any lost compare-and-set).
+- 409 «وضعیت سفارش هم‌زمان تغییر کرد؛ دوباره تلاش کنید» (any lost compare-and-set). Exception: a `delivered` move
+  whose compare-and-set loses because the job is already `delivered` answers with that job.
 - Provider (centre) delete: 409 «این مجری در سفارش‌های ثبت‌شده (تولید یا ارسال) سابقه دارد؛ به‌جای حذف آن را غیرفعال کنید»
   when any job (any status) names it as `providerId` or `deliveryProviderId`, or any order or job carries its
   `providerPricing` (M4 payouts). This is in addition to the v4.1 open-order and price-history 409s.

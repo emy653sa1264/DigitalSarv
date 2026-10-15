@@ -178,12 +178,10 @@ describe('job → order provider fields and backfill detection (final wave)', ()
       set: { 'delivery.method': 'courier' }, unset: { centerId: 1, providerPricing: 1, 'delivery.providerShop': 1 },
     });
   });
-  it('isBackfill: only a reconcile-created job of an order older than an hour', async () => {
-    const { isBackfill, BACKFILL_AFTER_MS } = await import('./job-seed.js');
-    const now = new Date('2026-10-16T12:00:00Z');
-    const old = { createdAt: new Date(now.getTime() - BACKFILL_AFTER_MS - 1) };
-    expect(isBackfill(old, now, true)).toBe(true);
-    expect(isBackfill(old, now, false)).toBe(false);
-    expect(isBackfill({ createdAt: new Date(now.getTime() - BACKFILL_AFTER_MS) }, now, true)).toBe(false);
+  it('isBackfill (Q27): exactly the orders without `delivery` (placed before v4.2), whatever their age', async () => {
+    const { isBackfill } = await import('./job-seed.js');
+    expect(isBackfill({})).toBe(true);
+    expect(isBackfill({ delivery: undefined })).toBe(true);
+    expect(isBackfill({ delivery: { method: 'courier', homePickup: true, note: '' } as never })).toBe(false);
   });
 });

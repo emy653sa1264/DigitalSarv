@@ -312,23 +312,21 @@ describe('v4.2 fix round 1', () => {
 });
 
 describe('M3 final review', () => {
-  it('I2 (Q26): a job reconcile backfills for an order placed long ago is stamped — no late / deadline alert flood', async () => {
-    const s = setup({ status: 'binding', createdAt: new Date(Date.now() - 5 * 86_400_000) }); // legacy, no centre, past registered
+  it('I2 (Q27): a legacy order (no `delivery`) gets a quiet backfill job — no late / deadline alert flood', async () => {
+    const s = setup({ status: 'binding', createdAt: new Date(Date.now() - 5 * 86_400_000), delivery: undefined }); // pre-v4.2, no centre, past registered
+    delete s.orders.docs[0].delivery;
     expect((await s.svc.reconcile()).created).toBe(1);
-    expect(s.jobs.docs[0]).toMatchObject({ status: 'unassigned', backfilled: true });
+    expect(s.jobs.docs[0]).toMatchObject({ status: 'unassigned', backfilled: true, deliveryMethod: 'courier', homePickup: true });
     expect(s.jobs.docs[0].lateAlertedAt).toBeInstanceOf(Date);
     expect(s.jobs.docs[0].deadlineNotifiedAt).toBeInstanceOf(Date);
     expect(s.jobs.docs[0].deadline.getTime()).toBeLessThan(Date.now()); // overdue, but already «alerted»
   });
-  it('I2: a fresh order (placement, or reconcile right after it) keeps its alerts armed', async () => {
-    const placed = setup({ createdAt: new Date(Date.now() - 5 * 86_400_000) });
-    await placed.svc.ensureJob(placed.order as never); // the placement / verify path is never a backfill
-    expect(placed.jobs.docs[0].lateAlertedAt).toBeUndefined();
-    const recent = setup({ createdAt: new Date(Date.now() - 5 * 60_000) });
-    await recent.svc.reconcile();
-    expect(recent.jobs.docs[0]).not.toHaveProperty('backfilled');
-    expect(recent.jobs.docs[0].lateAlertedAt).toBeUndefined();
-    expect(recent.jobs.docs[0].deadlineNotifiedAt).toBeUndefined();
+  it('I2 (Q27): an old v4.2 order (with `delivery`) that reconcile picks up keeps its alerts armed', async () => {
+    const s = setup({ createdAt: new Date(Date.now() - 5 * 86_400_000) });
+    expect((await s.svc.reconcile()).created).toBe(1);
+    expect(s.jobs.docs[0]).not.toHaveProperty('backfilled');
+    expect(s.jobs.docs[0].lateAlertedAt).toBeUndefined();
+    expect(s.jobs.docs[0].deadlineNotifiedAt).toBeUndefined();
   });
   it('I3: the missing-job scan matches the live statuses with $in, pages before the $lookup and resumes on the next run', async () => {
     const s = setup();
@@ -405,5 +403,36 @@ describe('M3 final review', () => {
     Object.assign(p.jobs.docs[0], { deliveryMethod: 'provider', deliveryProviderId: P });
     await expect(p.svc.courierCollected(p.order._id)).rejects.toThrow('این سفارش هنوز آماده تحویل نیست');
     expect(p.jobs.docs[0].status).toBe('ready');
+  });
+  it('NEW-2: a delivered move that loses the cas to a delivery that already landed returns the delivered job', async () => {
+    const s = setup({ status: 'packing', qc: [true] });
+    const id = await heldBy(s, 'out_for_delivery');
+    Object.assign(s.jobs.docs[0], { deliveryMethod: 'provider', deliveryProviderId: P });
+    const stale = await s.svc.byId(id);
+    s.svc.byId = vi.fn(async () => stale) as never;
+    s.jobs.docs[0].status = 'delivered'; // the order follow-up delivered the job meanwhile
+    s.orders.docs[0].status = 'out_for_delivery';
+    await expect(s.svc.move(id, 'delivered', { actor: 'delivery', byRole: 'provider', providerId: String(P) })).resolves.toMatchObject({ status: 'delivered' });
+    // any other lost race stays a 409
+    const t = setup({ status: 'packing', qc: [true] });
+    const id2 = await heldBy(t, 'out_for_delivery');
+    Object.assign(t.jobs.docs[0], { deliveryMethod: 'provider', deliveryProviderId: P });
+    const stale2 = await t.svc.byId(id2);
+    t.svc.byId = vi.fn(async () => stale2) as never;
+    t.jobs.docs[0].status = 'cancelled';
+    t.orders.docs[0].status = 'out_for_delivery';
+    await expect(t.svc.move(id2, 'delivered', { actor: 'delivery', byRole: 'provider', providerId: String(P) })).rejects.toMatchObject({ status: 409 });
+  });
+  it('NEW-3: order-event follow-ups by a courier lose to a concurrent delivery change; an admin still overrides', async () => {
+    const s = setup({ status: 'packing', qc: [true] });
+    await heldBy(s, 'ready');
+    const stale = await s.svc.forOrder(s.order._id);
+    s.svc.forOrder = vi.fn(async () => stale) as never;
+    Object.assign(s.jobs.docs[0], { deliveryMethod: 'provider', deliveryProviderId: P }); // switched after the read
+    expect(await s.svc.onOrderOutForDelivery(s.order._id, 'courier')).toBe(false);
+    expect(await s.svc.onOrderDelivered(s.order._id, 'courier')).toBe(false);
+    expect(s.jobs.docs[0].status).toBe('ready');
+    expect(await s.svc.onOrderDelivered(s.order._id, 'admin')).toBe(true);
+    expect(s.jobs.docs[0].status).toBe('delivered');
   });
 });

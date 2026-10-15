@@ -217,7 +217,7 @@ Every API instance runs the dispatch tick at boot and then once a minute: assign
 
 - One API container (the default compose file): leave `DISPATCH_SCHEDULER` unset.
 - Several API instances: set `DISPATCH_SCHEDULER=0` on all but one of them to save load. At least one instance must run it, otherwise timeouts, alerts and auto-complete stop.
-- First deploy of v4.2: the reconcile pass creates jobs for orders placed before v4.2 within the first ticks (bounded per tick). These backfilled jobs have their late and deadline alerts stamped at creation, so they send no alert flood. Centre-less legacy orders that were already past `registered` become «تخصیص‌نیافته» jobs that an admin assigns, or closes from the order page.
+- First deploy of v4.2: the reconcile pass creates jobs for orders placed before v4.2 within the first ticks (bounded per tick). A job for an order without the v4.2 `delivery` field (every older order) is a backfill: its late and deadline alerts are stamped at creation, so the backlog sends no alert flood. Centre-less legacy orders that were already past `registered` become «تخصیص‌نیافته» jobs that an admin assigns, or closes from the order page.
 
 ## 11. Security checklist
 

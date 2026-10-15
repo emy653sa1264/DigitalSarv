@@ -245,6 +245,6 @@ export type OrderDocument = HydratedDocument<Order>;
 export const OrderSchema = SchemaFactory.createForClass(Order);
 OrderSchema.index({ createdAt: -1 });
 OrderSchema.index({ customerId: 1, createdAt: -1 });
-/** The dispatch reconcile scan: live statuses (`$in`) oldest first. */
-OrderSchema.index({ status: 1, createdAt: 1 });
+/** The dispatch reconcile scan: live statuses (`$in`) oldest first, `_id` as the paging tie-break. */
+OrderSchema.index({ status: 1, createdAt: 1, _id: 1 });
 OrderSchema.index({ 'payment.authority': 1 }, { sparse: true });

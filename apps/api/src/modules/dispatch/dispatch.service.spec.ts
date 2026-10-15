@@ -40,6 +40,8 @@ function setup() {
   };
   const orders = fakeModel([order]);
   const jobsModel = fakeModel([]);
+  orders.joins.jobs = jobsModel; // the reconcile pass looks both ways
+  jobsModel.joins.orders = orders;
   const versions = fakeModel([pv(C, 'color|A4|full|glossy200|single', 8000)]);
   const users = fakeModel([{ _id: ADMIN, role: 'admin', name: 'مدیر سیستم' }]);
   const papers = fakeModel([{ _id: new Types.ObjectId(), key: 'glossy200', name: 'گلاسه ۲۰۰ گرم' }]);

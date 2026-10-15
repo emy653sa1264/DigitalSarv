@@ -19,15 +19,13 @@ export const orderNeedsJob = (status: OrderStatus) => !NO_JOB.includes(status);
 /** Live order statuses (the ones that need a job): what the reconcile scan matches with `$in` on `{status, createdAt}`. */
 export const JOB_ORDER_STATUSES: OrderStatus[] = ORDER_STATUSES.filter(orderNeedsJob);
 
-/** A reconcile-created job of an order placed longer ago than this is a backfill (pre-v4.2 order, Q26). */
-export const BACKFILL_AFTER_MS = 60 * 60_000;
-
 /**
- * Q26: is this the backfill of an order placed before v4.2? Reconcile creates it long after the order — its deadline
- * (`createdAt + lead`) is usually past already, so the late / deadline alerts are stamped at creation: no first-deploy flood.
+ * Q27: is this the backfill of an order placed before v4.2? Every v4.2 order stores `delivery` at creation and no
+ * earlier order has it. Its deadline (`createdAt + lead`) is usually past already, so the late / deadline alerts are
+ * stamped at creation: no first-deploy flood — whoever creates the job (reconcile or the v1 order-page assign).
  */
-export function isBackfill(order: Pick<JobSource, 'createdAt'>, now: Date, viaReconcile: boolean): boolean {
-  return viaReconcile && !!order.createdAt && now.getTime() - new Date(order.createdAt).getTime() > BACKFILL_AFTER_MS;
+export function isBackfill(order: Pick<JobSource, 'delivery'>): boolean {
+  return !order.delivery;
 }
 
 export function jobSeed(order: JobSource, s: Pick<DispatchSettings, 'leadHours' | 'urgentLeadHours'>, now: Date, opts: { backfill?: boolean } = {}) {
