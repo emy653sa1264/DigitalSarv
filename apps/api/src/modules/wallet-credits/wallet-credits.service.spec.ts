@@ -159,7 +159,7 @@ describe('wallet credit intents (D34)', () => {
     s.intents.find.mockImplementationOnce(real as never); // pass E (gateway repair)
     s.intents.find.mockImplementationOnce(() => { throw new Error('pass A broke'); });
     expect(await s.svc.sweep(later(2 * MIN))).toMatchObject({ applied: 0 });
-    expect(s.intents.find).toHaveBeenCalledTimes(6);
+    expect(s.intents.find).toHaveBeenCalledTimes(7); // E, A, B, C, D (settled + retired give-backs), F
   });
   it('a marker revives a voided or lost intent and the user key prevents a double (C2, M6)', async () => {
     const s = setup();
@@ -306,6 +306,26 @@ describe('wallet credit intents (D34)', () => {
     expect(s.user.walletCreditKeys).toEqual([]);
     expect(s.intents.docs[0].keyPulled).toBe(true);
     expect(s.user.walletBalance).toBe(50000);
+  });
+  it('pass D also pulls a checkout debit proof the best-effort pull left behind, for a done and for a voided give-back', async () => {
+    const s = setup({ balance: 0 });
+    const lost = new Types.ObjectId(); // the insert never landed: the give-back pays
+    const landed = s.orderId; // the order exists: the give-back is voided
+    for (const ref of [lost, landed]) {
+      s.user.walletCreditKeys = [...(s.user.walletCreditKeys ?? []), walletKey.debit(String(ref))];
+      await s.svc.prepare({ key: walletKey.createFail(String(ref)), userId: s.userId, orderId: ref, orderCode: '-', amount: 30000, cause: 'create_failed' });
+    }
+    expect(await s.svc.apply(walletKey.createFail(String(lost)), { immediate: true })).toBe('done');
+    expect(await s.svc.apply(walletKey.createFail(String(landed)), { immediate: true })).toBe('void');
+    expect(s.user.walletBalance).toBe(30000);
+    // both cleanup pulls "failed": the proofs are still on the user
+    s.user.walletCreditKeys = [...s.user.walletCreditKeys, walletKey.debit(String(lost)), walletKey.debit(String(landed))];
+    expect(await s.svc.sweep(later(2 * MIN))).toMatchObject({ pulled: 0 });
+    expect(await s.svc.sweep(later(8 * 24 * 60 * MIN))).toMatchObject({ pulled: 2 });
+    expect(s.user.walletCreditKeys).toEqual([]);
+    expect(s.intents.docs.every((d) => d.keyPulled === true)).toBe(true);
+    expect(await s.svc.sweep(later(9 * 24 * 60 * MIN))).toMatchObject({ pulled: 0 });
+    expect(s.user.walletBalance).toBe(30000);
   });
   it('the sweep never throws out of the timer', async () => {
     const s = setup();

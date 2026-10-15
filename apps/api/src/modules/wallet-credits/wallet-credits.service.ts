@@ -152,7 +152,8 @@ export class WalletCreditsService {
    * stamped so it cannot starve the rest). B: intents older than `MARKER_WAIT_MS`, oldest first - applied when the order carries
    * them, otherwise voided (key freed, `origKey` kept). Intents at the attempt cap or in backoff are skipped.
    * C: intents voided by that rule in the last `KEY_KEEP_MS` whose order carries the key after all are revived (same backoff and
-   * cap as pending intents). D: user keys settled more than `KEY_KEEP_MS` ago are pulled. `applied` counts real wallet moves only.
+   * cap as pending intents). D: user keys settled more than `KEY_KEEP_MS` ago are pulled (and a checkout give-back's leftover `debit:<ref>` proof,
+   * done or voided). `applied` counts real wallet moves only.
    */
   async sweep(now: Date = new Date()): Promise<SweepResult> {
     const out: SweepResult = { applied: 0, voided: 0, pulled: 0 };
@@ -246,8 +247,20 @@ export class WalletCreditsService {
         .find({ state: { $in: ['done', 'reversed'] }, keyPulled: { $exists: false }, doneAt: { $lt: new Date(t - KEY_KEEP_MS) } })
         .limit(BATCH)
         .lean()) as WalletCreditRow[];
+      // a checkout give-back also leaves its debit proof (`debit:<ref>`) when the best-effort pull after it failed
+      const keysOf = (d: WalletCreditRow) => (d.cause === 'create_failed' && d.orderId ? [d.key, walletKey.debit(String(d.orderId))] : [d.key]);
       for (const d of settled) {
-        await this.users.updateOne({ _id: d.userId }, { $pull: { walletCreditKeys: d.key } });
+        await this.users.updateOne({ _id: d.userId }, { $pull: { walletCreditKeys: { $in: keysOf(d) } } });
+        await this.intents.updateOne({ _id: d._id }, { $set: { keyPulled: true } });
+        out.pulled++;
+      }
+      // a voided checkout give-back (the order landed, or the debit never happened) never needs its debit proof again
+      const retired = (await this.intents
+        .find({ state: 'void', cause: 'create_failed', origKey: { $exists: true }, keyPulled: { $exists: false }, voidedAt: { $lt: new Date(t - KEY_KEEP_MS) } })
+        .limit(BATCH)
+        .lean()) as WalletCreditRow[];
+      for (const d of retired) {
+        if (d.orderId) await this.users.updateOne({ _id: d.userId }, { $pull: { walletCreditKeys: walletKey.debit(String(d.orderId)) } });
         await this.intents.updateOne({ _id: d._id }, { $set: { keyPulled: true } });
         out.pulled++;
       }

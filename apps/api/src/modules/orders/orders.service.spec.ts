@@ -674,6 +674,25 @@ describe('checkout give-back only when the debit happened and no order exists (D
     expect(s.orders.docs).toHaveLength(2);
     expect(s.user.walletBalance).toBe(700000);
   });
+  it('an _id duplicate whose order cannot be read (double fault): 503 naming the order, never a give-back or a second order', async () => {
+    const s = funded();
+    const real = s.orders.create.getMockImplementation()!;
+    s.orders.create.mockImplementationOnce(async (doc: Doc) => { await real(doc); throw Object.assign(new Error('E11000 index: code_1'), { code: 11000, keyPattern: { code: 1 } }); });
+    s.orders.create.mockImplementationOnce(async () => { throw Object.assign(new Error('E11000 index: _id_'), { code: 11000, keyPattern: { _id: 1 } }); });
+    const realFind = s.orders.findById.getMockImplementation()!;
+    s.orders.findById.mockImplementation(async () => { throw new Error('read failed'); });
+    const err = await s.svc.create(customer, walletDraft).catch((e: unknown) => e);
+    s.orders.findById.mockImplementation(realFind);
+    expect(err).toBeInstanceOf(ServiceUnavailableException);
+    expect((err as ServiceUnavailableException).getResponse()).toMatchObject({ statusCode: 503, orderId: String(s.intents.docs[0].orderId) });
+    expect(s.orders.create).toHaveBeenCalledTimes(2);
+    expect(s.orders.docs).toHaveLength(2);
+    expect(s.user.walletBalance).toBe(700000);
+    await s.credits.sweep(later(11 * 60_000));
+    await s.credits.sweep(later(12 * 60_000));
+    expect(s.user.walletBalance).toBe(700000);
+    expect(s.intents.docs[0].state).toBe('void');
+  });
   type PricingStub = { pricing: { pricedServices: ReturnType<typeof vi.fn> } };
   it('a failure after the debit and before the insert is definitive: given back at once, once', async () => {
     const s = funded();

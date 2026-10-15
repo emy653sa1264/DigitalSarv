@@ -263,11 +263,20 @@ export class OrdersService {
         const dup = e.code === 11000;
         if (dup && (e.keyPattern?._id !== undefined || /index: _id_/.test(e.message ?? ''))) {
           // an earlier attempt of this very checkout landed: continue with that order
-          const landed = await this.orders.findById(debitId).catch(() => null);
+          let landed: OrderDocument | null = null;
+          for (let read = 0; read < 3 && !landed; read++) landed = await this.orders.findById(debitId).catch(() => null);
           if (landed) {
             order = landed;
             continue;
           }
+          // the _id is taken, so the order exists even though it cannot be read now: never give back, never retry the insert -
+          // name it (like an unreachable gateway), so the client drops its draft instead of placing it twice (the sweep retires the intent)
+          throw new ServiceUnavailableException({
+            statusCode: 503,
+            error: 'Service Unavailable',
+            message: 'سفارش ثبت شد ولی خواندن آن ممکن نشد؛ وضعیت را در «سفارش‌های من» ببینید',
+            orderId: debitRef,
+          });
         }
         if (!dup || attempt >= 2) {
           // definitive = the insert certainly did not happen (validation, or the code collided every time); anything else is

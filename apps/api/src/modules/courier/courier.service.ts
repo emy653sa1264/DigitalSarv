@@ -250,6 +250,9 @@ export class CourierService {
           fixedServices: (order.services ?? []).map((s) => ({ price: s.price, label: s.label, detail: s.detail })),
         });
         order.children = orderChildren(kept, quote.children.map((c) => c.total), ctx);
+        // a paid pre-v2 order has no chargedAmount (it was charged its total): keep that total before the re-quote replaces it,
+        // or an approved lower recount would refund nothing (D35)
+        if (order.paid && order.chargedAmount == null && typeof order.quote?.total === 'number') order.chargedAmount = order.quote.total;
         order.quote = quote;
         order.markModified('children');
         order.markModified('quote');
