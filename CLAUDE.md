@@ -56,7 +56,7 @@ Admin `09120000000`, courier `09121111111`, provider `09122222222` (چاپ نگ�
 - Ignore rules (`.gitignore`, `.dockerignore`) must be anchored (`/uploads/`, `/apps/api/uploads/`) — an unanchored `uploads/` also hides `src/modules/uploads` and breaks CI and the Docker build while everything still works locally. After touching ignore rules, verify with a clean `git archive HEAD` build.
 - Behind extra proxies (Caddy/CDN in front of nginx) set `TRUST_PROXY` (hops/CIDRs) or every client shares one rate-limit bucket.
 - Gateway refunds go to the customer's wallet; a payment verified at the provider is never dropped (falls back to paying the order or crediting the wallet once per authority).
-- Manual E2E: Playwright with `channel: 'msedge'` (bundled Chromium download fails on this machine); log in by calling the OTP endpoints and seeding `localStorage['sarv-auth']` = `{state:{token,user},version:0}`.
+- Manual E2E: Playwright with `channel: 'msedge'` (bundled Chromium download fails on this machine); log in by calling the OTP endpoints and seeding the app's own key (`localStorage['sarv-auth:app']` · `:courier` · `:provider` · `:admin`, by role) = `{state:{token,user},version:0}`.
 
 ## Web app structure
 

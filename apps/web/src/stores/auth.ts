@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { User } from '@/lib/types'
+import { currentApp, migrateLegacySession, roleOfApp, sessionKey } from './session-key'
 
 interface AuthState {
   token: string | null
@@ -8,6 +9,14 @@ interface AuthState {
   setSession: (token: string, user: User) => void
   setUser: (user: User) => void
   logout: () => void
+}
+
+/** D36: this app's own session (`sarv-auth:app` / `:courier` / `:provider` / `:admin`); signing in elsewhere never touches it. */
+const APP = currentApp()
+try {
+  migrateLegacySession(APP, window.localStorage)
+} catch {
+  // storage access itself can throw (blocked site data)
 }
 
 export const useAuth = create<AuthState>()(
@@ -19,6 +28,13 @@ export const useAuth = create<AuthState>()(
       setUser: (user) => set({ user }),
       logout: () => set({ token: null, user: null }),
     }),
-    { name: 'sarv-auth' },
+    {
+      name: sessionKey(APP),
+      // a token whose user has another role than this app is never used: start signed out
+      merge: (persisted, current) => {
+        const p = persisted as Partial<AuthState> | undefined
+        return p?.user && p.user.role !== roleOfApp(APP) ? current : { ...current, ...p }
+      },
+    },
   ),
 )
