@@ -30,10 +30,11 @@ export const useAuth = create<AuthState>()(
     }),
     {
       name: sessionKey(APP),
-      // a token whose user has another role than this app is never used: start signed out
+      // a token whose user has another role than this app — or a token without a user — is never used: start signed out
       merge: (persisted, current) => {
         const p = persisted as Partial<AuthState> | undefined
-        return p?.user && p.user.role !== roleOfApp(APP) ? current : { ...current, ...p }
+        if (!p) return current
+        return !p.user || p.user.role !== roleOfApp(APP) ? current : { ...current, ...p }
       },
     },
   ),
