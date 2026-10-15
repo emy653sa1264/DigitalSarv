@@ -18,3 +18,5 @@ apps/web/playwright-report/
 *.tsbuildinfo
 .env.*
 !.env*.example
+
+/apps/web/e2e/.artifacts/
