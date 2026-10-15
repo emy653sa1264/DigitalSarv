@@ -28,7 +28,7 @@ export function NotificationsScreen() {
                 <button key={n.id} type="button" onClick={() => { if (!n.read) markRead.mutate([n.id]); navigate(n.url) }}
                   className={cn('cursor-pointer rounded-[20px] border border-line bg-white p-3.5 text-start', !n.read && 'border-cyan/40 bg-cyan-soft/40')}>
                   <div className="text-[13.5px] font-bold">{n.text}</div>
-                  <div className="mt-1 text-[11.5px] text-muted-2">سفارش {fa(n.orderCode)} · {when(n.createdAt)}</div>
+                  <div className="mt-1 text-[11.5px] text-muted-2">{n.orderCode ? `سفارش ${fa(n.orderCode)} · ` : ''}{when(n.createdAt)}</div>
                 </button>
               ))}
             </div>

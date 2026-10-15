@@ -4,7 +4,7 @@ import { Chip, DsSwitch } from '@/components/brand'
 import { Input } from '@/components/ui/input'
 import { notify, toast } from '@/components/ui/sonner'
 import { fa, jalali, toEnDigits } from '@/lib/format'
-import type { AdminSettings, ChecklistSettings, CourierPaySettings, DispatchSettings, OpsSettings, PickupPoint, QcListKey } from '@/lib/types'
+import type { AdminSettings, ChecklistSettings, CourierPaySettings, DispatchSettings, LedgerSettings, OpsSettings, PickupPoint, QcListKey } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { useAdminSettings, useSettingsMutation, type SettingsPatch } from '../api'
 import { AddButton, AdminSelect, MoveButtons, NumInput, RowInput } from '../components/controls'
@@ -12,6 +12,7 @@ import { Field } from '../components/FormDialog'
 import { AdminCard, CardNote, CardTitle, PageHeader, QueryView } from '../components/kit'
 import { SaveChip, type SaveState } from '../components/SaveChip'
 import { DispatchCard, dispatchProblem } from './settings/DispatchCard'
+import { LedgerCard } from './settings/LedgerCard'
 import { PickupPointsCard, pointsProblem } from './settings/PickupPointsCard'
 
 /** Persian week order → JS `getDay()` (0 Sunday … 6 Saturday). */
@@ -87,6 +88,7 @@ function SettingsForm({ initial }: { initial: AdminSettings }) {
   const [courier, setCourier] = useState<CourierPaySettings>(initial.courier)
   const [checklists, setChecklists] = useState<ChecklistSettings>(initial.checklists)
   const [dispatch, setDispatch] = useState<DispatchSettings>(initial.dispatch)
+  const [ledger, setLedger] = useState<LedgerSettings>(initial.ledger)
   const [points, setPoints] = useState<PickupPoint[]>(initial.pickupPoints)
   const [state, setState] = useState<SaveState>('saved')
   const pending = useRef<SettingsPatch>({})
@@ -151,6 +153,11 @@ function SettingsForm({ initial }: { initial: AdminSettings }) {
     setDispatch(next)
     stage('dispatch', next, dispatchProblem(next))
   }
+  const updateLedger = (patch: Partial<LedgerSettings>) => {
+    const next = { ...ledger, ...patch }
+    setLedger(next)
+    stage('ledger', next, null)
+  }
   const updatePoints = (list: PickupPoint[]) => {
     setPoints(list)
     // a new point has no id yet: omit it (never '') so the server assigns one
@@ -183,6 +190,7 @@ function SettingsForm({ initial }: { initial: AdminSettings }) {
       <div className="mt-4 grid gap-4 [grid-template-columns:repeat(auto-fit,minmax(min(100%,360px),1fr))]">
         <DispatchCard value={dispatch} onChange={updateDispatch} problem={dispatchProblem(dispatch)} />
         <PickupPointsCard value={points} onChange={updatePoints} problem={pointsProblem(points)} />
+        <LedgerCard value={ledger} onChange={updateLedger} />
       </div>
       <ChecklistsCard checklists={checklists} onChange={updateChecklist} problem={checklistProblem(checklists)} />
     </>

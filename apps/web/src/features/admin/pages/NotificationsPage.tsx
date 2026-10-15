@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { DsSwitch, InfoBanner } from '@/components/brand'
 import { notify, toast } from '@/components/ui/sonner'
 import { Textarea } from '@/components/ui/textarea'
-import { DISPATCH_EVENTS_ORDER, NOTIFICATION_AUDIENCE_LABEL, NOTIFICATION_EVENT_LABEL, audienceOfEvent } from '@/lib/dispatch-labels'
+import { DISPATCH_EVENTS_ORDER, LEDGER_EVENTS_ORDER, NOTIFICATION_AUDIENCE_LABEL, NOTIFICATION_EVENT_LABEL, audienceOfEvent } from '@/lib/dispatch-labels'
 import type { NotificationAudience, NotificationEvent, NotificationTemplate } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { useNotificationMutations, useNotificationTemplates } from '../api'
@@ -18,7 +18,7 @@ const CHANNEL = {
 } as const
 
 /** Events the server dispatches (everything except the unpaid state). */
-const EVENTS: NotificationEvent[] = [...ORDER_STATUSES.filter((s) => s !== 'pending_payment'), ...DISPATCH_EVENTS_ORDER]
+const EVENTS: NotificationEvent[] = [...ORDER_STATUSES.filter((s) => s !== 'pending_payment'), ...DISPATCH_EVENTS_ORDER, ...LEDGER_EVENTS_ORDER]
 const GROUPS: { audience: NotificationAudience; title: string }[] = [
   { audience: 'customer', title: 'اعلان‌های مشتری' },
   { audience: 'provider', title: 'اعلان‌های مجری (سرو مجری)' },

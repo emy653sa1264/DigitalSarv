@@ -1,5 +1,5 @@
 import type { BrandTone } from '@/components/brand'
-import type { DeliveryMethod, DeliveryStatus, DispatchEvent, DispatchTab, JobPriority, JobStatus, NotificationAudience, NotificationEvent, ProviderCheck, ProviderTab, RejectReason } from '@/lib/types'
+import type { DeliveryMethod, DeliveryStatus, DispatchEvent, DispatchTab, JobPriority, JobStatus, LedgerEvent, NotificationAudience, NotificationEvent, ProviderCheck, ProviderTab, RejectReason } from '@/lib/types'
 import { ORDER_STATUS_LABEL } from '@/lib/types'
 
 export const JOB_STATUS_LABEL: Record<JobStatus, string> = {
@@ -38,13 +38,16 @@ const DISPATCH_EVENT_LABEL: Record<Exclude<NotificationEvent, keyof typeof ORDER
   job_changed: 'مجری — تغییر سفارش', job_deadline: 'مجری — مهلت نزدیک', job_rejected: 'مدیر — رد مجری', job_timeout: 'مدیر — بی‌پاسخی مجری',
   job_failed: 'مدیر — عدم امکان انجام', job_late: 'مدیر — تأخیر', provider_unavailable: 'مدیر — مجری در دسترس نیست',
   assigned: 'مشتری — سپرده به تولید', ready_for_pickup: 'مشتری — آماده تحویل حضوری',
+  payout_recorded: 'مجری — پرداخت تسویه', payout_voided: 'مجری — ابطال پرداخت', bank_account_changed: 'مجری — تغییر حساب بانکی',
 }
 export const DISPATCH_EVENTS_ORDER: DispatchEvent[] = ['assigned', 'ready_for_pickup', 'job_assigned', 'job_delivery_assigned', 'job_withdrawn', 'job_cancelled', 'job_changed', 'job_deadline', 'job_rejected', 'job_timeout', 'job_failed', 'job_late', 'provider_unavailable']
+export const LEDGER_EVENTS_ORDER: LedgerEvent[] = ['payout_recorded', 'payout_voided', 'bank_account_changed']
 export const NOTIFICATION_EVENT_LABEL = (e: NotificationEvent): string =>
   (ORDER_STATUS_LABEL as Record<string, string>)[e] ?? (DISPATCH_EVENT_LABEL as Record<string, string>)[e] ?? e
 export const NOTIFICATION_AUDIENCE_LABEL: Record<NotificationAudience, string> = { customer: 'مشتری', provider: 'مجری', admin: 'مدیران' }
 /** Mirror of the API's `EVENT_AUDIENCE` (apps/api/src/common/constants.ts), which is the source of truth. */
 export function audienceOfEvent(e: NotificationEvent): NotificationAudience {
+  if (e === 'payout_recorded' || e === 'payout_voided' || e === 'bank_account_changed') return 'provider'
   if (e.startsWith('job_') && !['job_rejected', 'job_timeout', 'job_failed', 'job_late'].includes(e)) return 'provider'
   if (['job_rejected', 'job_timeout', 'job_failed', 'job_late', 'provider_unavailable'].includes(e)) return 'admin'
   return 'customer'

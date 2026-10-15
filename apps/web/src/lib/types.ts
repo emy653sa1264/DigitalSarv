@@ -583,7 +583,7 @@ export interface CmsSection { id: string; key: string; label: string; on: boolea
 export interface NotificationTemplate { id: string; event: NotificationEvent; channel: 'sms' | 'push'; text: string; on: boolean }
 
 /** v3.3 in-app notification (inbox); order events never send SMS. */
-export interface UserNotification { id: string; orderId: string; orderCode: string; event: NotificationEvent; text: string; read: boolean; createdAt: string; audience: NotificationAudience; url: string; jobId?: string }
+export interface UserNotification { id: string; orderId: string; orderCode?: string; event: NotificationEvent; text: string; read: boolean; createdAt: string; audience: NotificationAudience; url: string; jobId?: string }
 
 /** v3.3 «تنظیمات» — public operations settings (`GET /catalog` → `ops`). */
 export interface OpsSettings {
@@ -621,6 +621,7 @@ export interface AdminSettings {
   checklists: ChecklistSettings
   printAddons: PrintAddons
   dispatch: DispatchSettings
+  ledger: LedgerSettings
   pickupPoints: PickupPoint[]
 }
 
@@ -652,9 +653,10 @@ export interface PriceVersionView {
   reviewNote?: string
   reviewedAt?: string
 }
+export type PriceComboService = 'bw' | 'color' | 'spiral' | 'addon' | 'school' | 'docs' | 'flyer' | 'cart' | 'repair' | 'extra'
 export interface MatrixRow {
   comboKey: string
-  service: 'bw' | 'color' | 'spiral' | 'addon'
+  service: PriceComboService
   options: Record<string, string | number | undefined>
   label: string
   current: PriceVersionView | null
@@ -699,6 +701,7 @@ export type Permission =
   | 'provider_view' | 'provider_edit' | 'provider_manage'
   | 'dispatch_view' | 'dispatch_assign' | 'dispatch_reassign'
   | 'provider_order_view' | 'provider_order_accept' | 'provider_order_status'
+  | 'ledger_view' | 'ledger_adjust' | 'payout_record'
 export type PriceLayer = 'customer' | 'provider'
 export type ProviderStatus = 'active' | 'inactive' | 'busy' | 'suspended'
 export type ProviderService = 'black_white_printing' | 'color_printing' | 'docs' | 'school' | 'flyer' | 'cart' | 'repair'
@@ -755,11 +758,13 @@ export interface CustomerFulfillment { status: JobStatus; label: string; place?:
 export interface DispatchSettings { responseTimeoutMinutes: number; leadHours: number; urgentLeadHours: number; deadlineReminderMinutes: number; autoCompleteHours: number }
 export type DispatchEvent = 'job_assigned' | 'job_delivery_assigned' | 'job_withdrawn' | 'job_cancelled' | 'job_changed' | 'job_deadline'
   | 'job_rejected' | 'job_timeout' | 'job_failed' | 'job_late' | 'provider_unavailable' | 'assigned' | 'ready_for_pickup'
-export type NotificationEvent = OrderStatus | DispatchEvent
+export type LedgerEvent = 'payout_recorded' | 'payout_voided' | 'bank_account_changed'
+export type NotificationEvent = OrderStatus | DispatchEvent | LedgerEvent
 export type NotificationAudience = 'customer' | 'provider' | 'admin'
 export interface ProviderPricingSnapshot {
   providerId: string; snapshotAt: string; currency: 'toman'
-  lines: { serviceIndex: number; comboKey: string; label: string; versionId: string; version: number; unitPrice: number; quantity: number; subtotal: number }[]
+  childCount?: number
+  lines: { serviceIndex?: number; childIndex?: number; childName?: string; comboKey: string; label: string; versionId: string; version: number; unitPrice: number; quantity: number; subtotal: number }[]
   missing: { serviceIndex?: number; childIndex?: number; comboKey: string | null; label: string }[]
   providerSubtotal: number | null; delivery: { providerId: string; fee: number } | null; payoutBasis: number | null; confirmedMissing: boolean
 }
@@ -817,3 +822,45 @@ export interface ProviderJobDetail extends ProviderJobView {
   homePickup: boolean; itemsReceived: boolean; history: { at: string; status: JobStatus; label: string; note?: string }[]
 }
 export interface ProviderJobList { items: (ProviderJobView | ProviderWithdrawnView)[]; total: number; page: number; limit: number; counts: Record<ProviderTab, number> }
+
+// ── v4.3 ledger and settlement (contract «v4.3») ──────────────────────────
+export type LedgerKind = 'credit' | 'adjustment' | 'payout' | 'payout_void'
+export type LedgerState = 'counted' | 'pending'
+export type CreditRole = 'production' | 'delivery'
+export type CompCause = 'cancelled' | 'reassigned' | 'unassigned'
+export interface LedgerSettings { settlementWeekday: number }
+/** Money is server-computed; a pending credit carries a `null` amount. */
+export interface LedgerBalance { available: number; due: number; earnedSinceCutoff: number; pendingCount: number }
+export interface SettlementInfo { weekday: number; cutoff: string; next: string }
+/** `sheba` is masked unless the caller holds `payout_record`. */
+export interface BankAccountView { sheba: string; holder: string; bankName: string; updatedAt: string }
+export interface BankChangeView { at: string; by: string; old: { sheba: string; holder: string } | null; new: { sheba: string; holder: string } }
+export interface CreditBasis { payoutBasis: number | null; suggested: number | null; missing: string[]; snapshotAt?: string; note?: string }
+export interface LedgerEntryView {
+  id: string; kind: LedgerKind; state: LedgerState; amount: number | null; title: string; providerId: string; providerName?: string
+  orderId?: string; orderCode?: string; jobId?: string; role?: CreditRole; cause?: 'compensation' | 'manual'; compCause?: CompCause
+  occurredAt: string; countedAt?: string; reason?: string; basis?: CreditBasis
+  payout?: { paidAt: string; bankRef: string; note?: string; sheba?: string; holder?: string }
+  voidOf?: string; voided: boolean; createdBy?: { id: string; name: string }; byRole: 'system' | 'admin'
+  resolution?: { by: { id: string; name: string } | null; at: string; reason: string }; createdAt: string
+}
+export interface ProviderBalanceRow { providerId: string; name: string; businessName: string; status: ProviderStatus; balance: LedgerBalance; lastPayoutAt: string | null; hasBank: boolean }
+export interface ProviderLedgerAdmin {
+  provider: { id: string; name: string; businessName: string; status: ProviderStatus }
+  balance: LedgerBalance; bank: BankAccountView | null; bankHistory: BankChangeView[]; settlement: SettlementInfo
+}
+export interface WeeklyStatement { providerId: string; from: string; to: string; opening: number; earned: number; paid: number; closing: number; lines: LedgerEntryView[] }
+/** `payoutBasis` is the P11 cap: the provider subtotal (plus the delivery fee once the leg started); `null` when unknown. */
+export interface CompensationItem {
+  jobId: string; orderId: string; orderCode: string; providerId: string; providerName: string
+  cause: CompCause; stage: 'in_production' | 'after_production'; at: string; payoutBasis: number | null
+}
+export interface WalletRow { from: string; to: string; orders: number; charged: number; providerCost: number; courierTasks: number; courierCost: number; share: number }
+/** `pendingCredits` = credits awaiting an amount that occurred in the range (not in any row). */
+export interface WalletReport { from: string; to: string; perTaskFee: number; rows: WalletRow[]; total: WalletRow; pendingCredits: number }
+export interface ProviderLedgerSelf {
+  balance: { available: number; due: number; pendingCount: number }
+  settlement: { weekday: number; next: string }
+  bank: { sheba: string; holder: string } | null
+}
+export interface ProviderLedgerLine { id: string; kind: LedgerKind; state: LedgerState; title: string; orderCode?: string; at: string; amount: number | null; bankRef?: string; voided?: boolean }

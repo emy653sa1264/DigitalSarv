@@ -13,6 +13,7 @@ import type {
   Courier,
   Dashboard,
   DispatchSettings,
+  LedgerSettings,
   PickupPoint,
   Extra,
   Grade,
@@ -102,7 +103,7 @@ export interface CmsBody { label?: string; on?: boolean; order?: number }
 export interface NotificationBody { text?: string; on?: boolean }
 /** v3.3 `POST /admin/notifications` (409 when the event already has a template). */
 export interface NotificationCreateBody { event: NotificationEvent; text: string; on?: boolean }
-export interface SettingsPatch { ops?: Partial<AdminSettings['ops']>; courier?: Partial<AdminSettings['courier']>; checklists?: Partial<AdminSettings['checklists']>; printAddons?: Partial<PrintAddons>; dispatch?: Partial<DispatchSettings>; pickupPoints?: (Omit<PickupPoint, 'id'> & { id?: string })[] }
+export interface SettingsPatch { ops?: Partial<AdminSettings['ops']>; courier?: Partial<AdminSettings['courier']>; checklists?: Partial<AdminSettings['checklists']>; printAddons?: Partial<PrintAddons>; dispatch?: Partial<DispatchSettings>; ledger?: Partial<LedgerSettings>; pickupPoints?: (Omit<PickupPoint, 'id'> & { id?: string })[] }
 
 // ── Generic list + CRUD ────────────────────────────────────────────────────
 function useList<T>(key: QueryKey, path: string) {

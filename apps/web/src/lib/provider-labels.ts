@@ -1,5 +1,5 @@
 import type { BrandTone } from '@/components/brand'
-import type { CapabilityAddon, EquipmentKind, EquipmentTag, Permission, ProviderService, ProviderStatus } from '@/lib/types'
+import type { CapabilityAddon, EquipmentKind, EquipmentTag, Permission, PriceComboService, ProviderService, ProviderStatus } from '@/lib/types'
 
 export const PROVIDER_STATUS: Record<ProviderStatus, { label: string; tone: BrandTone }> = {
   active: { label: 'فعال', tone: 'green' },
@@ -51,4 +51,16 @@ export const PERMISSION_GROUPS: { title: string; items: { key: Permission; label
   { title: 'سفارش‌های مجریان', items: [
     { key: 'provider_order_view', label: 'عملکرد و بار کاری' }, { key: 'provider_order_accept', label: 'پذیرش/رد از طرف مجری' }, { key: 'provider_order_status', label: 'ثبت وضعیت و تکمیل' },
   ] },
+  { title: 'مالی و تسویه', items: [
+    { key: 'ledger_view', label: 'مانده، صورت‌حساب و کیف پول' }, { key: 'ledger_adjust', label: 'تعیین مبلغ، جبران خسارت و اصلاحیه' },
+    { key: 'payout_record', label: 'ثبت و ابطال پرداخت، حساب بانکی' },
+  ] },
 ]
+
+/** Price-book services (D29 adds the provider-only ones). */
+export const PRICE_SERVICE_LABEL: Record<PriceComboService, string> = {
+  bw: 'سیاه‌وسفید', color: 'رنگی', spiral: 'فنری', addon: 'خدمات جانبی',
+  school: 'کتاب مدرسه', docs: 'پایان‌نامه', flyer: 'تراکت', cart: 'کارتریج', repair: 'تعمیر پرینتر', extra: 'خدمات اضافی',
+}
+export const PRINT_PRICE_SERVICES: PriceComboService[] = ['bw', 'color', 'spiral', 'addon']
+export const PROVIDER_ONLY_SERVICES: PriceComboService[] = ['school', 'docs', 'flyer', 'cart', 'repair', 'extra']
