@@ -298,9 +298,9 @@ describe.skipIf(!up)('security and history (e2e: §90, §91, D34, D35)', () => {
       const row = (got[2] as { comboKey: string; current: { price: number } | null }[]).find((r) => r.comboKey === COLOR);
       expect(row?.current?.price).toBe(8123);
       // precise key scan: no customer/margin/markup/profit fields, quote, charge, base provider, idempotency keys
-      const leak = /"(?:customerw*|marginw*|markupw*|profitw*|negative|basis|createdBy|slot|quote|chargedAmount|baseProviderId)"s*:/.exec(text);
+      const leak = /"(?:customer\w*|margin\w*|markup\w*|profit\w*|negative|basis|createdBy|slot|quote|chargedAmount|baseProviderId)"\s*:/.exec(text);
       expect(leak && text.slice(Math.max(0, leak.index - 80), leak.index + 80)).toBeNull();
-      const keyLeak = /"key"s*:s*"(?:led|ord|pay|due|dueback|gw)[:|]/.exec(text);
+      const keyLeak = /"key"\s*:\s*"(?:led|ord|pay|due|dueback|gw)[:|]/.exec(text);
       expect(keyLeak && text.slice(Math.max(0, keyLeak.index - 80), keyLeak.index + 80)).toBeNull();
       for (const other of ['A', 'B', 'D', 'E', 'F']) expect(text).not.toContain(P[other].id);
       expect(text).not.toMatch(/"price":7777/); // B's price never reaches C
